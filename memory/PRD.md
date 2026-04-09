@@ -17,25 +17,31 @@ Consolidates bank accounts (state) and cash flows (events) into a deterministic 
 - [x] Monthly Breakdown Table
 - [x] Quick Add Form with linked flows
 - [x] Entity Management and Entity Filter
-- [x] Entry Log Dialog (CRUD)
 - [x] Bank Accounts + Settings (safety buffer)
 - [x] Linked Flows: Parent/child, dynamic % recalculation
 - [x] Recurrence: Monthly/Quarterly, children inherit
 - [x] Dark theme cockpit design, MongoDB persistence
 
 ### Phase 2 — Operational Realism (April 2026)
-- [x] Recurrence Mode: Repeat vs Distribute (total split across periods, rounding preserved)
-- [x] Flow Status system (replaced with Actuals in Phase 3)
-- [x] Cash Flow Table (matrix view, tab-based)
+- [x] Recurrence Mode: Repeat vs Distribute
+- [x] Cash Flow Table (matrix view)
 - [x] P&L Panel with itemized flows
 
 ### Phase 3 — Control & Realism (April 2026)
-- [x] **Recurrence Toggle (UI)**: Visible in main Quick Add form when recurrence selected. Per-period preview for distribute mode.
-- [x] **Matrix Consistency**: Matrix table reads from `/api/projection/matrix` — same engine, verified exact match with chart/breakdown.
-- [x] **Actuals & Variance**: Replaced paid/unpaid. Each occurrence: planned + actual. Variance: carry forward (creates carryover) or write off. Planned values never overwritten.
-- [x] **Undo System**: Create/edit/delete/batch_create. Simple stack (last 50 actions). Linked flows undo as one coherent action.
-- [x] **Entry Log Full Page Tab**: 3rd tab alongside Projection and Cash Flow Table. Full CRUD, search, category/type filters, parent/child grouping.
-- [x] **Matrix UX**: Frozen first column, row/column hover highlight, row label click opens edit of source flow.
+- [x] Recurrence toggle visible in main form
+- [x] Matrix reads from projection engine (verified exact match)
+- [x] Actuals & Variance system (replaced paid/unpaid)
+- [x] Undo System (create/edit/delete/batch)
+- [x] Full-page Entry Log tab
+- [x] Matrix UX (frozen column, hover, row click)
+
+### Phase 3 Audit — Final Control (April 2026)
+- [x] **Matrix-Based Actual Input**: Click any cell → record actual. Cyan 'A' indicator on cells with actuals. Supports carry forward / write off variance.
+- [x] **Full Edit Parity**: Single canonical FlowEditor for both create and edit. All fields: description, entity, amount, date, category, certainty, recurrence, mode, count, linked flows.
+- [x] **Carryover Cleanup**: No legacy paid/unpaid/auto-carryover. Carryover only via explicit variance carry_forward action.
+- [x] **Matrix Row Totals**: "Total NM" column on right side, updates with horizon/filter/scenario.
+- [x] **Matrix → Full Edit**: Row label click opens canonical FlowEditor.
+- [x] **Cross-Validation**: Projection net = Matrix net = P&L net (verified with distributed revenue + linked COGS + actual < planned).
 
 ## Architecture
 - Frontend: React + Tailwind CSS + Shadcn UI + Recharts + @phosphor-icons/react + date-fns
@@ -44,13 +50,12 @@ Consolidates bank accounts (state) and cash flows (events) into a deterministic 
 
 ## Key API Endpoints
 - GET /api/projection?scenario=&horizon=&entity_id=
-- GET /api/projection/matrix?scenario=&horizon=&entity_id= (same engine)
+- GET /api/projection/matrix?scenario=&horizon=&entity_id= (includes has_actual/actual/planned per cell)
 - GET /api/month-details/{month} (includes planned_amount, actual_amount, variance_action)
-- POST /api/cash-flows/batch (parent + linked)
-- PUT /api/cash-flows/{id} (propagates to children)
-- PUT /api/flow-occurrences (record actual, handle variance)
+- POST /api/cash-flows/batch | PUT /api/cash-flows/{id} | DELETE /api/cash-flows/{id}
+- PUT /api/flow-occurrences (record actual + variance action)
 - DELETE /api/flow-occurrences (clear actual)
-- POST /api/undo / GET /api/undo/peek
+- POST /api/undo | GET /api/undo/peek
 
 ## Prioritized Backlog
 
@@ -58,15 +63,15 @@ Consolidates bank accounts (state) and cash flows (events) into a deterministic 
 - [ ] CSV import/export for data backup
 
 ### P2
-- [ ] Historical comparison (vs last month)
+- [ ] Historical comparison
 - [ ] Custom category management
 
 ### P3
-- [ ] What-If Simulator (sandboxed, no persistence)
+- [ ] What-If Simulator (sandboxed)
 - [ ] Keyboard shortcuts
 - [ ] Mobile optimization
-- [ ] Print-friendly reports
 
 ## Testing Status
-- Iteration 6: Backend 21/21 (100%), Frontend 100%
-- Cross-validation: Matrix net = Projection net (exact match verified)
+- Iteration 7: Backend 24/24 (100%), Frontend 100%
+- Cross-validation: Matrix net = Projection net (exact match verified for 12M and 24M)
+- Legacy audit: No paid/unpaid/auto-carryover remnants found
