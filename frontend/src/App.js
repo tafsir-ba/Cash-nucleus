@@ -275,8 +275,8 @@ function App() {
         {activeTab === "chart" ? (
           <>
             {/* Chart + Quick Add */}
-            <section className="main-content-grid mb-6">
-              <div className="lg:col-span-8">
+            <section className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 md:gap-6 mb-6">
+              <div className="min-w-0">
                 <ProjectionChart 
                   projection={projection} 
                   selectedMonth={selectedMonth}
@@ -285,7 +285,7 @@ function App() {
                   horizon={horizon}
                 />
               </div>
-              <div className="lg:col-span-4">
+              <div>
                 <QuickAddForm 
                   onSuccess={handleCashFlowAdded} 
                   entities={entities}
@@ -294,9 +294,9 @@ function App() {
               </div>
             </section>
 
-            {/* Table + P&L + Decision Panel — right column is sticky */}
-            <section className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-6 items-start">
-              <div className="lg:col-span-8">
+            {/* Table + P&L + Decision Panel */}
+            <section className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 md:gap-6 items-start">
+              <div className="min-w-0">
                 <MonthlyTable 
                   months={projection?.months || []}
                   selectedMonth={selectedMonth}
@@ -304,7 +304,7 @@ function App() {
                   hasData={hasData}
                 />
               </div>
-              <div className="lg:col-span-4 lg:sticky lg:top-4 space-y-4" data-testid="right-panel-sticky">
+              <div className="lg:sticky lg:top-4 space-y-4" data-testid="right-panel-sticky">
                 <DecisionPanel
                   scenario={scenario}
                   selectedEntityId={selectedEntityId}
@@ -321,44 +321,42 @@ function App() {
           </>
         ) : activeTab === "table" ? (
           <>
-            {/* Cash Flow Table (Matrix) + Decision Panel side-by-side */}
-            <section className="grid grid-cols-1 xl:grid-cols-[1fr_280px] gap-4 items-start">
-              <div className="min-w-0">
-                <CashFlowTable
-                  scenario={scenario}
-                  selectedEntityId={selectedEntityId}
-                  horizon={horizon}
-                  onDataChange={handleDataChange}
-                  refreshKey={projection?.cash_now}
-                  entities={entities}
-                />
-              </div>
-              <div className="xl:sticky xl:top-4 space-y-4" data-testid="table-right-panel">
+            {/* Cash Flow Table (Matrix) - full width */}
+            <section className="mb-6">
+              <CashFlowTable
+                scenario={scenario}
+                selectedEntityId={selectedEntityId}
+                horizon={horizon}
+                onDataChange={handleDataChange}
+                refreshKey={projection?.cash_now}
+                entities={entities}
+              />
+            </section>
+
+            {/* Decision Panel + Quick Add below the table */}
+            <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 items-start">
+              <div>
                 <DecisionPanel
                   scenario={scenario}
                   selectedEntityId={selectedEntityId}
                   horizon={horizon}
                   refreshKey={projection?.cash_now}
                 />
+              </div>
+              <div>
                 <QuickAddForm 
                   onSuccess={handleCashFlowAdded} 
                   entities={entities}
                   onEntitiesChange={fetchEntities}
                 />
               </div>
-            </section>
-
-            {/* Monthly breakdown below */}
-            <section className="main-content-grid mt-6">
-              <div className="lg:col-span-8">
+              <div>
                 <MonthlyTable 
                   months={projection?.months || []}
                   selectedMonth={selectedMonth}
                   onMonthSelect={handleMonthSelect}
                   hasData={hasData}
                 />
-              </div>
-              <div className="lg:col-span-4">
               </div>
             </section>
           </>
