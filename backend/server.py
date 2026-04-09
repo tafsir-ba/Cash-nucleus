@@ -44,6 +44,15 @@ class Recurrence(str, Enum):
     MONTHLY = "monthly"
     QUARTERLY = "quarterly"
 
+class RecurrenceMode(str, Enum):
+    REPEAT = "repeat"
+    DISTRIBUTE = "distribute"
+
+class FlowStatus(str, Enum):
+    PLANNED = "planned"
+    PAID = "paid"
+    UNPAID = "unpaid"
+
 # ============== ENTITY MODELS ==============
 class Entity(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -91,6 +100,7 @@ class CashFlow(BaseModel):
     category: Category = Category.EXPENSE
     certainty: Certainty = Certainty.MATERIALIZED
     recurrence: Recurrence = Recurrence.NONE
+    recurrence_mode: RecurrenceMode = RecurrenceMode.REPEAT
     recurrence_end: Optional[str] = None
     recurrence_count: Optional[int] = None
     entity_id: str = ""
@@ -98,6 +108,8 @@ class CashFlow(BaseModel):
     parent_id: Optional[str] = None
     is_percentage: bool = False
     percentage_of_parent: Optional[float] = None
+    carryover_from: Optional[str] = None
+    carryover_month: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -108,6 +120,7 @@ class CashFlowCreate(BaseModel):
     category: Category = Category.EXPENSE
     certainty: Certainty = Certainty.MATERIALIZED
     recurrence: Recurrence = Recurrence.NONE
+    recurrence_mode: RecurrenceMode = RecurrenceMode.REPEAT
     recurrence_end: Optional[str] = None
     recurrence_count: Optional[int] = None
     entity_id: str
@@ -122,6 +135,7 @@ class CashFlowUpdate(BaseModel):
     category: Optional[Category] = None
     certainty: Optional[Certainty] = None
     recurrence: Optional[Recurrence] = None
+    recurrence_mode: Optional[RecurrenceMode] = None
     recurrence_end: Optional[str] = None
     recurrence_count: Optional[int] = None
     entity_id: Optional[str] = None
@@ -129,6 +143,20 @@ class CashFlowUpdate(BaseModel):
 class CashFlowBatchCreate(BaseModel):
     parent: CashFlowCreate
     linked: List[CashFlowCreate] = []
+
+# ============== FLOW OCCURRENCE MODELS ==============
+class FlowOccurrence(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    flow_id: str
+    month: str  # "YYYY-MM"
+    status: FlowStatus = FlowStatus.PLANNED
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class FlowOccurrenceUpdate(BaseModel):
+    flow_id: str
+    month: str
+    status: FlowStatus
 
 # ============== SETTINGS & PROJECTION MODELS ==============
 class Settings(BaseModel):
@@ -310,8 +338,9 @@ async def create_cash_flow_batch(batch: CashFlowBatchCreate):
     for linked in batch.linked:
         data = linked.model_dump()
         data["parent_id"] = parent_obj.id
-        # ENFORCE: Children inherit parent's recurrence
+        # ENFORCE: Children inherit parent's recurrence and mode
         data["recurrence"] = batch.parent.recurrence
+        data["recurrence_mode"] = batch.parent.recurrence_mode
         data["recurrence_end"] = batch.parent.recurrence_end
         data["recurrence_count"] = batch.parent.recurrence_count
         
@@ -354,9 +383,11 @@ async def update_cash_flow(flow_id: str, update: CashFlowUpdate):
         child_updates = {"updated_at": datetime.now(timezone.utc).isoformat()}
         
         # PROPAGATE: Recurrence changes to all children
-        if any(k in update_data for k in ["recurrence", "recurrence_end", "recurrence_count"]):
+        if any(k in update_data for k in ["recurrence", "recurrence_mode", "recurrence_end", "recurrence_count"]):
             if "recurrence" in update_data:
                 child_updates["recurrence"] = update_data["recurrence"]
+            if "recurrence_mode" in update_data:
+                child_updates["recurrence_mode"] = update_data["recurrence_mode"]
             if "recurrence_end" in update_data:
                 child_updates["recurrence_end"] = update_data["recurrence_end"]
             if "recurrence_count" in update_data:
@@ -406,6 +437,83 @@ async def delete_cash_flow(flow_id: str, delete_linked: bool = False):
         raise HTTPException(status_code=404, detail="Cash flow not found")
     return {"message": "Cash flow deleted"}
 
+# ============== FLOW OCCURRENCE ROUTES ==============
+@api_router.get("/flow-occurrences")
+async def get_flow_occurrences(month: Optional[str] = None, flow_id: Optional[str] = None):
+    """Get occurrence statuses. Filter by month and/or flow_id."""
+    query = {}
+    if month:
+        query["month"] = month
+    if flow_id:
+        query["flow_id"] = flow_id
+    occurrences = await db.flow_occurrences.find(query, {"_id": 0}).to_list(1000)
+    return occurrences
+
+@api_router.put("/flow-occurrences")
+async def set_flow_occurrence(update: FlowOccurrenceUpdate):
+    """Set status for a flow occurrence. Creates carryover when marking unpaid."""
+    # Upsert the occurrence
+    existing = await db.flow_occurrences.find_one(
+        {"flow_id": update.flow_id, "month": update.month}, {"_id": 0}
+    )
+    
+    if existing:
+        await db.flow_occurrences.update_one(
+            {"flow_id": update.flow_id, "month": update.month},
+            {"$set": {"status": update.status}}
+        )
+    else:
+        occ = FlowOccurrence(flow_id=update.flow_id, month=update.month, status=update.status)
+        await db.flow_occurrences.insert_one(occ.model_dump())
+    
+    # Handle carryover logic
+    if update.status == FlowStatus.UNPAID:
+        # Check if carryover already exists for this flow+month
+        existing_carryover = await db.cash_flows.find_one({
+            "carryover_from": update.flow_id,
+            "carryover_month": update.month
+        }, {"_id": 0})
+        
+        if not existing_carryover:
+            # Get the original flow
+            original = await db.cash_flows.find_one({"id": update.flow_id}, {"_id": 0})
+            if original:
+                # Calculate next month
+                year, mon = update.month.split("-")
+                next_date = date(int(year), int(mon), 1) + relativedelta(months=1)
+                next_month_str = next_date.strftime("%Y-%m")
+                
+                # For distribute mode, calculate per-period amount
+                amount = original["amount"]
+                rec_mode = original.get("recurrence_mode", "repeat")
+                rec_count = original.get("recurrence_count")
+                if rec_mode == "distribute" and rec_count and rec_count > 0:
+                    amount = round(amount / rec_count, 2)
+                
+                # Create carryover flow
+                carryover = CashFlow(
+                    label=f"{original['label']} (carryover)",
+                    amount=amount,
+                    date=f"{next_month_str}-01",
+                    category=original.get("category", "Expense"),
+                    certainty="Materialized",
+                    recurrence="none",
+                    recurrence_mode="repeat",
+                    entity_id=original.get("entity_id", ""),
+                    carryover_from=update.flow_id,
+                    carryover_month=update.month,
+                )
+                await db.cash_flows.insert_one(carryover.model_dump())
+    
+    elif update.status in [FlowStatus.PLANNED, FlowStatus.PAID]:
+        # Remove carryover if status changed back from unpaid
+        await db.cash_flows.delete_many({
+            "carryover_from": update.flow_id,
+            "carryover_month": update.month
+        })
+    
+    return {"status": "ok"}
+
 # ============== SETTINGS ROUTES ==============
 @api_router.get("/settings", response_model=Settings)
 async def get_settings():
@@ -426,24 +534,30 @@ async def update_settings(update: SettingsUpdate):
     return result
 
 # ============== PROJECTION ENGINE ==============
-def expand_recurring_flows(flows: List[dict], start_date: date, end_date: date) -> List[dict]:
-    """Expand recurring flows. Supports monthly and quarterly recurrence."""
+def expand_recurring_flows(flows: List[dict], start_date: date, end_date: date, unpaid_set: set = None) -> List[dict]:
+    """Expand recurring flows. Supports monthly/quarterly recurrence, repeat/distribute modes, and unpaid skipping."""
     expanded = []
+    if unpaid_set is None:
+        unpaid_set = set()
     
     for flow in flows:
         flow_date = date.fromisoformat(flow["date"][:10])
+        flow_id = flow.get("id", "")
         recurrence = flow.get("recurrence", "none")
+        recurrence_mode = flow.get("recurrence_mode", "repeat")
         
         if recurrence == "none":
             if start_date <= flow_date <= end_date:
-                expanded.append({
-                    "date": flow_date,
-                    "amount": flow["amount"],
-                    "label": flow["label"],
-                    "certainty": flow["certainty"],
-                    "category": flow["category"],
-                    "entity_id": flow.get("entity_id", "")
-                })
+                month_key = flow_date.strftime("%Y-%m")
+                if (flow_id, month_key) not in unpaid_set:
+                    expanded.append({
+                        "date": flow_date,
+                        "amount": flow["amount"],
+                        "label": flow["label"],
+                        "certainty": flow["certainty"],
+                        "category": flow["category"],
+                        "entity_id": flow.get("entity_id", "")
+                    })
         else:
             # Monthly or quarterly
             interval_months = 1 if recurrence == "monthly" else 3
@@ -452,16 +566,34 @@ def expand_recurring_flows(flows: List[dict], start_date: date, end_date: date) 
             max_count = flow.get("recurrence_count") or 999
             end_rec = date.fromisoformat(flow["recurrence_end"][:10]) if flow.get("recurrence_end") else end_date
             
+            # Calculate distribute amounts if needed
+            total_amount = flow["amount"]
+            if recurrence_mode == "distribute" and max_count < 999:
+                per_period = round(total_amount / max_count, 2)
+                last_period = round(total_amount - per_period * (max_count - 1), 2)
+            else:
+                per_period = total_amount
+                last_period = total_amount
+            
             while current <= min(end_date, end_rec) and count < max_count:
                 if current >= start_date:
-                    expanded.append({
-                        "date": current,
-                        "amount": flow["amount"],
-                        "label": flow["label"],
-                        "certainty": flow["certainty"],
-                        "category": flow["category"],
-                        "entity_id": flow.get("entity_id", "")
-                    })
+                    month_key = current.strftime("%Y-%m")
+                    # Skip unpaid occurrences
+                    if (flow_id, month_key) not in unpaid_set:
+                        # For distribute: last period gets rounding remainder
+                        if recurrence_mode == "distribute" and max_count < 999:
+                            period_amount = last_period if count == max_count - 1 else per_period
+                        else:
+                            period_amount = total_amount
+                        
+                        expanded.append({
+                            "date": current,
+                            "amount": period_amount,
+                            "label": flow["label"],
+                            "certainty": flow["certainty"],
+                            "category": flow["category"],
+                            "entity_id": flow.get("entity_id", "")
+                        })
                 count += 1
                 current = flow_date + relativedelta(months=count * interval_months)
     
@@ -513,8 +645,12 @@ async def get_projection(
     certainty_levels = get_certainty_levels(scenario)
     filtered = [f for f in flows_with_amounts if f.get("certainty") in certainty_levels]
     
-    # Expand recurring
-    expanded = expand_recurring_flows(filtered, start_of_month, end_date)
+    # Get unpaid occurrences to exclude from projection
+    unpaid_occs = await db.flow_occurrences.find({"status": "unpaid"}, {"_id": 0}).to_list(1000)
+    unpaid_set = {(o["flow_id"], o["month"]) for o in unpaid_occs}
+    
+    # Expand recurring (skipping unpaid occurrences)
+    expanded = expand_recurring_flows(filtered, start_of_month, end_date, unpaid_set)
     
     # Group by month
     months_data = {}
@@ -611,12 +747,79 @@ async def get_month_details(
     certainty_levels = get_certainty_levels(scenario)
     filtered = [f for f in flows_with_amounts if f.get("certainty") in certainty_levels]
     
+    # Get unpaid occurrences
+    unpaid_occs = await db.flow_occurrences.find({"status": "unpaid"}, {"_id": 0}).to_list(1000)
+    unpaid_set = {(o["flow_id"], o["month"]) for o in unpaid_occs}
+    
+    # Get all occurrence statuses for this month
+    month_occs = await db.flow_occurrences.find({"month": month}, {"_id": 0}).to_list(1000)
+    occ_status_map = {o["flow_id"]: o["status"] for o in month_occs}
+    
     year, mon = month.split("-")
     start = date(int(year), int(mon), 1)
     end = start + relativedelta(months=1) - relativedelta(days=1)
     
-    expanded = expand_recurring_flows(filtered, start, end)
-    month_flows = [f for f in expanded if f["date"].strftime("%Y-%m") == month]
+    # Build a mapping of flow_id from the expanded results
+    # We need to include flow_id in expanded flows for status tracking
+    expanded_with_ids = []
+    for f in filtered:
+        flow_date = date.fromisoformat(f["date"][:10])
+        flow_id = f.get("id", "")
+        recurrence = f.get("recurrence", "none")
+        recurrence_mode = f.get("recurrence_mode", "repeat")
+        
+        if recurrence == "none":
+            if start <= flow_date <= end:
+                month_key = flow_date.strftime("%Y-%m")
+                if (flow_id, month_key) not in unpaid_set:
+                    expanded_with_ids.append({
+                        "flow_id": flow_id,
+                        "date": flow_date,
+                        "amount": f["amount"],
+                        "label": f["label"],
+                        "certainty": f["certainty"],
+                        "category": f["category"],
+                        "entity_id": f.get("entity_id", ""),
+                        "carryover_from": f.get("carryover_from"),
+                    })
+        else:
+            interval_months = 1 if recurrence == "monthly" else 3
+            current = flow_date
+            count = 0
+            max_count = f.get("recurrence_count") or 999
+            end_rec = date.fromisoformat(f["recurrence_end"][:10]) if f.get("recurrence_end") else end
+            
+            total_amount = f["amount"]
+            if recurrence_mode == "distribute" and max_count < 999:
+                per_period = round(total_amount / max_count, 2)
+                last_period = round(total_amount - per_period * (max_count - 1), 2)
+            else:
+                per_period = total_amount
+                last_period = total_amount
+            
+            while current <= min(end, end_rec) and count < max_count:
+                if current >= start:
+                    month_key = current.strftime("%Y-%m")
+                    if (flow_id, month_key) not in unpaid_set:
+                        if recurrence_mode == "distribute" and max_count < 999:
+                            period_amount = last_period if count == max_count - 1 else per_period
+                        else:
+                            period_amount = total_amount
+                        
+                        expanded_with_ids.append({
+                            "flow_id": flow_id,
+                            "date": current,
+                            "amount": period_amount,
+                            "label": f["label"],
+                            "certainty": f["certainty"],
+                            "category": f["category"],
+                            "entity_id": f.get("entity_id", ""),
+                            "carryover_from": f.get("carryover_from"),
+                        })
+                count += 1
+                current = flow_date + relativedelta(months=count * interval_months)
+    
+    month_flows = [f for f in expanded_with_ids if f["date"].strftime("%Y-%m") == month]
     
     outflows = sorted([f for f in month_flows if f["amount"] < 0], key=lambda x: x["amount"])
     
@@ -627,7 +830,18 @@ async def get_month_details(
         "month": month,
         "top_outflows": [{"label": f["label"], "amount": f["amount"], "category": f["category"]} for f in outflows[:5]],
         "recurring_burdens": [{"label": f["label"], "amount": f["amount"], "category": f["category"]} for f in recurring],
-        "all_flows": [{"label": f["label"], "amount": f["amount"], "category": f["category"], "date": f["date"].isoformat()} for f in month_flows]
+        "all_flows": [
+            {
+                "flow_id": f["flow_id"],
+                "label": f["label"], 
+                "amount": f["amount"], 
+                "category": f["category"], 
+                "date": f["date"].isoformat(),
+                "status": occ_status_map.get(f["flow_id"], "planned"),
+                "is_carryover": bool(f.get("carryover_from")),
+            } 
+            for f in month_flows
+        ]
     }
 
 @api_router.get("/")

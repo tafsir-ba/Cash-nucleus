@@ -48,6 +48,7 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
   // Advanced (hidden by default)
   const [category, setCategory] = useState("Expense");
   const [recurrence, setRecurrence] = useState("none");
+  const [recurrenceMode, setRecurrenceMode] = useState("repeat");
   const [recurrenceCount, setRecurrenceCount] = useState("");
   const [linkedFlows, setLinkedFlows] = useState([]);
 
@@ -122,6 +123,7 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
         certainty,
         category,
         recurrence,
+        recurrence_mode: recurrence !== "none" ? recurrenceMode : "repeat",
         recurrence_count: recurrence !== "none" && recurrenceCount ? parseInt(recurrenceCount) : null,
         entity_id: entityId,
       };
@@ -139,6 +141,7 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
       setCertainty("Materialized");
       setCategory("Expense");
       setRecurrence("none");
+      setRecurrenceMode("repeat");
       setRecurrenceCount("");
       setLinkedFlows([]);
       
@@ -276,16 +279,61 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
             </div>
 
             {recurrence !== "none" && (
-              <div>
-                <Label className="text-xs text-zinc-500 mb-1 block"># of occurrences</Label>
-                <input
-                  type="number"
-                  placeholder={recurrence === "quarterly" ? "4" : "12"}
-                  min="1"
-                  value={recurrenceCount}
-                  onChange={(e) => setRecurrenceCount(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 placeholder-zinc-500 font-mono"
-                />
+              <div className="space-y-2">
+                {/* Recurrence Mode Toggle */}
+                <div>
+                  <Label className="text-xs text-zinc-500 mb-1 block">Mode</Label>
+                  <div className="flex gap-1 bg-zinc-950 border border-zinc-800 rounded-md p-0.5" data-testid="recurrence-mode-toggle">
+                    <button
+                      type="button"
+                      onClick={() => setRecurrenceMode("repeat")}
+                      className={`flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors ${
+                        recurrenceMode === "repeat" ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
+                      }`}
+                      data-testid="mode-repeat"
+                    >
+                      Repeat
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRecurrenceMode("distribute")}
+                      className={`flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors ${
+                        recurrenceMode === "distribute" ? 'bg-amber-500/20 text-amber-400' : 'text-zinc-500 hover:text-zinc-300'
+                      }`}
+                      data-testid="mode-distribute"
+                    >
+                      Distribute
+                    </button>
+                  </div>
+                </div>
+
+                {/* Period count */}
+                <div>
+                  <Label className="text-xs text-zinc-500 mb-1 block">
+                    {recurrenceMode === "distribute" ? "# of periods (required)" : "# of occurrences"}
+                  </Label>
+                  <input
+                    type="number"
+                    placeholder={recurrence === "quarterly" ? "4" : "12"}
+                    min="1"
+                    value={recurrenceCount}
+                    onChange={(e) => setRecurrenceCount(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 placeholder-zinc-500 font-mono"
+                    data-testid="recurrence-count"
+                  />
+                </div>
+
+                {/* Per-period preview for distribute */}
+                {recurrenceMode === "distribute" && amount && recurrenceCount && parseInt(recurrenceCount) > 0 && (
+                  <div className="bg-amber-500/10 border border-amber-500/20 rounded-md p-2" data-testid="distribute-preview">
+                    <p className="text-xs text-amber-400">
+                      CHF {Math.abs(parseFloat(amount)).toLocaleString('de-CH')} total ÷ {recurrenceCount} periods
+                    </p>
+                    <p className="text-sm font-mono text-amber-300 mt-0.5">
+                      = CHF {Math.abs(Math.round(parseFloat(amount) / parseInt(recurrenceCount) * 100) / 100).toLocaleString('de-CH', { minimumFractionDigits: 2 })} / {recurrence === "monthly" ? "month" : "quarter"}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
@@ -358,7 +406,10 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
                   
                   {linked.isPercentage && linked.percentage && amount && (
                     <p className="text-xs text-amber-400 mt-1.5">
-                      = CHF {Math.round(Math.abs(parseFloat(amount)) * parseFloat(linked.percentage) / 100).toLocaleString()}
+                      {recurrenceMode === "distribute" && recurrenceCount && parseInt(recurrenceCount) > 0
+                        ? `= CHF ${Math.round(Math.abs(parseFloat(amount) / parseInt(recurrenceCount)) * parseFloat(linked.percentage) / 100).toLocaleString()}/period`
+                        : `= CHF ${Math.round(Math.abs(parseFloat(amount)) * parseFloat(linked.percentage) / 100).toLocaleString()}`
+                      }
                     </p>
                   )}
                 </div>

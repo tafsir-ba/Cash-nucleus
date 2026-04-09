@@ -10,6 +10,7 @@ import { ProjectionChart } from "./components/ProjectionChart";
 import { MonthlyTable } from "./components/MonthlyTable";
 import { QuickAddForm } from "./components/QuickAddForm";
 import { MonthlyPLPanel } from "./components/MonthlyPLPanel";
+import { CashFlowTable } from "./components/CashFlowTable";
 import { BankAccountsDialog } from "./components/BankAccountsDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { EntryLogDialog } from "./components/EntryLogDialog";
@@ -38,6 +39,10 @@ function App() {
   const [bankAccountsOpen, setBankAccountsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [entryLogOpen, setEntryLogOpen] = useState(false);
+  
+  // Tab state + flows for table
+  const [activeTab, setActiveTab] = useState("chart"); // "chart" | "table"
+  const [allFlows, setAllFlows] = useState([]);
 
   const fetchEntities = useCallback(async () => {
     try {
@@ -72,6 +77,7 @@ function App() {
       ]);
       setHasAccounts(accountsRes.data.length > 0);
       setHasFlows(flowsRes.data.length > 0);
+      setAllFlows(flowsRes.data);
     } catch (error) {
       console.error("Failed to check data:", error);
     }
@@ -198,43 +204,102 @@ function App() {
           />
         </section>
 
-        {/* Chart + Quick Add */}
-        <section className="main-content-grid mb-6">
-          <div className="lg:col-span-8">
-            <ProjectionChart 
-              projection={projection} 
-              selectedMonth={selectedMonth}
-              onMonthSelect={handleMonthSelect}
-              hasData={hasData}
-              horizon={horizon}
-            />
-          </div>
-          <div className="lg:col-span-4">
-            <QuickAddForm 
-              onSuccess={handleCashFlowAdded} 
-              entities={entities}
-              onEntitiesChange={fetchEntities}
-            />
-          </div>
-        </section>
+        {/* Tab Switcher: Chart / Cash Flow Table */}
+        <div className="flex items-center gap-1 mb-4 bg-zinc-900 border border-zinc-800 p-0.5 rounded-md w-fit" data-testid="view-tabs">
+          <button
+            onClick={() => setActiveTab("chart")}
+            className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+              activeTab === "chart" ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
+            }`}
+            data-testid="tab-chart"
+          >
+            Projection
+          </button>
+          <button
+            onClick={() => setActiveTab("table")}
+            className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+              activeTab === "table" ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
+            }`}
+            data-testid="tab-table"
+          >
+            Cash Flow Table
+          </button>
+        </div>
 
-        {/* Table + P&L Panel */}
-        <section className="main-content-grid">
-          <div className="lg:col-span-8">
-            <MonthlyTable 
-              months={projection?.months || []}
-              selectedMonth={selectedMonth}
-              onMonthSelect={handleMonthSelect}
-              hasData={hasData}
-            />
-          </div>
-          <div className="lg:col-span-4">
-            <MonthlyPLPanel 
-              monthDetails={monthDetails}
-              selectedMonth={selectedMonth}
-            />
-          </div>
-        </section>
+        {activeTab === "chart" ? (
+          <>
+            {/* Chart + Quick Add */}
+            <section className="main-content-grid mb-6">
+              <div className="lg:col-span-8">
+                <ProjectionChart 
+                  projection={projection} 
+                  selectedMonth={selectedMonth}
+                  onMonthSelect={handleMonthSelect}
+                  hasData={hasData}
+                  horizon={horizon}
+                />
+              </div>
+              <div className="lg:col-span-4">
+                <QuickAddForm 
+                  onSuccess={handleCashFlowAdded} 
+                  entities={entities}
+                  onEntitiesChange={fetchEntities}
+                />
+              </div>
+            </section>
+
+            {/* Table + P&L Panel */}
+            <section className="main-content-grid">
+              <div className="lg:col-span-8">
+                <MonthlyTable 
+                  months={projection?.months || []}
+                  selectedMonth={selectedMonth}
+                  onMonthSelect={handleMonthSelect}
+                  hasData={hasData}
+                />
+              </div>
+              <div className="lg:col-span-4">
+                <MonthlyPLPanel 
+                  monthDetails={monthDetails}
+                  selectedMonth={selectedMonth}
+                  onDataChange={handleDataChange}
+                />
+              </div>
+            </section>
+          </>
+        ) : (
+          <>
+            {/* Cash Flow Table (Matrix View) */}
+            <section className="mb-6">
+              <CashFlowTable
+                projection={projection}
+                flows={allFlows}
+                scenario={scenario}
+                selectedEntityId={selectedEntityId}
+                onDataChange={handleDataChange}
+              />
+            </section>
+
+            {/* Quick Add below table */}
+            <section className="main-content-grid">
+              <div className="lg:col-span-8">
+                <MonthlyTable 
+                  months={projection?.months || []}
+                  selectedMonth={selectedMonth}
+                  onMonthSelect={handleMonthSelect}
+                  hasData={hasData}
+                />
+              </div>
+              <div className="lg:col-span-4">
+                <QuickAddForm 
+                  onSuccess={handleCashFlowAdded} 
+                  entities={entities}
+                  onEntitiesChange={fetchEntities}
+                />
+              </div>
+            </section>
+          </>
+        )}
       </main>
 
       {/* Dialogs */}

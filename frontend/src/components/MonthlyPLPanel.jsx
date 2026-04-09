@@ -1,4 +1,9 @@
-import { TrendUp, TrendDown, Equals } from "@phosphor-icons/react";
+import { useState } from "react";
+import axios from "axios";
+import { toast } from "sonner";
+import { TrendUp, TrendDown, Equals, ArrowBendDownRight, CheckCircle, Clock, XCircle } from "@phosphor-icons/react";
+
+const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const formatCurrency = (amount) => {
   return new Intl.NumberFormat('de-CH', {
@@ -9,7 +14,50 @@ const formatCurrency = (amount) => {
   }).format(Math.abs(amount));
 };
 
-export const MonthlyPLPanel = ({ monthDetails, selectedMonth }) => {
+const statusConfig = {
+  planned: { icon: Clock, color: "text-zinc-400", bg: "bg-zinc-800", label: "Planned" },
+  paid: { icon: CheckCircle, color: "text-emerald-400", bg: "bg-emerald-500/20", label: "Paid" },
+  unpaid: { icon: XCircle, color: "text-rose-400", bg: "bg-rose-500/20", label: "Unpaid" },
+};
+
+const FlowStatusButton = ({ flowId, month, currentStatus, onStatusChange }) => {
+  const [updating, setUpdating] = useState(false);
+
+  const cycleStatus = async () => {
+    const next = currentStatus === "planned" ? "paid" : currentStatus === "paid" ? "unpaid" : "planned";
+    setUpdating(true);
+    try {
+      await axios.put(`${API}/flow-occurrences`, {
+        flow_id: flowId,
+        month: month,
+        status: next,
+      });
+      onStatusChange?.();
+    } catch (err) {
+      console.error("Failed to update status:", err);
+      toast.error("Failed to update status");
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const cfg = statusConfig[currentStatus] || statusConfig.planned;
+  const Icon = cfg.icon;
+
+  return (
+    <button
+      onClick={cycleStatus}
+      disabled={updating}
+      className={`p-1 rounded transition-colors ${cfg.bg} ${cfg.color} hover:opacity-80`}
+      title={`${cfg.label} — click to change`}
+      data-testid={`status-btn-${flowId}`}
+    >
+      <Icon size={14} weight="fill" />
+    </button>
+  );
+};
+
+export const MonthlyPLPanel = ({ monthDetails, selectedMonth, onDataChange }) => {
   if (!selectedMonth || !monthDetails) {
     return (
       <div className="surface-card h-full flex flex-col">
@@ -29,18 +77,13 @@ export const MonthlyPLPanel = ({ monthDetails, selectedMonth }) => {
 
   const { all_flows } = monthDetails;
   
-  // Calculate totals
-  const revenues = all_flows
-    .filter(f => f.amount > 0)
-    .reduce((sum, f) => sum + f.amount, 0);
+  const revenueFlows = all_flows.filter(f => f.amount > 0);
+  const costFlows = all_flows.filter(f => f.amount < 0);
   
-  const costs = all_flows
-    .filter(f => f.amount < 0)
-    .reduce((sum, f) => sum + Math.abs(f.amount), 0);
-  
+  const revenues = revenueFlows.reduce((sum, f) => sum + f.amount, 0);
+  const costs = costFlows.reduce((sum, f) => sum + Math.abs(f.amount), 0);
   const netResult = revenues - costs;
 
-  // Format month for display
   const [year, month] = selectedMonth.split('-');
   const monthLabel = new Date(parseInt(year), parseInt(month) - 1).toLocaleDateString('en-GB', { 
     month: 'long', 
@@ -55,34 +98,81 @@ export const MonthlyPLPanel = ({ monthDetails, selectedMonth }) => {
         </h2>
       </div>
       
-      <div className="p-4">
-        {/* Revenues vs Costs */}
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          {/* Revenues */}
-          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-4">
-            <div className="flex items-center gap-2 mb-2">
+      <div className="p-4 space-y-4">
+        {/* Revenues Section */}
+        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
               <TrendUp size={16} weight="bold" className="text-emerald-400" />
               <span className="text-xs font-medium text-emerald-400 uppercase tracking-wider">Revenues</span>
             </div>
-            <p className="text-2xl font-mono text-emerald-400 font-medium">
+            <p className="text-lg font-mono text-emerald-400 font-medium">
               +{formatCurrency(revenues)}
             </p>
           </div>
+          {revenueFlows.length > 0 && (
+            <div className="mt-2 space-y-1 border-t border-emerald-500/10 pt-2">
+              {revenueFlows.map((f, i) => (
+                <div key={i} className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    {f.flow_id && (
+                      <FlowStatusButton
+                        flowId={f.flow_id}
+                        month={selectedMonth}
+                        currentStatus={f.status || "planned"}
+                        onStatusChange={onDataChange}
+                      />
+                    )}
+                    <span className={`text-emerald-300/70 truncate ${f.is_carryover ? 'italic' : ''}`}>
+                      {f.is_carryover && <ArrowBendDownRight size={10} className="inline mr-1 text-amber-400" />}
+                      {f.label}
+                    </span>
+                  </div>
+                  <span className="font-mono text-emerald-400/80 ml-2">+{formatCurrency(f.amount)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
-          {/* Costs */}
-          <div className="bg-rose-500/10 border border-rose-500/20 rounded-lg p-4">
-            <div className="flex items-center gap-2 mb-2">
+        {/* Costs Section */}
+        <div className="bg-rose-500/10 border border-rose-500/20 rounded-lg p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
               <TrendDown size={16} weight="bold" className="text-rose-400" />
               <span className="text-xs font-medium text-rose-400 uppercase tracking-wider">Costs</span>
             </div>
-            <p className="text-2xl font-mono text-rose-400 font-medium">
+            <p className="text-lg font-mono text-rose-400 font-medium">
               -{formatCurrency(costs)}
             </p>
           </div>
+          {costFlows.length > 0 && (
+            <div className="mt-2 space-y-1 border-t border-rose-500/10 pt-2">
+              {costFlows.map((f, i) => (
+                <div key={i} className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    {f.flow_id && (
+                      <FlowStatusButton
+                        flowId={f.flow_id}
+                        month={selectedMonth}
+                        currentStatus={f.status || "planned"}
+                        onStatusChange={onDataChange}
+                      />
+                    )}
+                    <span className={`text-rose-300/70 truncate ${f.is_carryover ? 'italic' : ''}`}>
+                      {f.is_carryover && <ArrowBendDownRight size={10} className="inline mr-1 text-amber-400" />}
+                      {f.label}
+                    </span>
+                  </div>
+                  <span className="font-mono text-rose-400/80 ml-2">-{formatCurrency(f.amount)}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Net Result */}
-        <div className={`rounded-lg p-4 ${
+        <div className={`rounded-lg p-3 ${
           netResult >= 0 
             ? 'bg-emerald-500/5 border border-emerald-500/30' 
             : 'bg-rose-500/5 border border-rose-500/30'
@@ -96,7 +186,7 @@ export const MonthlyPLPanel = ({ monthDetails, selectedMonth }) => {
                 Net {netResult >= 0 ? 'Profit' : 'Loss'}
               </span>
             </div>
-            <p className={`text-3xl font-mono font-semibold ${
+            <p className={`text-2xl font-mono font-semibold ${
               netResult >= 0 ? 'text-emerald-400' : 'text-rose-400'
             }`}>
               {netResult >= 0 ? '+' : '-'}{formatCurrency(netResult)}
@@ -105,7 +195,7 @@ export const MonthlyPLPanel = ({ monthDetails, selectedMonth }) => {
         </div>
 
         {/* Flow count */}
-        <p className="text-xs text-zinc-600 mt-3 text-center">
+        <p className="text-xs text-zinc-600 text-center">
           {all_flows.length} flow{all_flows.length !== 1 ? 's' : ''} this month
         </p>
       </div>

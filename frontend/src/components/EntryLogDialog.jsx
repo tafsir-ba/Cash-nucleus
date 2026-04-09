@@ -82,6 +82,7 @@ const EditFlowDialog = ({ flow, open, onOpenChange, entities, onSave }) => {
         category: flow.category || "Expense",
         certainty: flow.certainty || "Materialized",
         recurrence: flow.recurrence || "none",
+        recurrence_mode: flow.recurrence_mode || "repeat",
         recurrence_count: flow.recurrence_count?.toString() || "",
         entity_id: flow.entity_id || "",
       });
@@ -99,7 +100,8 @@ const EditFlowDialog = ({ flow, open, onOpenChange, entities, onSave }) => {
         category: formData.category,
         certainty: formData.certainty,
         recurrence: formData.recurrence,
-        recurrence_count: formData.recurrence === "monthly" && formData.recurrence_count 
+        recurrence_mode: formData.recurrence !== "none" ? formData.recurrence_mode : "repeat",
+        recurrence_count: formData.recurrence !== "none" && formData.recurrence_count 
           ? parseInt(formData.recurrence_count) : null,
         entity_id: formData.entity_id,
       });
@@ -193,6 +195,68 @@ const EditFlowDialog = ({ flow, open, onOpenChange, entities, onSave }) => {
             </Select>
           </div>
 
+          {/* Recurrence + Mode */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs text-zinc-500 mb-1.5 block">Recurrence</Label>
+              <Select value={formData.recurrence || "none"} onValueChange={(v) => setFormData({ ...formData, recurrence: v })}>
+                <SelectTrigger className="bg-zinc-950 border-zinc-800 h-[42px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">One-time</SelectItem>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                  <SelectItem value="quarterly">Quarterly</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {formData.recurrence && formData.recurrence !== "none" && (
+              <div>
+                <Label className="text-xs text-zinc-500 mb-1.5 block">Mode</Label>
+                <div className="flex gap-1 bg-zinc-950 border border-zinc-800 rounded-md p-0.5 h-[42px] items-center">
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, recurrence_mode: "repeat" })}
+                    className={`flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors ${
+                      formData.recurrence_mode === "repeat" ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    Repeat
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, recurrence_mode: "distribute" })}
+                    className={`flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors ${
+                      formData.recurrence_mode === "distribute" ? 'bg-amber-500/20 text-amber-400' : 'text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    Distribute
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {formData.recurrence && formData.recurrence !== "none" && (
+            <div>
+              <Label className="text-xs text-zinc-500 mb-1.5 block">
+                {formData.recurrence_mode === "distribute" ? "# of periods" : "# of occurrences"}
+              </Label>
+              <input
+                type="number"
+                min="1"
+                value={formData.recurrence_count || ""}
+                onChange={(e) => setFormData({ ...formData, recurrence_count: e.target.value })}
+                className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2.5 text-zinc-100 font-mono"
+              />
+              {formData.recurrence_mode === "distribute" && formData.amount && formData.recurrence_count && parseInt(formData.recurrence_count) > 0 && (
+                <p className="text-xs text-amber-400 mt-1">
+                  = CHF {Math.abs(Math.round(parseFloat(formData.amount) / parseInt(formData.recurrence_count) * 100) / 100).toLocaleString('de-CH', { minimumFractionDigits: 2 })} / {formData.recurrence === "monthly" ? "month" : "quarter"}
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="flex gap-2 pt-2">
             <button
               onClick={() => onOpenChange(false)}
@@ -242,6 +306,14 @@ const FlowEntry = ({ flow, linkedFlows, entities, onEdit, onDelete, expanded, on
             <span className="text-sm text-zinc-200 truncate font-medium">{flow.label}</span>
             {flow.recurrence === "monthly" && (
               <ArrowsClockwise size={14} className="text-amber-400 flex-shrink-0" title="Recurring" />
+            )}
+            {flow.recurrence === "quarterly" && (
+              <ArrowsClockwise size={14} className="text-amber-400 flex-shrink-0" title="Quarterly" />
+            )}
+            {flow.recurrence_mode === "distribute" && (
+              <span className="text-xs bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded" title="Amount distributed across periods">
+                Dist
+              </span>
             )}
             {hasLinked && (
               <span className="flex items-center gap-1 text-xs bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded">
