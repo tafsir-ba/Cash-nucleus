@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import { toast } from "sonner";
 import { Check, X, ArrowRight } from "@phosphor-icons/react";
-import { ScrollArea } from "../components/ui/scroll-area";
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from "../components/ui/dialog";
@@ -140,6 +139,28 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
             </div>
           )}
 
+          {/* Impact Preview — shows financial consequence before confirming */}
+          {hasVariance && (
+            <div className="bg-zinc-800/50 border border-zinc-700/50 rounded-md p-2 text-[10px] space-y-1" data-testid="impact-preview">
+              <span className="text-zinc-500 uppercase tracking-wider font-medium">Impact Preview</span>
+              <div className="text-zinc-400">
+                {isUnder ? (
+                  <>
+                    <p>This month: Cash position <span className="text-amber-400">decreases</span> by CHF {formatCHF(varianceAmount)} vs plan</p>
+                    <p>If carried → <span className="text-amber-400">{nextMonth}</span> receives +CHF {formatCHF(varianceAmount)} recovery flow</p>
+                    <p>If written off → CHF {formatCHF(varianceAmount)} is <span className="text-zinc-500">permanently absorbed</span></p>
+                  </>
+                ) : (
+                  <>
+                    <p>This month: Cash position <span className="text-emerald-400">increases</span> by CHF {formatCHF(varianceAmount)} vs plan</p>
+                    <p>If carried → <span className="text-amber-400">{nextMonth}</span> receives -CHF {formatCHF(varianceAmount)} adjustment</p>
+                    <p>If written off → Surplus of CHF {formatCHF(varianceAmount)} is <span className="text-zinc-500">not offset</span></p>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-col gap-1.5 pt-1">
             {hasVariance ? (
               <>
@@ -149,7 +170,9 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
                     <ArrowRight size={12} /> Carry forward to {nextMonth}
                   </div>
                   <div className="text-[10px] text-zinc-400 pl-5">
-                    Creates a one-time {isUnder ? 'recovery' : 'adjustment'} flow of {isUnder ? '+' : '-'}CHF {formatCHF(varianceAmount)} in {nextMonth}
+                    {isUnder
+                      ? `+CHF ${formatCHF(varianceAmount)} recovery flow added to ${nextMonth}`
+                      : `-CHF ${formatCHF(varianceAmount)} adjustment flow added to ${nextMonth}`}
                   </div>
                 </button>
                 <button onClick={() => handleSave("write_off")} disabled={saving}
@@ -158,7 +181,7 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
                     <X size={12} /> Write off variance
                   </div>
                   <div className="text-[10px] text-zinc-500 pl-5">
-                    CHF {formatCHF(varianceAmount)} variance is permanently ignored — no carryover created
+                    CHF {formatCHF(varianceAmount)} variance permanently ignored — no future carryover
                   </div>
                 </button>
               </>
@@ -191,14 +214,19 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
   const [actualCell, setActualCell] = useState(null);
   const [hoveredRow, setHoveredRow] = useState(null);
   const [hoveredCol, setHoveredCol] = useState(null);
+  const [varianceSummary, setVarianceSummary] = useState(null);
 
   const fetchMatrix = useCallback(async () => {
     setLoading(true);
     try {
       const params = { scenario, horizon };
       if (selectedEntityId) params.entity_id = selectedEntityId;
-      const res = await axios.get(`${API}/projection/matrix`, { params });
-      setMatrixData(res.data);
+      const [matrixRes, varianceRes] = await Promise.all([
+        axios.get(`${API}/projection/matrix`, { params }),
+        axios.get(`${API}/variance-summary`, { params: selectedEntityId ? { entity_id: selectedEntityId } : {} }),
+      ]);
+      setMatrixData(matrixRes.data);
+      setVarianceSummary(varianceRes.data);
     } catch (err) {
       console.error("Matrix fetch error:", err);
     } finally {
@@ -233,7 +261,7 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
     );
   }
 
-  const { months, revenue_rows, expense_rows, net_per_month, revenue_per_month, cost_per_month, cash_balance_per_month } = matrixData;
+  const { months, revenue_rows, expense_rows, net_per_month, revenue_per_month, cost_per_month, cash_balance_per_month, total_revenue, total_cost, total_net } = matrixData;
 
   const renderCell = (row, month, ci, colorClass) => {
     const cell = row.cells[month.key];
@@ -291,10 +319,10 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
     );
   };
 
-  const calcRowTotal = (row) => Object.values(row.cells).reduce((sum, cell) => sum + (cell?.amount || 0), 0);
-  const netTotal = Object.values(net_per_month).reduce((sum, v) => sum + v, 0);
-  const revTotal = revenue_per_month ? Object.values(revenue_per_month).reduce((sum, v) => sum + v, 0) : 0;
-  const costTotal = cost_per_month ? Object.values(cost_per_month).reduce((sum, v) => sum + v, 0) : 0;
+  // ALL totals read from backend — zero frontend math
+  const revTotal = total_revenue ?? 0;
+  const costTotal = total_cost ?? 0;
+  const netTotal = total_net ?? 0;
 
   return (
     <div className="surface-card" data-testid="cashflow-table">
@@ -302,6 +330,38 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
         <h2 className="text-sm font-medium tracking-[0.15em] uppercase text-zinc-400 font-heading">Cash Flow Table</h2>
         {loading && <span className="text-xs text-zinc-600">Updating...</span>}
       </div>
+
+      {/* Global Variance Tracking Bar */}
+      {varianceSummary && varianceSummary.actuals_recorded > 0 && (
+        <div className="px-4 py-2.5 border-b border-zinc-800 flex items-center gap-6 bg-zinc-900/50" data-testid="variance-bar">
+          <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Variance Control</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] text-zinc-500">{varianceSummary.actuals_recorded} actuals</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-1.5 h-1.5 rounded-full bg-zinc-400"></div>
+            <span className="text-[10px] text-zinc-400 font-mono" data-testid="variance-total">
+              Total: CHF {formatCHF(varianceSummary.total_variance)}
+            </span>
+          </div>
+          {varianceSummary.total_carried_forward > 0 && (
+            <div className="flex items-center gap-1.5">
+              <div className="w-1.5 h-1.5 rounded-full bg-amber-400"></div>
+              <span className="text-[10px] text-amber-400 font-mono" data-testid="variance-carried">
+                Carried: CHF {formatCHF(varianceSummary.total_carried_forward)}
+              </span>
+            </div>
+          )}
+          {varianceSummary.total_written_off > 0 && (
+            <div className="flex items-center gap-1.5">
+              <div className="w-1.5 h-1.5 rounded-full bg-zinc-600"></div>
+              <span className="text-[10px] text-zinc-500 font-mono" data-testid="variance-writtenoff">
+                Written off: CHF {formatCHF(varianceSummary.total_written_off)}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Single scroll container — header, body, totals all in one table for sync */}
       <div className="overflow-x-auto" data-testid="matrix-scroll-container">
@@ -322,7 +382,7 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
               {revenue_rows.length > 0 && (
                 <>
                   <tr>
-                    <td colSpan={months.length + 2} className="sticky left-0 bg-zinc-900 z-10 px-3 py-1.5 text-emerald-400 text-xs font-medium uppercase tracking-wider border-b border-emerald-500/10">
+                    <td colSpan={months.length + 2} className="sticky left-0 bg-zinc-900 z-10 px-3 py-2 text-emerald-400 text-[10px] font-semibold uppercase tracking-[0.2em] border-b border-emerald-500/20 border-t border-zinc-700/50">
                       Revenues
                     </td>
                   </tr>
@@ -339,13 +399,13 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
                       </td>
                       {months.map((m, ci) => renderCell(row, m, ci, 'text-emerald-400'))}
                       <td className="text-right px-3 py-1.5 font-mono text-emerald-400/70 font-medium border-l border-zinc-800">
-                        {formatCompact(calcRowTotal(row))}
+                        {formatCompact(row.row_total)}
                       </td>
                     </tr>
                   ))}
                   {/* Total Revenue Row */}
-                  <tr className="border-b border-emerald-500/20 bg-emerald-500/5">
-                    <td className="sticky left-0 bg-emerald-500/5 z-10 px-3 py-1.5 text-emerald-400 font-semibold text-xs">Total Revenue</td>
+                  <tr className="border-b-2 border-emerald-500/30 bg-emerald-500/5" data-testid="total-revenue-row">
+                    <td className="sticky left-0 bg-emerald-500/5 z-10 px-3 py-2 text-emerald-400 font-bold text-xs tracking-wide">Total Revenue</td>
                     {months.map((m, ci) => (
                       <td key={m.key} className={`text-right px-2 py-1.5 font-mono text-emerald-400 font-semibold ${hoveredCol === ci ? 'bg-emerald-500/10' : ''}`}
                         onMouseEnter={() => setHoveredCol(ci)} onMouseLeave={() => setHoveredCol(null)}>
@@ -363,7 +423,7 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
               {expense_rows.length > 0 && (
                 <>
                   <tr>
-                    <td colSpan={months.length + 2} className="sticky left-0 bg-zinc-900 z-10 px-3 py-1.5 text-rose-400 text-xs font-medium uppercase tracking-wider border-b border-rose-500/10">
+                    <td colSpan={months.length + 2} className="sticky left-0 bg-zinc-900 z-10 px-3 py-2 text-rose-400 text-[10px] font-semibold uppercase tracking-[0.2em] border-b border-rose-500/20 border-t-2 border-zinc-700/50">
                       Expenses
                     </td>
                   </tr>
@@ -380,13 +440,13 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
                       </td>
                       {months.map((m, ci) => renderCell(row, m, ci, 'text-rose-400'))}
                       <td className="text-right px-3 py-1.5 font-mono text-rose-400/70 font-medium border-l border-zinc-800">
-                        {formatCompact(calcRowTotal(row))}
+                        {formatCompact(row.row_total)}
                       </td>
                     </tr>
                   ))}
                   {/* Total Cost Row */}
-                  <tr className="border-b border-rose-500/20 bg-rose-500/5">
-                    <td className="sticky left-0 bg-rose-500/5 z-10 px-3 py-1.5 text-rose-400 font-semibold text-xs">Total Cost</td>
+                  <tr className="border-b-2 border-rose-500/30 bg-rose-500/5" data-testid="total-cost-row">
+                    <td className="sticky left-0 bg-rose-500/5 z-10 px-3 py-2 text-rose-400 font-bold text-xs tracking-wide">Total Cost</td>
                     {months.map((m, ci) => (
                       <td key={m.key} className={`text-right px-2 py-1.5 font-mono text-rose-400 font-semibold ${hoveredCol === ci ? 'bg-rose-500/10' : ''}`}
                         onMouseEnter={() => setHoveredCol(ci)} onMouseLeave={() => setHoveredCol(null)}>
@@ -401,38 +461,39 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
               )}
 
               {/* NET P/L ROW */}
-              <tr className="border-t-2 border-zinc-700 bg-zinc-800/30">
-                <td className="sticky left-0 bg-zinc-800/50 z-10 px-3 py-2 text-zinc-200 font-semibold">Net P/L</td>
+              <tr className="border-t-2 border-zinc-600 bg-zinc-800/40" data-testid="net-pl-row">
+                <td className="sticky left-0 bg-zinc-800/60 z-10 px-3 py-2.5 text-zinc-100 font-bold tracking-wide">Net P/L</td>
                 {months.map((m, ci) => {
                   const net = net_per_month[m.key] || 0;
                   return (
                     <td key={m.key}
-                      className={`text-right px-2 py-2 font-mono font-semibold transition-colors ${hoveredCol === ci ? 'bg-zinc-700/30' : ''} ${net > 0 ? 'text-emerald-400' : net < 0 ? 'text-rose-400' : 'text-zinc-500'}`}
+                      className={`text-right px-2 py-2.5 font-mono font-bold transition-colors ${hoveredCol === ci ? 'bg-zinc-700/30' : ''} ${net > 0 ? 'text-emerald-400' : net < 0 ? 'text-rose-400' : 'text-zinc-500'}`}
                       onMouseEnter={() => setHoveredCol(ci)} onMouseLeave={() => setHoveredCol(null)}>
                       {formatCompact(net)}
                     </td>
                   );
                 })}
-                <td className={`text-right px-3 py-2 font-mono font-semibold border-l border-zinc-800 ${netTotal > 0 ? 'text-emerald-400' : netTotal < 0 ? 'text-rose-400' : 'text-zinc-500'}`}>
+                <td className={`text-right px-3 py-2.5 font-mono font-bold border-l border-zinc-700 ${netTotal > 0 ? 'text-emerald-400' : netTotal < 0 ? 'text-rose-400' : 'text-zinc-500'}`}
+                  data-testid="net-total">
                   {formatCompact(netTotal)}
                 </td>
               </tr>
 
               {/* CASH BALANCE ROW */}
               {cash_balance_per_month && (
-                <tr className="bg-zinc-800/20">
-                  <td className="sticky left-0 bg-zinc-800/30 z-10 px-3 py-2 text-zinc-300 font-semibold text-xs">Cash Balance</td>
+                <tr className="bg-zinc-800/20 border-t border-zinc-700/50" data-testid="cash-balance-row">
+                  <td className="sticky left-0 bg-zinc-800/30 z-10 px-3 py-2.5 text-zinc-200 font-bold text-xs tracking-wide">Cash Balance</td>
                   {months.map((m, ci) => {
                     const bal = cash_balance_per_month[m.key] || 0;
                     return (
                       <td key={m.key}
-                        className={`text-right px-2 py-2 font-mono font-semibold transition-colors ${hoveredCol === ci ? 'bg-zinc-700/30' : ''} ${bal > 0 ? 'text-cyan-400' : 'text-rose-400'}`}
+                        className={`text-right px-2 py-2.5 font-mono font-bold transition-colors ${hoveredCol === ci ? 'bg-zinc-700/30' : ''} ${bal > 0 ? 'text-cyan-400' : 'text-rose-400'}`}
                         onMouseEnter={() => setHoveredCol(ci)} onMouseLeave={() => setHoveredCol(null)}>
                         {formatCompact(bal)}
                       </td>
                     );
                   })}
-                  <td className="text-right px-3 py-2 font-mono text-zinc-500 border-l border-zinc-800">—</td>
+                  <td className="text-right px-3 py-2.5 font-mono text-zinc-500 border-l border-zinc-700">—</td>
                 </tr>
               )}
             </tbody>

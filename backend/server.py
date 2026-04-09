@@ -267,6 +267,18 @@ async def undo_last_action():
         for prev in (last.get("previous_data") or []):
             prev.pop("_id", None)
             await coll.insert_one(prev)
+        # If children were orphaned (not deleted), restore their parent_id
+        orphaned_ids = side_effects.get("orphaned_child_ids", [])
+        if orphaned_ids and collection == "cash_flows":
+            parent_data = (last.get("previous_data") or [{}])[0]
+            parent_id = parent_data.get("id", "")
+            if parent_id:
+                for child_snapshot in (last.get("previous_data") or [])[1:]:
+                    child_id = child_snapshot.get("id")
+                    if child_id in orphaned_ids:
+                        # Restore the child to its pre-delete state (including parent_id)
+                        child_clean = {k: v for k, v in child_snapshot.items() if k != "_id"}
+                        await coll.replace_one({"id": child_id}, child_clean, upsert=True)
     
     elif action_type == "record_actual":
         # Restore previous occurrence state
@@ -544,9 +556,9 @@ async def update_cash_flow(flow_id: str, update: CashFlowUpdate):
 @api_router.delete("/cash-flows/{flow_id}")
 async def delete_cash_flow(flow_id: str, delete_linked: bool = False):
     """Delete flow. Optionally delete linked children or orphan them."""
-    # Snapshot for undo
+    # Snapshot for undo — ALWAYS snapshot children for full state restore
     current = await db.cash_flows.find_one({"id": flow_id}, {"_id": 0})
-    children = await db.cash_flows.find({"parent_id": flow_id}, {"_id": 0}).to_list(100) if delete_linked else []
+    children = await db.cash_flows.find({"parent_id": flow_id}, {"_id": 0}).to_list(100)
     all_snapshots = ([current] if current else []) + children
     
     if delete_linked:
@@ -562,7 +574,11 @@ async def delete_cash_flow(flow_id: str, delete_linked: bool = False):
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Cash flow not found")
     
-    await push_undo("delete", "cash_flows", [flow_id], previous_data=all_snapshots, description=f"Delete: {current.get('label', '') if current else 'flow'}")
+    await push_undo(
+        "delete", "cash_flows", [flow_id], previous_data=all_snapshots,
+        description=f"Delete: {current.get('label', '') if current else 'flow'}",
+        side_effects={"delete_linked": delete_linked, "orphaned_child_ids": [c["id"] for c in children] if not delete_linked else []}
+    )
     
     return {"message": "Cash flow deleted"}
 
@@ -675,14 +691,21 @@ async def set_flow_occurrence(update: FlowOccurrenceUpdate):
     
     # Build response with useful info
     response = {"status": "ok"}
-    if created_carryover_ids:
-        year, mon = update.month.split("-")
-        next_date = date(int(year), int(mon), 1) + relativedelta(months=1)
-        variance = planned - update.actual_amount if 'planned' in dir() else 0
-        response["carryover_info"] = {
-            "target_month": next_date.strftime("%b %Y"),
-            "amount": round(variance, 2),
-        }
+    if created_carryover_ids and update.actual_amount is not None:
+        original = await db.cash_flows.find_one({"id": update.flow_id}, {"_id": 0})
+        if original:
+            resp_planned = original["amount"]
+            rec_mode = original.get("recurrence_mode", "repeat")
+            rec_count = original.get("recurrence_count")
+            if rec_mode == "distribute" and rec_count and rec_count > 0:
+                resp_planned = round(resp_planned / rec_count, 2)
+            resp_variance = resp_planned - update.actual_amount
+            year, mon = update.month.split("-")
+            next_date = date(int(year), int(mon), 1) + relativedelta(months=1)
+            response["carryover_info"] = {
+                "target_month": next_date.strftime("%b %Y"),
+                "amount": round(resp_variance, 2),
+            }
     
     return response
 
@@ -1059,6 +1082,7 @@ async def get_projection_matrix(
             "parent_id": info["parent_id"],
             "is_percentage": info["is_percentage"],
             "cells": cells,
+            "row_total": round(sum(c.get("amount", 0) for c in cells.values()), 2),
         }
         
         if info["is_revenue"]:
@@ -1097,6 +1121,11 @@ async def get_projection_matrix(
         running += net_per_month.get(mk["key"], 0)
         cash_balance_per_month[mk["key"]] = round(running, 2)
     
+    # Horizon totals — computed from engine data, never by frontend
+    total_revenue = round(sum(revenue_per_month.values()), 2)
+    total_cost = round(sum(cost_per_month.values()), 2)
+    total_net = round(sum(net_per_month.values()), 2)
+    
     return {
         "months": month_keys,
         "revenue_rows": revenue_rows,
@@ -1106,6 +1135,9 @@ async def get_projection_matrix(
         "cost_per_month": cost_per_month,
         "cash_balance_per_month": cash_balance_per_month,
         "cash_now": round(cash_now, 2),
+        "total_revenue": total_revenue,
+        "total_cost": total_cost,
+        "total_net": total_net,
     }
 
 @api_router.get("/month-details/{month}")
@@ -1175,6 +1207,60 @@ async def get_month_details(
             for f in month_flows
         ]
     }
+
+@api_router.get("/variance-summary")
+async def get_variance_summary(entity_id: Optional[str] = None):
+    """Global variance tracking: total variance, total carried forward, total written off."""
+    query = {}
+    if entity_id:
+        # Get flow IDs for this entity
+        entity_flows = await db.cash_flows.find({"entity_id": entity_id}, {"_id": 0, "id": 1}).to_list(1000)
+        flow_ids = [f["id"] for f in entity_flows]
+        query["flow_id"] = {"$in": flow_ids}
+    
+    all_occs = await db.flow_occurrences.find(query, {"_id": 0}).to_list(1000)
+    
+    # Get planned amounts for variance computation
+    flow_ids_needed = list({occ["flow_id"] for occ in all_occs if occ.get("actual_amount") is not None})
+    flows_map = {}
+    if flow_ids_needed:
+        flows = await db.cash_flows.find({"id": {"$in": flow_ids_needed}}, {"_id": 0}).to_list(1000)
+        for f in flows:
+            flows_map[f["id"]] = f
+    
+    total_variance = 0.0
+    total_carried = 0.0
+    total_written_off = 0.0
+    actuals_count = 0
+    
+    for occ in all_occs:
+        if occ.get("actual_amount") is None:
+            continue
+        actuals_count += 1
+        flow = flows_map.get(occ["flow_id"])
+        if not flow:
+            continue
+        planned = flow["amount"]
+        rec_mode = flow.get("recurrence_mode", "repeat")
+        rec_count = flow.get("recurrence_count")
+        if rec_mode == "distribute" and rec_count and rec_count > 0:
+            planned = round(planned / rec_count, 2)
+        
+        variance = planned - occ["actual_amount"]
+        total_variance += abs(variance)
+        
+        if occ.get("variance_action") == "carry_forward":
+            total_carried += abs(variance)
+        elif occ.get("variance_action") == "write_off":
+            total_written_off += abs(variance)
+    
+    return {
+        "actuals_recorded": actuals_count,
+        "total_variance": round(total_variance, 2),
+        "total_carried_forward": round(total_carried, 2),
+        "total_written_off": round(total_written_off, 2),
+    }
+
 
 @api_router.get("/")
 async def root():
