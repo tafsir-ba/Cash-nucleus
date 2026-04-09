@@ -49,7 +49,7 @@ export const KPICards = ({ projection, hasAccounts, onAddAccount }) => {
   const hasDanger = first_danger_month !== null;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 md:gap-5" data-testid="kpi-cards">
+    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 md:gap-4" data-testid="kpi-cards">
       {/* Cash Now */}
       <div className="kpi-card" data-testid="kpi-cash-now">
         <span className="kpi-label">Cash Now</span>

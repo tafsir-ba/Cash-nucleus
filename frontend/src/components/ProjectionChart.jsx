@@ -139,9 +139,10 @@ export const ProjectionChart = ({ projection, selectedMonth, onMonthSelect, hasD
               type="monotone" 
               dataKey="closing_cash" 
               stroke="#fafafa" 
-              strokeWidth={2}
-              dot={{ fill: '#fafafa', strokeWidth: 0, r: horizon > 12 ? 1 : 2 }}
+              strokeWidth={2.5}
+              dot={{ fill: '#fafafa', strokeWidth: 0, r: horizon > 12 ? 1 : 3 }}
               activeDot={{ fill: '#fafafa', stroke: '#18181b', strokeWidth: 2, r: 5 }}
+              connectNulls={true}
             />
             
             {firstDangerData && (

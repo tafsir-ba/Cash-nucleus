@@ -177,7 +177,7 @@ function App() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <div>
-                <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-50 font-heading">
+              <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-zinc-50 font-heading whitespace-nowrap">
                   Cash Pilot
                 </h1>
               </div>

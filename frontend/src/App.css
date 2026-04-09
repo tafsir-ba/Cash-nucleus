@@ -40,8 +40,9 @@
 }
 
 .kpi-value {
-  @apply text-xl sm:text-2xl lg:text-3xl font-light tracking-tighter text-zinc-50;
+  @apply text-lg sm:text-xl xl:text-2xl font-light tracking-tighter text-zinc-50;
   font-family: var(--font-heading);
+  white-space: nowrap;
 }
 
 .kpi-meta {
