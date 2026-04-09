@@ -159,11 +159,12 @@ class FlowOccurrenceUpdate(BaseModel):
 # ============== UNDO SYSTEM ==============
 class UndoAction(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    action_type: str  # "create" | "update" | "delete" | "batch_create"
-    collection: str  # "cash_flows" | "bank_accounts" | "entities"
+    action_type: str  # "create" | "update" | "delete" | "batch_create" | "record_actual"
+    collection: str  # "cash_flows" | "bank_accounts" | "entities" | "flow_occurrences"
     target_ids: List[str] = []  # IDs affected
     previous_data: Optional[List[dict]] = None  # Snapshots before change
     created_data: Optional[List[dict]] = None  # Data that was created (for undoing creates)
+    side_effects: Optional[dict] = None  # Related changes (carryover flows, occurrences)
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     description: str = ""
 
@@ -233,7 +234,7 @@ async def push_undo(action_type: str, collection: str, target_ids: List[str],
 
 @api_router.post("/undo")
 async def undo_last_action():
-    """Undo the most recent action."""
+    """Undo the most recent action. Restores full system state including dependencies."""
     last = await db.undo_stack.find_one({}, {"_id": 0}, sort=[("timestamp", -1)])
     if not last:
         return {"status": "nothing_to_undo"}
@@ -241,6 +242,7 @@ async def undo_last_action():
     action_type = last["action_type"]
     collection = last["collection"]
     coll = db[collection]
+    side_effects = last.get("side_effects") or {}
     
     if action_type in ["create", "batch_create"]:
         # Delete the created items
@@ -254,15 +256,44 @@ async def undo_last_action():
     elif action_type == "update":
         # Restore previous data
         for prev in (last.get("previous_data") or []):
-            fid = prev.get("id")
+            prev_clean = {k: v for k, v in prev.items() if k != "_id"}
+            fid = prev_clean.get("id")
             if fid:
-                await coll.replace_one({"id": fid}, prev, upsert=True)
+                await coll.replace_one({"id": fid}, prev_clean, upsert=True)
     
     elif action_type == "delete":
         # Re-insert previously deleted data
         for prev in (last.get("previous_data") or []):
             prev.pop("_id", None)
             await coll.insert_one(prev)
+    
+    elif action_type == "record_actual":
+        # Restore previous occurrence state
+        prev_occurrence = side_effects.get("previous_occurrence")
+        flow_id = side_effects.get("flow_id", "")
+        month = side_effects.get("month", "")
+        
+        if prev_occurrence:
+            # Restore the previous occurrence
+            prev_occurrence.pop("_id", None)
+            await db.flow_occurrences.replace_one(
+                {"flow_id": flow_id, "month": month},
+                prev_occurrence, upsert=True
+            )
+        else:
+            # No previous occurrence — delete the one we created
+            await db.flow_occurrences.delete_one({"flow_id": flow_id, "month": month})
+        
+        # Remove any carryover flows that were created by this action
+        created_carryovers = side_effects.get("created_carryover_ids", [])
+        for cid in created_carryovers:
+            await db.cash_flows.delete_one({"id": cid})
+        
+        # Restore any carryover flows that were deleted by this action
+        deleted_carryovers = side_effects.get("deleted_carryovers", [])
+        for dc in deleted_carryovers:
+            dc.pop("_id", None)
+            await db.cash_flows.insert_one(dc)
     
     # Remove the action from stack
     await db.undo_stack.delete_one({"id": last["id"]})
@@ -553,19 +584,27 @@ async def set_flow_occurrence(update: FlowOccurrenceUpdate):
     Variance = planned - actual.
     If variance_action = 'carry_forward': creates a one-time flow for the difference in next month.
     If variance_action = 'write_off': difference is ignored.
+    Pushes full undo state including occurrence + carryover flows.
     """
-    # Upsert the occurrence record
-    existing = await db.flow_occurrences.find_one(
+    # Snapshot previous state for undo
+    prev_occurrence = await db.flow_occurrences.find_one(
         {"flow_id": update.flow_id, "month": update.month}, {"_id": 0}
     )
     
+    # Snapshot existing carryovers that will be deleted
+    existing_carryovers = await db.cash_flows.find({
+        "carryover_from": update.flow_id,
+        "carryover_month": update.month
+    }, {"_id": 0}).to_list(100)
+    
+    # Upsert the occurrence record
     update_fields = {}
     if update.actual_amount is not None:
         update_fields["actual_amount"] = update.actual_amount
     if update.variance_action is not None:
         update_fields["variance_action"] = update.variance_action
     
-    if existing:
+    if prev_occurrence:
         await db.flow_occurrences.update_one(
             {"flow_id": update.flow_id, "month": update.month},
             {"$set": update_fields}
@@ -586,6 +625,7 @@ async def set_flow_occurrence(update: FlowOccurrenceUpdate):
     })
     
     # Handle carry_forward: create a flow for the variance in next month
+    created_carryover_ids = []
     if update.variance_action == "carry_forward" and update.actual_amount is not None:
         original = await db.cash_flows.find_one({"id": update.flow_id}, {"_id": 0})
         if original:
@@ -598,7 +638,7 @@ async def set_flow_occurrence(update: FlowOccurrenceUpdate):
             
             variance = planned - update.actual_amount
             
-            if abs(variance) > 0.01:  # Only create carryover if meaningful variance
+            if abs(variance) > 0.01:
                 year, mon = update.month.split("-")
                 next_date = date(int(year), int(mon), 1) + relativedelta(months=1)
                 next_month_str = next_date.strftime("%Y-%m")
@@ -616,18 +656,68 @@ async def set_flow_occurrence(update: FlowOccurrenceUpdate):
                     carryover_month=update.month,
                 )
                 await db.cash_flows.insert_one(carryover.model_dump())
+                created_carryover_ids.append(carryover.id)
     
-    return {"status": "ok"}
+    # Push undo with full dependency chain
+    await push_undo(
+        "record_actual", "flow_occurrences",
+        [update.flow_id],
+        description=f"Actual: {update.flow_id[:8]}... {update.month}",
+        side_effects={
+            "flow_id": update.flow_id,
+            "month": update.month,
+            "previous_occurrence": prev_occurrence,
+            "deleted_carryovers": existing_carryovers,
+            "created_carryover_ids": created_carryover_ids,
+        }
+    )
+    
+    # Build response with useful info
+    response = {"status": "ok"}
+    if created_carryover_ids:
+        year, mon = update.month.split("-")
+        next_date = date(int(year), int(mon), 1) + relativedelta(months=1)
+        variance = planned - update.actual_amount if 'planned' in dir() else 0
+        response["carryover_info"] = {
+            "target_month": next_date.strftime("%b %Y"),
+            "amount": round(variance, 2),
+        }
+    
+    return response
 
 @api_router.delete("/flow-occurrences")
 async def clear_flow_occurrence(flow_id: str, month: str):
-    """Clear actual recording for a flow occurrence (revert to planned)."""
+    """Clear actual recording for a flow occurrence (revert to planned). Pushes undo."""
+    # Snapshot for undo
+    prev_occurrence = await db.flow_occurrences.find_one(
+        {"flow_id": flow_id, "month": month}, {"_id": 0}
+    )
+    existing_carryovers = await db.cash_flows.find({
+        "carryover_from": flow_id,
+        "carryover_month": month
+    }, {"_id": 0}).to_list(100)
+    
     await db.flow_occurrences.delete_one({"flow_id": flow_id, "month": month})
-    # Also remove any carryover
     await db.cash_flows.delete_many({
         "carryover_from": flow_id,
         "carryover_month": month
     })
+    
+    # Push undo to restore previous state
+    if prev_occurrence:
+        await push_undo(
+            "record_actual", "flow_occurrences",
+            [flow_id],
+            description=f"Clear actual: {flow_id[:8]}... {month}",
+            side_effects={
+                "flow_id": flow_id,
+                "month": month,
+                "previous_occurrence": prev_occurrence,
+                "deleted_carryovers": existing_carryovers,
+                "created_carryover_ids": [],
+            }
+        )
+    
     return {"status": "ok"}
 
 # ============== SETTINGS ROUTES ==============
@@ -977,19 +1067,44 @@ async def get_projection_matrix(
     
     # Net per month (from same expanded data — guaranteed match)
     net_per_month = {}
+    revenue_per_month = {}
+    cost_per_month = {}
     for mk in month_keys:
         net_per_month[mk["key"]] = 0.0
+        revenue_per_month[mk["key"]] = 0.0
+        cost_per_month[mk["key"]] = 0.0
     for ef in expanded:
         mkey = ef["date"].strftime("%Y-%m")
         if mkey in net_per_month:
             net_per_month[mkey] += ef["amount"]
+            if ef["amount"] > 0:
+                revenue_per_month[mkey] += ef["amount"]
+            else:
+                cost_per_month[mkey] += abs(ef["amount"])
     net_per_month = {k: round(v, 2) for k, v in net_per_month.items()}
+    revenue_per_month = {k: round(v, 2) for k, v in revenue_per_month.items()}
+    cost_per_month = {k: round(v, 2) for k, v in cost_per_month.items()}
+    
+    # Cash balance per month (starting cash + cumulative net — engine-driven)
+    acc_query = {"entity_id": entity_id} if entity_id else {}
+    accounts = await db.bank_accounts.find(acc_query, {"_id": 0}).to_list(100)
+    cash_now = sum(acc.get("amount", 0) for acc in accounts)
+    
+    cash_balance_per_month = {}
+    running = cash_now
+    for mk in month_keys:
+        running += net_per_month.get(mk["key"], 0)
+        cash_balance_per_month[mk["key"]] = round(running, 2)
     
     return {
         "months": month_keys,
         "revenue_rows": revenue_rows,
         "expense_rows": expense_rows,
         "net_per_month": net_per_month,
+        "revenue_per_month": revenue_per_month,
+        "cost_per_month": cost_per_month,
+        "cash_balance_per_month": cash_balance_per_month,
+        "cash_now": round(cash_now, 2),
     }
 
 @api_router.get("/month-details/{month}")
