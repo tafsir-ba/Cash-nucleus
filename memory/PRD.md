@@ -1,88 +1,72 @@
 # Cash Piloting Dashboard - PRD
 
 ## Original Problem Statement
-Design a consolidated cash piloting dashboard that allows a single user to:
-- Understand their current real cash
-- Visualize their future cash trajectory (12/24/36 months)
-- Instantly determine whether they are in a safe, pressure, or danger zone
+Forward-looking financial decision cockpit. Single user, no auth, CHF currency.
+Consolidates bank accounts (state) and cash flows (events) into a deterministic projection engine.
 
-The tool is a forward-looking decision cockpit, not accounting software.
-
-## User Personas
-**Primary User**: Business owner/CFO who needs to quickly assess cash position and future risks without complex accounting interfaces.
-
-## Core Requirements (Static)
-1. **Cash Now Display**: Sum of all bank accounts
-2. **Flexible Horizon Projection**: 12/24/36-month cash trajectory with scenario filtering
-3. **Risk Zones**: Good (above buffer), Watch (0 to buffer), Danger (below 0)
-4. **Scenario Toggle**: Committed/Likely/Extended/Full certainty levels
-5. **Quick Add**: ≤3 seconds to add a cash flow entry
-6. **CHF Currency Only**
-7. **No authentication** (single user)
-8. **Single Source of Truth**: Bank accounts = state, Cash Flows = events. Projection engine computes dynamically.
-
-## Data Model
-- **Entities**: id, name, description
-- **Bank Accounts**: id, entity_id, label, amount
-- **Cash Flows**: id, entity_id, label, amount, date, category, certainty, recurrence, recurrence_mode (repeat/distribute), recurrence_end, recurrence_count, parent_id, is_percentage, percentage_of_parent, carryover_from, carryover_month
-- **Flow Occurrences**: id, flow_id, month, status (planned/paid/unpaid)
-- **Settings**: safety_buffer
+## Core Constraint
+**Single projection engine** — all views (chart, monthly breakdown, matrix table, P&L panel) read from the same computation path. No duplicate computation layers.
 
 ## What's Been Implemented
 
-### Phase 1 (April 2026)
+### Phase 1 — Foundation (April 2026)
 - [x] KPI Cards: Cash Now, Goes Negative, Lowest Point, First Breach, Status
 - [x] Scenario Toggle: Committed/Likely/Extended/Full
-- [x] Flexible Horizon: 12M/24M/36M selector
-- [x] Projection Chart with auto-scaled risk zones
+- [x] Flexible Horizon: 12M/24M/36M
+- [x] Projection Chart with risk zones
 - [x] Monthly Breakdown Table
-- [x] Quick Add Form with linked flows, recurrence
+- [x] Quick Add Form with linked flows
 - [x] Entity Management and Entity Filter
-- [x] Entry Log Dialog with full CRUD
-- [x] Bank Accounts Dialog (CRUD)
-- [x] Settings Dialog (safety buffer)
-- [x] Linked Flows: Parent/child with dynamic percentage recalculation
-- [x] Recurrence: Monthly and Quarterly (children inherit parent recurrence)
-- [x] Monthly P&L Panel
-- [x] Dark theme financial cockpit design
-- [x] MongoDB persistence
-- [x] Dialog accessibility
+- [x] Entry Log Dialog (CRUD)
+- [x] Bank Accounts + Settings (safety buffer)
+- [x] Linked Flows: Parent/child, dynamic % recalculation
+- [x] Recurrence: Monthly/Quarterly, children inherit
+- [x] Dark theme cockpit design, MongoDB persistence
 
-### Phase 2 (April 2026) — Operational Realism
-- [x] **Recurrence Mode: Repeat vs Distribute** — Total amount split across periods with proper rounding (last period adjustment). Children inherit mode. Per-period preview in Quick Add.
-- [x] **Flow Status + Carryover Logic** — Each occurrence: Planned/Paid/Unpaid. Unpaid auto-creates carryover in next month (preserves amount, entity). Carryover stacks with recurring flows. Projection skips unpaid occurrences.
-- [x] **Cash Flow Table (Matrix View)** — Tab-based view. Rows = flows, Columns = months. Revenues on top, Expenses below, Net P/L row. Clickable cells open edit dialog. Synced with projection engine.
-- [x] **P&L Panel Enhancement** — Itemized flows under Revenue/Costs sections. Status buttons for each flow (planned/paid/unpaid cycling). Carryover indicator.
+### Phase 2 — Operational Realism (April 2026)
+- [x] Recurrence Mode: Repeat vs Distribute (total split across periods, rounding preserved)
+- [x] Flow Status system (replaced with Actuals in Phase 3)
+- [x] Cash Flow Table (matrix view, tab-based)
+- [x] P&L Panel with itemized flows
+
+### Phase 3 — Control & Realism (April 2026)
+- [x] **Recurrence Toggle (UI)**: Visible in main Quick Add form when recurrence selected. Per-period preview for distribute mode.
+- [x] **Matrix Consistency**: Matrix table reads from `/api/projection/matrix` — same engine, verified exact match with chart/breakdown.
+- [x] **Actuals & Variance**: Replaced paid/unpaid. Each occurrence: planned + actual. Variance: carry forward (creates carryover) or write off. Planned values never overwritten.
+- [x] **Undo System**: Create/edit/delete/batch_create. Simple stack (last 50 actions). Linked flows undo as one coherent action.
+- [x] **Entry Log Full Page Tab**: 3rd tab alongside Projection and Cash Flow Table. Full CRUD, search, category/type filters, parent/child grouping.
+- [x] **Matrix UX**: Frozen first column, row/column hover highlight, row label click opens edit of source flow.
 
 ## Architecture
 - Frontend: React + Tailwind CSS + Shadcn UI + Recharts + @phosphor-icons/react + date-fns
 - Backend: FastAPI + Motor (async MongoDB)
-- Database: MongoDB (entities, bank_accounts, cash_flows, settings, flow_occurrences)
+- Database: MongoDB (entities, bank_accounts, cash_flows, settings, flow_occurrences, undo_stack)
 
 ## Key API Endpoints
 - GET /api/projection?scenario=&horizon=&entity_id=
+- GET /api/projection/matrix?scenario=&horizon=&entity_id= (same engine)
+- GET /api/month-details/{month} (includes planned_amount, actual_amount, variance_action)
 - POST /api/cash-flows/batch (parent + linked)
 - PUT /api/cash-flows/{id} (propagates to children)
-- PUT /api/flow-occurrences (set status, auto-carryover)
-- GET /api/flow-occurrences?month=&flow_id=
-- GET /api/month-details/{month} (includes flow_id, status, is_carryover)
+- PUT /api/flow-occurrences (record actual, handle variance)
+- DELETE /api/flow-occurrences (clear actual)
+- POST /api/undo / GET /api/undo/peek
 
 ## Prioritized Backlog
 
-### P1 (High Priority)
-- [ ] Bulk import/export (CSV) for data backup/restore
-- [ ] Data backup/restore mechanism
+### P1
+- [ ] CSV import/export for data backup
 
-### P2 (Medium Priority)
-- [ ] Historical comparison (vs last month/year)
+### P2
+- [ ] Historical comparison (vs last month)
 - [ ] Custom category management
 
-### P3 (Nice to Have)
-- [ ] Keyboard shortcuts for quick add
-- [ ] Dark/light theme toggle
-- [ ] Mobile responsive optimization
-- [ ] Print-friendly report view
+### P3
+- [ ] What-If Simulator (sandboxed, no persistence)
+- [ ] Keyboard shortcuts
+- [ ] Mobile optimization
+- [ ] Print-friendly reports
 
 ## Testing Status
-- Iteration 5: Backend 37/37 (100%), Frontend 100%
-- All features verified via testing agent
+- Iteration 6: Backend 21/21 (100%), Frontend 100%
+- Cross-validation: Matrix net = Projection net (exact match verified)
