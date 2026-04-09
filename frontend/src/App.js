@@ -9,11 +9,12 @@ import { ScenarioToggle } from "./components/ScenarioToggle";
 import { ProjectionChart } from "./components/ProjectionChart";
 import { MonthlyTable } from "./components/MonthlyTable";
 import { QuickAddForm } from "./components/QuickAddForm";
-import { PressurePanel } from "./components/PressurePanel";
+import { MonthlyPLPanel } from "./components/MonthlyPLPanel";
 import { BankAccountsDialog } from "./components/BankAccountsDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { EntryLogDialog } from "./components/EntryLogDialog";
 import { EntityFilter } from "./components/EntityFilter";
+import { HorizonSelector } from "./components/HorizonSelector";
 
 // Icons
 import { Gear, Bank, ListBullets } from "@phosphor-icons/react";
@@ -23,6 +24,7 @@ const API = `${BACKEND_URL}/api`;
 
 function App() {
   const [scenario, setScenario] = useState("likely");
+  const [horizon, setHorizon] = useState(12);
   const [projection, setProjection] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [monthDetails, setMonthDetails] = useState(null);
@@ -30,7 +32,7 @@ function App() {
   const [hasAccounts, setHasAccounts] = useState(false);
   const [hasFlows, setHasFlows] = useState(false);
   const [entities, setEntities] = useState([]);
-  const [selectedEntityId, setSelectedEntityId] = useState(null); // null = all entities
+  const [selectedEntityId, setSelectedEntityId] = useState(null);
   
   // Dialog states
   const [bankAccountsOpen, setBankAccountsOpen] = useState(false);
@@ -48,7 +50,7 @@ function App() {
 
   const fetchProjection = useCallback(async () => {
     try {
-      const params = { scenario };
+      const params = { scenario, horizon };
       if (selectedEntityId) params.entity_id = selectedEntityId;
       
       const response = await axios.get(`${API}/projection`, { params });
@@ -59,7 +61,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [scenario, selectedEntityId]);
+  }, [scenario, horizon, selectedEntityId]);
 
   const checkData = useCallback(async () => {
     try {
@@ -109,7 +111,7 @@ function App() {
     fetchProjection();
     checkData();
     if (selectedMonth) fetchMonthDetails(selectedMonth);
-    toast.success("Cash flow added");
+    toast.success("Added");
   };
 
   const handleDataChange = () => {
@@ -145,18 +147,13 @@ function App() {
                 <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-50 font-heading">
                   Cash Pilot
                 </h1>
-                <p className="text-xs text-zinc-500 mt-0.5">12-Month Cash Projection</p>
               </div>
               
-              {/* Entity Filter */}
-              <EntityFilter
-                entities={entities}
-                selectedId={selectedEntityId}
-                onChange={setSelectedEntityId}
-              />
+              <EntityFilter entities={entities} selectedId={selectedEntityId} onChange={setSelectedEntityId} />
             </div>
             
             <div className="flex items-center gap-3">
+              <HorizonSelector value={horizon} onChange={setHorizon} />
               <ScenarioToggle value={scenario} onChange={setScenario} />
               
               <div className="flex items-center gap-2 ml-4 border-l border-zinc-800 pl-4">
@@ -192,7 +189,7 @@ function App() {
 
       {/* Main Content */}
       <main className="w-full max-w-[1600px] mx-auto px-4 md:px-6 lg:px-8 py-6">
-        {/* KPI Cards */}
+        {/* KPI Cards - 5 columns now */}
         <section className="mb-6">
           <KPICards 
             projection={projection} 
@@ -209,6 +206,7 @@ function App() {
               selectedMonth={selectedMonth}
               onMonthSelect={handleMonthSelect}
               hasData={hasData}
+              horizon={horizon}
             />
           </div>
           <div className="lg:col-span-4">
@@ -220,7 +218,7 @@ function App() {
           </div>
         </section>
 
-        {/* Table + Pressure Panel */}
+        {/* Table + P&L Panel */}
         <section className="main-content-grid">
           <div className="lg:col-span-8">
             <MonthlyTable 
@@ -231,7 +229,7 @@ function App() {
             />
           </div>
           <div className="lg:col-span-4">
-            <PressurePanel 
+            <MonthlyPLPanel 
               monthDetails={monthDetails}
               selectedMonth={selectedMonth}
             />

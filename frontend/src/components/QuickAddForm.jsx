@@ -34,33 +34,23 @@ const recurrenceOptions = [
 const getLastEntity = () => localStorage.getItem('lastUsedEntityId') || '';
 const setLastEntity = (id) => localStorage.setItem('lastUsedEntityId', id);
 
-const emptyLinkedFlow = () => ({
-  id: Date.now(),
-  label: "",
-  amount: "",
-  category: "COGS",
-  isPercentage: false,
-  percentage: "",
-});
-
 export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
   const [loading, setLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   
-  // Core fields
+  // Core fields ONLY (visible by default)
   const [label, setLabel] = useState("");
   const [amount, setAmount] = useState("");
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [certainty, setCertainty] = useState("Materialized");
   const [entityId, setEntityId] = useState(getLastEntity());
   
-  // Advanced
+  // Advanced (hidden by default)
   const [category, setCategory] = useState("Expense");
   const [recurrence, setRecurrence] = useState("none");
   const [recurrenceCount, setRecurrenceCount] = useState("");
   const [linkedFlows, setLinkedFlows] = useState([]);
 
-  // Auto-select entity
   useEffect(() => {
     if (!entityId && entities.length > 0) {
       const lastUsed = getLastEntity();
@@ -73,10 +63,33 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
     if (entityId) setLastEntity(entityId);
   }, [entityId]);
 
-  const addLinkedFlow = () => setLinkedFlows([...linkedFlows, emptyLinkedFlow()]);
+  // Auto-generate linked flow description when using percentage
+  const addLinkedFlow = () => {
+    setLinkedFlows([...linkedFlows, {
+      id: Date.now(),
+      label: "",
+      amount: "",
+      category: "COGS",
+      isPercentage: true, // Default to percentage
+      percentage: "40", // Common default
+    }]);
+  };
+
   const removeLinkedFlow = (id) => setLinkedFlows(linkedFlows.filter(f => f.id !== id));
+  
   const updateLinkedFlow = (id, field, value) => {
-    setLinkedFlows(linkedFlows.map(f => f.id === id ? { ...f, [field]: value } : f));
+    setLinkedFlows(linkedFlows.map(f => {
+      if (f.id !== id) return f;
+      const updated = { ...f, [field]: value };
+      // Auto-generate description for percentage flows
+      if (field === 'percentage' && updated.isPercentage && !updated.label) {
+        updated.label = `COGS (${value}%)`;
+      }
+      if (field === 'isPercentage' && value && updated.percentage && !updated.label) {
+        updated.label = `COGS (${updated.percentage}%)`;
+      }
+      return updated;
+    }));
   };
 
   const handleSubmit = async (e) => {
@@ -85,14 +98,13 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
 
     setLoading(true);
     try {
-      // Format date as YYYY-MM-DD (first of selected month)
       const dateStr = format(selectedDate, "yyyy-MM") + "-01";
       const numAmount = parseFloat(amount);
       
       const validLinked = linkedFlows
-        .filter(f => f.label.trim() && (f.amount || (f.isPercentage && f.percentage)))
+        .filter(f => (f.amount || (f.isPercentage && f.percentage)))
         .map(f => ({
-          label: f.label.trim(),
+          label: f.label.trim() || (f.isPercentage ? `COGS (${f.percentage}%)` : 'Related cost'),
           amount: f.isPercentage ? 0 : parseFloat(f.amount),
           date: dateStr,
           certainty,
@@ -149,6 +161,7 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
       </div>
       
       <form onSubmit={handleSubmit} className="p-4 space-y-3">
+        {/* Entity - minimal */}
         <EntitySelector
           value={entityId}
           onChange={setEntityId}
@@ -156,6 +169,7 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
           onEntitiesChange={onEntitiesChange}
         />
 
+        {/* Description */}
         <div>
           <Label className="text-xs text-zinc-500 mb-1 block">Description</Label>
           <input
@@ -169,9 +183,10 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
           />
         </div>
 
+        {/* Amount + Date */}
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <Label className="text-xs text-zinc-500 mb-1 block">Amount (CHF)</Label>
+            <Label className="text-xs text-zinc-500 mb-1 block">Amount</Label>
             <input
               type="number"
               autoComplete="off"
@@ -189,7 +204,7 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
               <PopoverTrigger asChild>
                 <button
                   type="button"
-                  className="w-full flex items-center justify-between bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 hover:bg-zinc-900 transition-colors"
+                  className="w-full flex items-center justify-between bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 hover:bg-zinc-900"
                   data-testid="quick-add-date"
                 >
                   <span>{format(selectedDate, "MMM yyyy")}</span>
@@ -202,13 +217,13 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
                   selected={selectedDate}
                   onSelect={(date) => date && setSelectedDate(date)}
                   defaultMonth={selectedDate}
-                  className="rounded-md"
                 />
               </PopoverContent>
             </Popover>
           </div>
         </div>
 
+        {/* Certainty */}
         <div>
           <Label className="text-xs text-zinc-500 mb-1 block">Certainty</Label>
           <Select value={certainty} onValueChange={setCertainty}>
@@ -221,17 +236,20 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
           </Select>
         </div>
 
+        {/* Advanced toggle */}
         <button
           type="button"
           onClick={() => setShowAdvanced(!showAdvanced)}
-          className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+          className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300"
         >
           <CaretDown size={12} className={`transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
-          {showAdvanced ? 'Hide' : 'More'} options
+          {showAdvanced ? 'Less' : 'More'}
         </button>
 
+        {/* Advanced - ALL hidden by default */}
         {showAdvanced && (
           <div className="space-y-3 pt-2 border-t border-zinc-800/50">
+            {/* Category + Recurrence */}
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <Label className="text-xs text-zinc-500 mb-1 block">Category</Label>
@@ -259,14 +277,11 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
 
             {recurrence !== "none" && (
               <div>
-                <Label className="text-xs text-zinc-500 mb-1 block">
-                  # of {recurrence === "quarterly" ? "quarters" : "months"}
-                </Label>
+                <Label className="text-xs text-zinc-500 mb-1 block"># of occurrences</Label>
                 <input
                   type="number"
                   placeholder={recurrence === "quarterly" ? "4" : "12"}
                   min="1"
-                  max="120"
                   value={recurrenceCount}
                   onChange={(e) => setRecurrenceCount(e.target.value)}
                   className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 placeholder-zinc-500 font-mono"
@@ -274,87 +289,85 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
               </div>
             )}
 
-            {/* Linked Flows */}
+            {/* Linked Flows - improved UX */}
             <div className="pt-2 border-t border-zinc-800/50">
               <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-1.5">
-                  <Link size={12} className="text-amber-400" />
-                  <span className="text-xs text-zinc-400">Linked Flows</span>
-                </div>
-                <button type="button" onClick={addLinkedFlow} className="text-xs text-zinc-500 hover:text-zinc-300 flex items-center gap-1">
-                  <Plus size={10} /> Add
+                <span className="text-xs text-zinc-400 flex items-center gap-1.5">
+                  <Link size={12} className="text-amber-400" /> Linked Flows
+                </span>
+                <button type="button" onClick={addLinkedFlow} className="text-xs text-amber-400 hover:text-amber-300">
+                  + Add COGS
                 </button>
               </div>
-              
-              {linkedFlows.length === 0 && (
-                <p className="text-xs text-zinc-600">e.g., Revenue + COGS (40%)</p>
-              )}
 
               {linkedFlows.map((linked) => (
-                <div key={linked.id} className="flex gap-1.5 mb-2 items-start bg-zinc-900/50 p-2 rounded border border-amber-500/20">
-                  <div className="flex-1 space-y-1.5">
+                <div key={linked.id} className="mb-2 p-2 rounded bg-zinc-900/50 border border-amber-500/20">
+                  <div className="flex gap-2 items-center mb-2">
                     <input
                       type="text"
-                      placeholder="Description"
+                      placeholder={linked.isPercentage ? `COGS (${linked.percentage || '40'}%)` : "Description"}
                       value={linked.label}
                       onChange={(e) => updateLinkedFlow(linked.id, "label", e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-800 text-xs rounded px-2 py-1.5 text-zinc-100 placeholder-zinc-500"
+                      className="flex-1 bg-zinc-950 border border-zinc-800 text-xs rounded px-2 py-1.5 text-zinc-100 placeholder-zinc-500"
                     />
-                    <div className="flex gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => updateLinkedFlow(linked.id, "isPercentage", !linked.isPercentage)}
-                        className={`px-2 py-1 text-xs rounded border ${
-                          linked.isPercentage 
-                            ? 'bg-amber-500/20 border-amber-500/30 text-amber-400'
-                            : 'bg-zinc-800 border-zinc-700 text-zinc-400'
-                        }`}
-                      >
-                        {linked.isPercentage ? '%' : 'CHF'}
-                      </button>
-                      
-                      {linked.isPercentage ? (
-                        <input
-                          type="number"
-                          placeholder="40"
-                          value={linked.percentage}
-                          onChange={(e) => updateLinkedFlow(linked.id, "percentage", e.target.value)}
-                          className="flex-1 bg-zinc-950 border border-zinc-800 text-xs rounded px-2 py-1.5 text-zinc-100 placeholder-zinc-500 font-mono"
-                        />
-                      ) : (
-                        <input
-                          type="number"
-                          placeholder="-2000"
-                          value={linked.amount}
-                          onChange={(e) => updateLinkedFlow(linked.id, "amount", e.target.value)}
-                          className="flex-1 bg-zinc-950 border border-zinc-800 text-xs rounded px-2 py-1.5 text-zinc-100 placeholder-zinc-500 font-mono"
-                        />
-                      )}
-                      
-                      <Select value={linked.category} onValueChange={(v) => updateLinkedFlow(linked.id, "category", v)}>
-                        <SelectTrigger className="w-20 bg-zinc-950 border-zinc-800 text-xs h-[30px] px-2">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {categories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    {linked.isPercentage && linked.percentage && amount && (
-                      <p className="text-xs text-amber-400">
-                        = CHF {Math.round(Math.abs(parseFloat(amount)) * parseFloat(linked.percentage) / 100).toLocaleString()}
-                      </p>
-                    )}
+                    <button type="button" onClick={() => removeLinkedFlow(linked.id)} className="p-1 text-zinc-500 hover:text-rose-400">
+                      <X size={12} />
+                    </button>
                   </div>
-                  <button type="button" onClick={() => removeLinkedFlow(linked.id)} className="p-1 text-zinc-500 hover:text-rose-400">
-                    <X size={12} />
-                  </button>
+                  
+                  <div className="flex gap-2 items-center">
+                    <button
+                      type="button"
+                      onClick={() => updateLinkedFlow(linked.id, "isPercentage", !linked.isPercentage)}
+                      className={`px-2 py-1 text-xs rounded ${
+                        linked.isPercentage 
+                          ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                          : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+                      }`}
+                    >
+                      {linked.isPercentage ? '%' : 'CHF'}
+                    </button>
+                    
+                    {linked.isPercentage ? (
+                      <input
+                        type="number"
+                        placeholder="40"
+                        value={linked.percentage}
+                        onChange={(e) => updateLinkedFlow(linked.id, "percentage", e.target.value)}
+                        className="w-16 bg-zinc-950 border border-zinc-800 text-xs rounded px-2 py-1.5 text-zinc-100 font-mono"
+                      />
+                    ) : (
+                      <input
+                        type="number"
+                        placeholder="-2000"
+                        value={linked.amount}
+                        onChange={(e) => updateLinkedFlow(linked.id, "amount", e.target.value)}
+                        className="flex-1 bg-zinc-950 border border-zinc-800 text-xs rounded px-2 py-1.5 text-zinc-100 font-mono"
+                      />
+                    )}
+                    
+                    <Select value={linked.category} onValueChange={(v) => updateLinkedFlow(linked.id, "category", v)}>
+                      <SelectTrigger className="w-20 bg-zinc-950 border-zinc-800 text-xs h-[30px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {categories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  
+                  {linked.isPercentage && linked.percentage && amount && (
+                    <p className="text-xs text-amber-400 mt-1.5">
+                      = CHF {Math.round(Math.abs(parseFloat(amount)) * parseFloat(linked.percentage) / 100).toLocaleString()}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>
           </div>
         )}
 
+        {/* Submit */}
         <button
           type="submit"
           disabled={loading || !canSubmit}
@@ -362,9 +375,7 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
           data-testid="quick-add-submit"
         >
           <Plus size={14} weight="bold" />
-          {loading ? 'Adding...' : linkedFlows.filter(f => f.label && (f.amount || f.percentage)).length > 0 
-            ? `Add ${1 + linkedFlows.filter(f => f.label && (f.amount || f.percentage)).length} Flows` 
-            : 'Add'}
+          {loading ? 'Adding...' : 'Add'}
         </button>
       </form>
     </div>

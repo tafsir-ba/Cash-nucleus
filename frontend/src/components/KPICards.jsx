@@ -1,4 +1,4 @@
-import { CheckCircle, WarningCircle, Eye, Plus, Warning } from "@phosphor-icons/react";
+import { CheckCircle, WarningCircle, Eye, Plus, WarningDiamond } from "@phosphor-icons/react";
 
 const formatCurrency = (amount) => {
   return new Intl.NumberFormat('de-CH', {
@@ -11,14 +11,10 @@ const formatCurrency = (amount) => {
 
 const StatusIcon = ({ status }) => {
   switch (status) {
-    case 'Good':
-      return <CheckCircle size={24} weight="fill" className="text-emerald-400" />;
-    case 'Watch':
-      return <Eye size={24} weight="fill" className="text-amber-400" />;
-    case 'Danger':
-      return <WarningCircle size={24} weight="fill" className="text-rose-400" />;
-    default:
-      return null;
+    case 'Good': return <CheckCircle size={24} weight="fill" className="text-emerald-400" />;
+    case 'Watch': return <Eye size={24} weight="fill" className="text-amber-400" />;
+    case 'Danger': return <WarningCircle size={24} weight="fill" className="text-rose-400" />;
+    default: return null;
   }
 };
 
@@ -50,9 +46,10 @@ export const KPICards = ({ projection, hasAccounts, onAddAccount }) => {
   
   const belowBuffer = safety_buffer - lowest_cash;
   const isNoData = cash_now === 0 && !hasAccounts;
+  const hasDanger = first_danger_month !== null;
 
   return (
-    <div className="dashboard-grid" data-testid="kpi-cards">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 md:gap-5" data-testid="kpi-cards">
       {/* Cash Now */}
       <div className="kpi-card" data-testid="kpi-cash-now">
         <span className="kpi-label">Cash Now</span>
@@ -69,70 +66,86 @@ export const KPICards = ({ projection, hasAccounts, onAddAccount }) => {
         ) : (
           <>
             <span className="kpi-value font-mono">{formatCurrency(cash_now)}</span>
-            <span className="kpi-meta">Current bank balance</span>
+            <span className="kpi-meta">Current balance</span>
+          </>
+        )}
+      </div>
+
+      {/* FIRST DANGER MONTH - THE CRITICAL METRIC */}
+      <div className={`kpi-card ${hasDanger ? 'border-rose-500/40 bg-rose-500/5' : ''}`} data-testid="kpi-first-danger">
+        <span className="kpi-label flex items-center gap-2">
+          {hasDanger && <WarningDiamond size={14} weight="fill" className="text-rose-400" />}
+          Goes Negative
+        </span>
+        {isNoData ? (
+          <span className="text-lg text-zinc-500 mt-1">—</span>
+        ) : hasDanger ? (
+          <>
+            <span className="kpi-value text-2xl sm:text-3xl lg:text-4xl text-rose-400 font-semibold">
+              {first_danger_month}
+            </span>
+            <span className="kpi-meta text-rose-400/70">Cash drops below zero</span>
+          </>
+        ) : (
+          <>
+            <span className="kpi-value text-2xl sm:text-3xl lg:text-4xl text-emerald-400">Never</span>
+            <span className="kpi-meta text-zinc-500">Within projection horizon</span>
           </>
         )}
       </div>
 
       {/* Lowest Point */}
-      <div className={`kpi-card ${lowest_cash < 0 ? 'border-rose-500/30' : ''}`} data-testid="kpi-lowest-cash">
+      <div className="kpi-card" data-testid="kpi-lowest-cash">
         <span className="kpi-label">Lowest Point</span>
         {isNoData ? (
           <span className="text-lg text-zinc-500 mt-1">—</span>
         ) : (
           <>
-            <span className={`kpi-value font-mono ${lowest_cash < 0 ? 'text-rose-400' : lowest_cash < safety_buffer ? 'text-amber-400' : ''}`}>
+            <span className={`kpi-value font-mono text-2xl sm:text-3xl ${lowest_cash < 0 ? 'text-rose-400' : lowest_cash < safety_buffer ? 'text-amber-400' : ''}`}>
               {formatCurrency(lowest_cash)}
             </span>
-            <span className="kpi-meta font-medium">{lowest_cash_month}</span>
+            <span className="kpi-meta">{lowest_cash_month}</span>
           </>
         )}
       </div>
 
-      {/* Lowest Cash Month */}
-      <div className="kpi-card" data-testid="kpi-lowest-month">
-        <span className="kpi-label">Lowest Cash Month</span>
+      {/* First Breach (buffer) */}
+      <div className="kpi-card" data-testid="kpi-first-breach">
+        <span className="kpi-label">First Breach</span>
         {isNoData ? (
           <span className="text-lg text-zinc-500 mt-1">—</span>
+        ) : first_watch_month ? (
+          <>
+            <span className="kpi-value text-2xl sm:text-3xl lg:text-4xl text-amber-400">
+              {first_watch_month}
+            </span>
+            <span className="kpi-meta text-zinc-500">Below buffer</span>
+          </>
         ) : (
           <>
-            <span className="kpi-value text-2xl sm:text-3xl lg:text-4xl">{lowest_cash_month}</span>
-            <span className="kpi-meta">When cash hits bottom</span>
+            <span className="kpi-value text-2xl sm:text-3xl lg:text-4xl text-zinc-500">—</span>
+            <span className="kpi-meta text-zinc-600">Always above buffer</span>
           </>
         )}
       </div>
 
-      {/* Status with first breach info */}
+      {/* Status */}
       <div className={`kpi-card border ${getStatusBg(overall_status)}`} data-testid="kpi-status">
         <span className="kpi-label">Status</span>
         {isNoData ? (
-          <span className="text-lg text-zinc-500 mt-1">Add data to see status</span>
+          <span className="text-lg text-zinc-500 mt-1">Add data</span>
         ) : (
           <>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <StatusIcon status={overall_status} />
-              <span className={`kpi-value text-2xl sm:text-3xl lg:text-4xl ${getStatusColor(overall_status)}`}>
+              <span className={`kpi-value text-2xl sm:text-3xl ${getStatusColor(overall_status)}`}>
                 {overall_status}
               </span>
             </div>
-            <div className="mt-1 text-xs space-y-0.5">
-              {overall_status === 'Good' && (
-                <p className="text-zinc-400">Always above buffer</p>
-              )}
-              {overall_status === 'Watch' && first_watch_month && (
-                <>
-                  <p className="text-amber-400">First breach: {first_watch_month}</p>
-                  <p className="text-zinc-500">Below buffer by {formatCurrency(belowBuffer)}</p>
-                </>
-              )}
-              {overall_status === 'Danger' && (
-                <>
-                  {first_danger_month && (
-                    <p className="text-rose-400">Goes negative: {first_danger_month}</p>
-                  )}
-                  <p className="text-zinc-500">Lowest: {formatCurrency(lowest_cash)}</p>
-                </>
-              )}
+            <div className="mt-1 text-xs text-zinc-500">
+              {overall_status === 'Good' && 'Always safe'}
+              {overall_status === 'Watch' && `Buffer breach in ${first_watch_month}`}
+              {overall_status === 'Danger' && `Negative in ${first_danger_month}`}
             </div>
           </>
         )}

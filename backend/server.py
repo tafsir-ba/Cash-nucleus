@@ -478,9 +478,14 @@ def get_certainty_levels(scenario: str) -> List[str]:
 @api_router.get("/projection")
 async def get_projection(
     scenario: str = "likely",
-    entity_id: Optional[str] = Query(None, description="Filter by entity")
+    entity_id: Optional[str] = Query(None, description="Filter by entity"),
+    horizon: int = Query(12, description="Projection horizon in months (12, 24, or 36)")
 ):
     """Single projection engine - all UI components use this."""
+    # Validate horizon
+    if horizon not in [12, 24, 36]:
+        horizon = 12
+    
     # Get bank accounts (state)
     acc_query = {"entity_id": entity_id} if entity_id else {}
     accounts = await db.bank_accounts.find(acc_query, {"_id": 0}).to_list(100)
@@ -499,10 +504,10 @@ async def get_projection(
     settings = await db.settings.find_one({"id": "settings"}, {"_id": 0})
     safety_buffer = settings.get("safety_buffer", 50000) if settings else 50000
     
-    # 12-month projection
+    # Projection based on horizon
     today = date.today()
     start_of_month = today.replace(day=1)
-    end_date = start_of_month + relativedelta(months=12)
+    end_date = start_of_month + relativedelta(months=horizon)
     
     # Filter by certainty
     certainty_levels = get_certainty_levels(scenario)
@@ -513,7 +518,7 @@ async def get_projection(
     
     # Group by month
     months_data = {}
-    for i in range(12):
+    for i in range(horizon):
         m = start_of_month + relativedelta(months=i)
         key = m.strftime("%Y-%m")
         months_data[key] = {
