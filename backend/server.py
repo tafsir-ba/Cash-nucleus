@@ -34,6 +34,7 @@ class Category(str, Enum):
     DEBT = "Debt"
     EXPENSE = "Expense"
     TRANSFER = "Transfer"
+    COGS = "COGS"
     OTHER = "Other"
 
 class Certainty(str, Enum):
@@ -46,38 +47,58 @@ class Recurrence(str, Enum):
     NONE = "none"
     MONTHLY = "monthly"
 
-# Models
+# ============== ENTITY MODELS ==============
+class Entity(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    description: str = ""
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class EntityCreate(BaseModel):
+    name: str
+    description: str = ""
+
+class EntityUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+# ============== BANK ACCOUNT MODELS ==============
 class BankAccount(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    entity: str = ""
+    entity_id: str = ""  # Default empty for backward compatibility
+    entity: str = ""  # Legacy field
     label: str
     amount: float
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 class BankAccountCreate(BaseModel):
-    entity: str = ""
+    entity_id: str
     label: str
     amount: float
 
 class BankAccountUpdate(BaseModel):
-    entity: Optional[str] = None
+    entity_id: Optional[str] = None
     label: Optional[str] = None
     amount: Optional[float] = None
 
+# ============== CASH FLOW MODELS ==============
 class CashFlow(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     label: str
-    amount: float  # positive = inflow, negative = outflow
-    date: str  # ISO date string
+    amount: float
+    date: str
     category: Category = Category.EXPENSE
     certainty: Certainty = Certainty.MATERIALIZED
     recurrence: Recurrence = Recurrence.NONE
-    recurrence_end: Optional[str] = None  # ISO date string
+    recurrence_end: Optional[str] = None
     recurrence_count: Optional[int] = None
-    entity: str = ""
+    entity_id: str = ""  # Default empty for backward compatibility
+    entity: str = ""  # Legacy field
+    parent_id: Optional[str] = None  # For linked flows
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -90,7 +111,8 @@ class CashFlowCreate(BaseModel):
     recurrence: Recurrence = Recurrence.NONE
     recurrence_end: Optional[str] = None
     recurrence_count: Optional[int] = None
-    entity: str = ""
+    entity_id: str
+    parent_id: Optional[str] = None
 
 class CashFlowUpdate(BaseModel):
     label: Optional[str] = None
@@ -101,8 +123,18 @@ class CashFlowUpdate(BaseModel):
     recurrence: Optional[Recurrence] = None
     recurrence_end: Optional[str] = None
     recurrence_count: Optional[int] = None
-    entity: Optional[str] = None
+    entity_id: Optional[str] = None
 
+class CashFlowWithChildren(BaseModel):
+    flow: dict
+    linked_flows: List[dict] = []
+
+class CashFlowBatchCreate(BaseModel):
+    """Create a parent flow with optional linked flows"""
+    parent: CashFlowCreate
+    linked: List[CashFlowCreate] = []
+
+# ============== SETTINGS MODEL ==============
 class Settings(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = "settings"
@@ -111,14 +143,15 @@ class Settings(BaseModel):
 class SettingsUpdate(BaseModel):
     safety_buffer: float
 
+# ============== PROJECTION MODELS ==============
 class MonthProjection(BaseModel):
-    month: str  # YYYY-MM
-    month_label: str  # Jan 2026
+    month: str
+    month_label: str
     inflows: float
     outflows: float
     net: float
     closing_cash: float
-    status: str  # Good, Watch, Danger
+    status: str
 
 class ProjectionResponse(BaseModel):
     cash_now: float
@@ -129,7 +162,53 @@ class ProjectionResponse(BaseModel):
     safety_buffer: float
     months: List[MonthProjection]
 
-# Bank Account Routes
+# ============== ENTITY ROUTES ==============
+@api_router.get("/entities", response_model=List[Entity])
+async def get_entities():
+    entities = await db.entities.find({}, {"_id": 0}).to_list(100)
+    return entities
+
+@api_router.post("/entities", response_model=Entity)
+async def create_entity(entity: EntityCreate):
+    entity_obj = Entity(**entity.model_dump())
+    doc = entity_obj.model_dump()
+    await db.entities.insert_one(doc)
+    return entity_obj
+
+@api_router.put("/entities/{entity_id}", response_model=Entity)
+async def update_entity(entity_id: str, update: EntityUpdate):
+    update_data = {k: v for k, v in update.model_dump().items() if v is not None}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No valid update data provided")
+    
+    result = await db.entities.find_one_and_update(
+        {"id": entity_id},
+        {"$set": update_data},
+        return_document=True,
+        projection={"_id": 0}
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return result
+
+@api_router.delete("/entities/{entity_id}")
+async def delete_entity(entity_id: str):
+    # Check if entity has bank accounts or cash flows
+    accounts_count = await db.bank_accounts.count_documents({"entity_id": entity_id})
+    flows_count = await db.cash_flows.count_documents({"entity_id": entity_id})
+    
+    if accounts_count > 0 or flows_count > 0:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot delete entity with {accounts_count} bank accounts and {flows_count} cash flows"
+        )
+    
+    result = await db.entities.delete_one({"id": entity_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return {"message": "Entity deleted"}
+
+# ============== BANK ACCOUNT ROUTES ==============
 @api_router.get("/bank-accounts", response_model=List[BankAccount])
 async def get_bank_accounts():
     accounts = await db.bank_accounts.find({}, {"_id": 0}).to_list(100)
@@ -137,6 +216,11 @@ async def get_bank_accounts():
 
 @api_router.post("/bank-accounts", response_model=BankAccount)
 async def create_bank_account(account: BankAccountCreate):
+    # Verify entity exists
+    entity = await db.entities.find_one({"id": account.entity_id})
+    if not entity:
+        raise HTTPException(status_code=400, detail="Entity not found")
+    
     account_obj = BankAccount(**account.model_dump())
     doc = account_obj.model_dump()
     await db.bank_accounts.insert_one(doc)
@@ -167,18 +251,79 @@ async def delete_bank_account(account_id: str):
         raise HTTPException(status_code=404, detail="Bank account not found")
     return {"message": "Bank account deleted"}
 
-# Cash Flow Routes
+# ============== CASH FLOW ROUTES ==============
 @api_router.get("/cash-flows", response_model=List[CashFlow])
 async def get_cash_flows():
     flows = await db.cash_flows.find({}, {"_id": 0}).to_list(1000)
     return flows
 
+@api_router.get("/cash-flows/with-linked")
+async def get_cash_flows_with_linked():
+    """Get all cash flows grouped by parent-child relationships"""
+    flows = await db.cash_flows.find({}, {"_id": 0}).to_list(1000)
+    
+    # Separate parent flows and linked flows
+    parent_flows = [f for f in flows if f.get("parent_id") is None]
+    linked_map = {}
+    
+    for f in flows:
+        if f.get("parent_id"):
+            parent_id = f["parent_id"]
+            if parent_id not in linked_map:
+                linked_map[parent_id] = []
+            linked_map[parent_id].append(f)
+    
+    # Build result
+    result = []
+    for pf in parent_flows:
+        result.append({
+            "flow": pf,
+            "linked_flows": linked_map.get(pf["id"], [])
+        })
+    
+    # Sort by date descending
+    result.sort(key=lambda x: x["flow"].get("date", ""), reverse=True)
+    return result
+
 @api_router.post("/cash-flows", response_model=CashFlow)
 async def create_cash_flow(flow: CashFlowCreate):
+    # Verify entity exists
+    entity = await db.entities.find_one({"id": flow.entity_id})
+    if not entity:
+        raise HTTPException(status_code=400, detail="Entity not found")
+    
     flow_obj = CashFlow(**flow.model_dump())
     doc = flow_obj.model_dump()
     await db.cash_flows.insert_one(doc)
     return flow_obj
+
+@api_router.post("/cash-flows/batch")
+async def create_cash_flow_batch(batch: CashFlowBatchCreate):
+    """Create a parent flow with optional linked flows"""
+    # Verify entity exists
+    entity = await db.entities.find_one({"id": batch.parent.entity_id})
+    if not entity:
+        raise HTTPException(status_code=400, detail="Entity not found")
+    
+    # Create parent flow
+    parent_obj = CashFlow(**batch.parent.model_dump())
+    parent_doc = parent_obj.model_dump()
+    await db.cash_flows.insert_one(parent_doc)
+    
+    # Create linked flows
+    linked_results = []
+    for linked in batch.linked:
+        linked_data = linked.model_dump()
+        linked_data["parent_id"] = parent_obj.id
+        linked_obj = CashFlow(**linked_data)
+        linked_doc = linked_obj.model_dump()
+        await db.cash_flows.insert_one(linked_doc)
+        linked_results.append(linked_obj.model_dump())
+    
+    return {
+        "parent": parent_obj.model_dump(),
+        "linked": linked_results
+    }
 
 @api_router.put("/cash-flows/{flow_id}", response_model=CashFlow)
 async def update_cash_flow(flow_id: str, update: CashFlowUpdate):
@@ -199,13 +344,18 @@ async def update_cash_flow(flow_id: str, update: CashFlowUpdate):
     return result
 
 @api_router.delete("/cash-flows/{flow_id}")
-async def delete_cash_flow(flow_id: str):
+async def delete_cash_flow(flow_id: str, delete_linked: bool = False):
+    # Check if this is a parent flow
+    if delete_linked:
+        # Delete all linked flows
+        await db.cash_flows.delete_many({"parent_id": flow_id})
+    
     result = await db.cash_flows.delete_one({"id": flow_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Cash flow not found")
     return {"message": "Cash flow deleted"}
 
-# Settings Routes
+# ============== SETTINGS ROUTES ==============
 @api_router.get("/settings", response_model=Settings)
 async def get_settings():
     settings = await db.settings.find_one({"id": "settings"}, {"_id": 0})
@@ -226,7 +376,7 @@ async def update_settings(update: SettingsUpdate):
     )
     return result
 
-# Projection Route
+# ============== PROJECTION LOGIC ==============
 def expand_recurring_flows(flows: List[dict], start_date: date, end_date: date) -> List[dict]:
     """Expand recurring flows into individual monthly occurrences"""
     expanded = []
@@ -244,7 +394,6 @@ def expand_recurring_flows(flows: List[dict], start_date: date, end_date: date) 
                     "category": flow["category"]
                 })
         else:
-            # Monthly recurrence
             current = flow_date
             count = 0
             max_count = flow.get("recurrence_count") or 999
@@ -334,7 +483,6 @@ async def get_projection(scenario: str = "likely"):
         net = data["inflows"] - data["outflows"]
         closing = closing + net
         
-        # Determine status
         if closing >= safety_buffer:
             status = "Good"
         elif closing >= 0:
@@ -342,12 +490,10 @@ async def get_projection(scenario: str = "likely"):
         else:
             status = "Danger"
         
-        # Track lowest cash
         if closing < lowest_cash:
             lowest_cash = closing
             lowest_cash_month = data["month_label"]
         
-        # Track highest pressure (largest outflow month)
         if data["outflows"] > highest_pressure:
             highest_pressure = data["outflows"]
             highest_pressure_month = data["month_label"]
@@ -362,7 +508,6 @@ async def get_projection(scenario: str = "likely"):
             status=status
         ))
     
-    # Overall status based on lowest point
     if lowest_cash >= safety_buffer:
         overall_status = "Good"
     elif lowest_cash >= 0:
@@ -380,7 +525,6 @@ async def get_projection(scenario: str = "likely"):
         months=months
     )
 
-# Get flows for a specific month (for pressure panel)
 @api_router.get("/month-details/{month}")
 async def get_month_details(month: str, scenario: str = "likely"):
     flows = await db.cash_flows.find({}, {"_id": 0}).to_list(1000)
@@ -388,19 +532,16 @@ async def get_month_details(month: str, scenario: str = "likely"):
     certainty_levels = get_certainty_levels(scenario)
     filtered_flows = [f for f in flows if f.get("certainty") in certainty_levels]
     
-    # Parse month
     year, mon = month.split("-")
     start_date = date(int(year), int(mon), 1)
     end_date = start_date + relativedelta(months=1) - relativedelta(days=1)
     
     expanded_flows = expand_recurring_flows(filtered_flows, start_date, end_date)
     
-    # Sort by amount (largest outflows first)
     month_flows = [f for f in expanded_flows if f["date"].strftime("%Y-%m") == month]
     outflows = [f for f in month_flows if f["amount"] < 0]
     outflows.sort(key=lambda x: x["amount"])
     
-    # Get recurring burdens (flows that have recurrence)
     recurring_labels = set()
     for f in filtered_flows:
         if f.get("recurrence") == "monthly":
@@ -439,7 +580,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'

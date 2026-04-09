@@ -12,7 +12,7 @@ import { QuickAddForm } from "./components/QuickAddForm";
 import { PressurePanel } from "./components/PressurePanel";
 import { BankAccountsDialog } from "./components/BankAccountsDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
-import { CashFlowsDialog } from "./components/CashFlowsDialog";
+import { EntryLogDialog } from "./components/EntryLogDialog";
 
 // Icons
 import { Gear, Bank, ListBullets } from "@phosphor-icons/react";
@@ -28,11 +28,21 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [hasAccounts, setHasAccounts] = useState(false);
   const [hasFlows, setHasFlows] = useState(false);
+  const [entities, setEntities] = useState([]);
   
   // Dialog states
   const [bankAccountsOpen, setBankAccountsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [cashFlowsOpen, setCashFlowsOpen] = useState(false);
+  const [entryLogOpen, setEntryLogOpen] = useState(false);
+
+  const fetchEntities = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API}/entities`);
+      setEntities(response.data);
+    } catch (error) {
+      console.error("Failed to fetch entities:", error);
+    }
+  }, []);
 
   const fetchProjection = useCallback(async () => {
     try {
@@ -74,9 +84,10 @@ function App() {
   }, [scenario]);
 
   useEffect(() => {
+    fetchEntities();
     fetchProjection();
     checkData();
-  }, [fetchProjection, checkData]);
+  }, [fetchEntities, fetchProjection, checkData]);
 
   useEffect(() => {
     if (selectedMonth) {
@@ -140,10 +151,10 @@ function App() {
               
               <div className="flex items-center gap-2 ml-4 border-l border-zinc-800 pl-4">
                 <button
-                  onClick={() => setCashFlowsOpen(true)}
+                  onClick={() => setEntryLogOpen(true)}
                   className="p-2 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md transition-colors"
-                  title="Manage Cash Flows"
-                  data-testid="manage-flows-btn"
+                  title="Entry Log"
+                  data-testid="entry-log-btn"
                 >
                   <ListBullets size={20} />
                 </button>
@@ -191,7 +202,11 @@ function App() {
             />
           </div>
           <div className="lg:col-span-4">
-            <QuickAddForm onSuccess={handleCashFlowAdded} />
+            <QuickAddForm 
+              onSuccess={handleCashFlowAdded} 
+              entities={entities}
+              onEntitiesChange={fetchEntities}
+            />
           </div>
         </section>
 
@@ -219,6 +234,8 @@ function App() {
         open={bankAccountsOpen} 
         onOpenChange={setBankAccountsOpen}
         onDataChange={handleDataChange}
+        entities={entities}
+        onEntitiesChange={fetchEntities}
       />
       <SettingsDialog 
         open={settingsOpen} 
@@ -226,9 +243,10 @@ function App() {
         currentBuffer={projection?.safety_buffer || 50000}
         onDataChange={handleDataChange}
       />
-      <CashFlowsDialog
-        open={cashFlowsOpen}
-        onOpenChange={setCashFlowsOpen}
+      <EntryLogDialog
+        open={entryLogOpen}
+        onOpenChange={setEntryLogOpen}
+        entities={entities}
         onDataChange={handleDataChange}
       />
     </div>

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Backend API Testing for Cash Piloting Dashboard
-Tests all CRUD operations and projection endpoints
+Tests all CRUD operations and projection endpoints including Entity management
 """
 
 import requests
@@ -16,6 +16,7 @@ class CashPilotAPITester:
         self.api_url = f"{base_url}/api"
         self.tests_run = 0
         self.tests_passed = 0
+        self.created_entities = []
         self.created_accounts = []
         self.created_flows = []
 
@@ -60,9 +61,57 @@ class CashPilotAPITester:
         """Test root API endpoint"""
         return self.run_test("Root API endpoint", "GET", "", 200)
 
+    def test_entities_crud(self):
+        """Test entities CRUD operations"""
+        print("\n🏢 Testing Entities CRUD...")
+        
+        # 1. Get initial entities
+        success, entities = self.run_test("Get entities", "GET", "entities", 200)
+        if not success:
+            return False
+        
+        initial_count = len(entities)
+        
+        # 2. Create an entity
+        entity_data = {
+            "name": f"Test Entity {datetime.now().strftime('%H%M%S')}",
+            "description": "Test entity for API testing"
+        }
+        success, created_entity = self.run_test("Create entity", "POST", "entities", 200, entity_data)
+        if not success:
+            return False
+        
+        entity_id = created_entity.get("id")
+        if entity_id:
+            self.created_entities.append(entity_id)
+        
+        # 3. Update the entity
+        update_data = {
+            "name": f"Updated Test Entity {datetime.now().strftime('%H%M%S')}",
+            "description": "Updated description"
+        }
+        success, updated_entity = self.run_test("Update entity", "PUT", f"entities/{entity_id}", 200, update_data)
+        if not success:
+            return False
+        
+        # 4. Get entities again (should have one more)
+        success, entities = self.run_test("Get entities after create", "GET", "entities", 200)
+        if not success or len(entities) != initial_count + 1:
+            self.log_test("Entity count verification", False, f"Expected {initial_count + 1}, got {len(entities)}")
+            return False
+        self.log_test("Entity count verification", True)
+        
+        return True
+
     def test_bank_accounts_crud(self):
         """Test bank accounts CRUD operations"""
         print("\n🏦 Testing Bank Accounts CRUD...")
+        
+        if not self.created_entities:
+            self.log_test("Bank accounts test", False, "No entities available")
+            return False
+        
+        entity_id = self.created_entities[0]
         
         # 1. Get initial accounts (should be empty or existing)
         success, accounts = self.run_test("Get bank accounts", "GET", "bank-accounts", 200)
@@ -75,7 +124,7 @@ class CashPilotAPITester:
         account_data = {
             "label": "Test Checking Account",
             "amount": 25000.50,
-            "entity": "Test Bank"
+            "entity_id": entity_id
         }
         success, created_account = self.run_test("Create bank account", "POST", "bank-accounts", 200, account_data)
         if not success:
@@ -84,6 +133,18 @@ class CashPilotAPITester:
         account_id = created_account.get("id")
         if account_id:
             self.created_accounts.append(account_id)
+        
+        # 3. Test creating account with invalid entity
+        invalid_data = {
+            "label": "Invalid Account",
+            "amount": 1000.0,
+            "entity_id": "invalid-entity-id"
+        }
+        success, _ = self.run_test("Create account with invalid entity", "POST", "bank-accounts", 400, invalid_data)
+        if success:
+            self.log_test("Invalid entity rejection", True)
+        else:
+            self.log_test("Invalid entity rejection", False, "Should have rejected invalid entity_id")
         
         # 3. Get accounts again (should have one more)
         success, accounts = self.run_test("Get bank accounts after create", "GET", "bank-accounts", 200)
@@ -114,6 +175,12 @@ class CashPilotAPITester:
         """Test cash flows CRUD operations"""
         print("\n💰 Testing Cash Flows CRUD...")
         
+        if not self.created_entities:
+            self.log_test("Cash flows test", False, "No entities available")
+            return False
+        
+        entity_id = self.created_entities[0]
+        
         # 1. Get initial flows
         success, flows = self.run_test("Get cash flows", "GET", "cash-flows", 200)
         if not success:
@@ -130,7 +197,7 @@ class CashPilotAPITester:
             "category": "Salary",
             "certainty": "Materialized",
             "recurrence": "none",
-            "entity": "Test Company"
+            "entity_id": entity_id
         }
         success, created_flow = self.run_test("Create cash inflow", "POST", "cash-flows", 200, inflow_data)
         if not success:
@@ -149,7 +216,7 @@ class CashPilotAPITester:
             "certainty": "Sure to happen",
             "recurrence": "monthly",
             "recurrence_count": 12,
-            "entity": "Landlord"
+            "entity_id": entity_id
         }
         success, created_outflow = self.run_test("Create cash outflow", "POST", "cash-flows", 200, outflow_data)
         if not success:
@@ -159,14 +226,25 @@ class CashPilotAPITester:
         if outflow_id:
             self.created_flows.append(outflow_id)
         
-        # 4. Get flows again (should have two more)
+        # 4. Test creating flow with invalid entity
+        invalid_flow = {
+            "label": "Invalid Flow",
+            "amount": -1000.0,
+            "date": current_month.isoformat(),
+            "entity_id": "invalid-entity-id"
+        }
+        success, _ = self.run_test("Create flow with invalid entity", "POST", "cash-flows", 400, invalid_flow)
+        if success:
+            self.log_test("Invalid entity rejection for flow", True)
+        
+        # 5. Get flows again (should have two more)
         success, flows = self.run_test("Get cash flows after create", "GET", "cash-flows", 200)
         if not success or len(flows) != initial_count + 2:
             self.log_test("Flow count verification", False, f"Expected {initial_count + 2}, got {len(flows)}")
             return False
         self.log_test("Flow count verification", True)
         
-        # 5. Update a flow
+        # 6. Update a flow
         update_data = {
             "label": "Updated Test Salary",
             "amount": 5500.00
@@ -175,12 +253,89 @@ class CashPilotAPITester:
         if not success:
             return False
         
-        # 6. Verify update
+        # 7. Verify update
         if updated_flow.get("label") == "Updated Test Salary" and updated_flow.get("amount") == 5500.00:
             self.log_test("Flow update verification", True)
         else:
             self.log_test("Flow update verification", False, "Updated values don't match")
             return False
+        
+        return True
+
+    def test_linked_flows(self):
+        """Test linked flows (batch creation)"""
+        print("\n🔗 Testing Linked Flows...")
+        
+        if not self.created_entities:
+            self.log_test("Linked flows test", False, "No entities available")
+            return False
+        
+        entity_id = self.created_entities[0]
+        
+        # 1. Create batch with parent and linked flows
+        batch_data = {
+            "parent": {
+                "label": f"Parent Revenue {datetime.now().strftime('%H%M%S')}",
+                "amount": 10000.0,
+                "date": "2024-12-01",
+                "category": "Revenue",
+                "certainty": "Materialized",
+                "recurrence": "none",
+                "entity_id": entity_id
+            },
+            "linked": [
+                {
+                    "label": f"COGS {datetime.now().strftime('%H%M%S')}",
+                    "amount": -3000.0,
+                    "date": "2024-12-01",
+                    "category": "COGS",
+                    "certainty": "Materialized",
+                    "recurrence": "none",
+                    "entity_id": entity_id
+                },
+                {
+                    "label": f"Tax {datetime.now().strftime('%H%M%S')}",
+                    "amount": -1000.0,
+                    "date": "2024-12-01",
+                    "category": "Tax",
+                    "certainty": "Materialized",
+                    "recurrence": "none",
+                    "entity_id": entity_id
+                }
+            ]
+        }
+        success, batch_result = self.run_test("Create batch flows", "POST", "cash-flows/batch", 200, batch_data)
+        if not success:
+            return False
+        
+        parent_id = batch_result.get('parent', {}).get('id')
+        if parent_id:
+            self.created_flows.append(parent_id)
+        
+        linked_flows = batch_result.get('linked', [])
+        for linked in linked_flows:
+            if linked.get('id'):
+                self.created_flows.append(linked['id'])
+        
+        # 2. Get flows with linked structure
+        success, flows_with_linked = self.run_test("Get flows with linked", "GET", "cash-flows/with-linked", 200)
+        if not success:
+            return False
+        
+        # Verify the structure
+        found_parent = False
+        for flow_group in flows_with_linked:
+            if flow_group.get('flow', {}).get('id') == parent_id:
+                found_parent = True
+                linked_count = len(flow_group.get('linked_flows', []))
+                if linked_count == 2:
+                    self.log_test("Linked flows structure verification", True)
+                else:
+                    self.log_test("Linked flows structure verification", False, f"Expected 2 linked flows, found {linked_count}")
+                break
+        
+        if not found_parent:
+            self.log_test("Parent flow in linked structure", False, "Parent flow not found")
         
         return True
 
@@ -286,13 +441,17 @@ class CashPilotAPITester:
         """Clean up created test data"""
         print("\n🧹 Cleaning up test data...")
         
-        # Delete created cash flows
+        # Delete created cash flows first (they depend on entities)
         for flow_id in self.created_flows:
             success, _ = self.run_test(f"Delete flow {flow_id}", "DELETE", f"cash-flows/{flow_id}", 200)
         
-        # Delete created bank accounts
+        # Delete created bank accounts (they depend on entities)
         for account_id in self.created_accounts:
             success, _ = self.run_test(f"Delete account {account_id}", "DELETE", f"bank-accounts/{account_id}", 200)
+        
+        # Delete created entities last
+        for entity_id in self.created_entities:
+            success, _ = self.run_test(f"Delete entity {entity_id}", "DELETE", f"entities/{entity_id}", 200)
 
     def run_all_tests(self):
         """Run all API tests"""
@@ -307,8 +466,10 @@ class CashPilotAPITester:
             
             # Run all test suites
             test_suites = [
+                self.test_entities_crud,
                 self.test_bank_accounts_crud,
                 self.test_cash_flows_crud,
+                self.test_linked_flows,
                 self.test_settings,
                 self.test_projection,
                 self.test_month_details

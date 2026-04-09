@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import axios from "axios";
-import { Plus, CaretDown } from "@phosphor-icons/react";
+import { Plus, CaretDown, Link, X } from "@phosphor-icons/react";
 import { 
   Select, 
   SelectContent, 
@@ -9,6 +9,7 @@ import {
   SelectValue 
 } from "../components/ui/select";
 import { Label } from "../components/ui/label";
+import { EntitySelector } from "./EntitySelector";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -18,6 +19,7 @@ const categories = [
   "Tax",
   "Debt",
   "Expense",
+  "COGS",
   "Transfer",
   "Other",
 ];
@@ -34,10 +36,18 @@ const getCurrentMonth = () => {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 };
 
-export const QuickAddForm = ({ onSuccess }) => {
+const emptyLinkedFlow = () => ({
+  id: Date.now(),
+  label: "",
+  amount: "",
+  category: "Expense",
+});
+
+export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
   const [loading, setLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   
+  // Main flow
   const [label, setLabel] = useState("");
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(getCurrentMonth());
@@ -45,12 +55,36 @@ export const QuickAddForm = ({ onSuccess }) => {
   const [category, setCategory] = useState("Expense");
   const [recurrence, setRecurrence] = useState("none");
   const [recurrenceCount, setRecurrenceCount] = useState("");
-  const [entity, setEntity] = useState("");
+  const [entityId, setEntityId] = useState("");
+
+  // Linked flows
+  const [linkedFlows, setLinkedFlows] = useState([]);
+
+  // Auto-select first entity if only one exists
+  useEffect(() => {
+    if (entities.length === 1 && !entityId) {
+      setEntityId(entities[0].id);
+    }
+  }, [entities, entityId]);
+
+  const addLinkedFlow = () => {
+    setLinkedFlows([...linkedFlows, emptyLinkedFlow()]);
+  };
+
+  const removeLinkedFlow = (id) => {
+    setLinkedFlows(linkedFlows.filter(f => f.id !== id));
+  };
+
+  const updateLinkedFlow = (id, field, value) => {
+    setLinkedFlows(linkedFlows.map(f => 
+      f.id === id ? { ...f, [field]: value } : f
+    ));
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (!label.trim() || !amount) {
+    if (!label.trim() || !amount || !entityId) {
       return;
     }
 
@@ -59,21 +93,47 @@ export const QuickAddForm = ({ onSuccess }) => {
       const dateStr = `${date}-01`;
       const numAmount = parseFloat(amount);
       
-      const payload = {
-        label: label.trim(),
-        amount: numAmount,
-        date: dateStr,
-        certainty,
-        category,
-        recurrence,
-        entity: entity.trim(),
-      };
+      // Prepare linked flows
+      const validLinked = linkedFlows
+        .filter(f => f.label.trim() && f.amount)
+        .map(f => ({
+          label: f.label.trim(),
+          amount: parseFloat(f.amount),
+          date: dateStr,
+          certainty,
+          category: f.category,
+          recurrence: "none",
+          entity_id: entityId,
+        }));
 
-      if (recurrence === "monthly" && recurrenceCount) {
-        payload.recurrence_count = parseInt(recurrenceCount);
+      if (validLinked.length > 0) {
+        // Use batch endpoint
+        await axios.post(`${API}/cash-flows/batch`, {
+          parent: {
+            label: label.trim(),
+            amount: numAmount,
+            date: dateStr,
+            certainty,
+            category,
+            recurrence,
+            recurrence_count: recurrence === "monthly" && recurrenceCount ? parseInt(recurrenceCount) : null,
+            entity_id: entityId,
+          },
+          linked: validLinked
+        });
+      } else {
+        // Single flow
+        await axios.post(`${API}/cash-flows`, {
+          label: label.trim(),
+          amount: numAmount,
+          date: dateStr,
+          certainty,
+          category,
+          recurrence,
+          recurrence_count: recurrence === "monthly" && recurrenceCount ? parseInt(recurrenceCount) : null,
+          entity_id: entityId,
+        });
       }
-
-      await axios.post(`${API}/cash-flows`, payload);
       
       // Reset
       setLabel("");
@@ -83,7 +143,7 @@ export const QuickAddForm = ({ onSuccess }) => {
       setCategory("Expense");
       setRecurrence("none");
       setRecurrenceCount("");
-      setEntity("");
+      setLinkedFlows([]);
       
       onSuccess?.();
     } catch (error) {
@@ -92,6 +152,8 @@ export const QuickAddForm = ({ onSuccess }) => {
       setLoading(false);
     }
   };
+
+  const canSubmit = label.trim() && amount && entityId;
 
   return (
     <div className="surface-card h-full" data-testid="quick-add-form">
@@ -102,6 +164,14 @@ export const QuickAddForm = ({ onSuccess }) => {
       </div>
       
       <form onSubmit={handleSubmit} className="p-4 space-y-4">
+        {/* Entity Selector */}
+        <EntitySelector
+          value={entityId}
+          onChange={setEntityId}
+          entities={entities}
+          onEntitiesChange={onEntitiesChange}
+        />
+
         {/* Description */}
         <div>
           <Label htmlFor="desc-input" className="text-xs text-zinc-500 mb-1.5 block">Description</Label>
@@ -117,7 +187,7 @@ export const QuickAddForm = ({ onSuccess }) => {
           />
         </div>
 
-        {/* Amount - use sign for in/out */}
+        {/* Amount */}
         <div>
           <Label htmlFor="amount-input" className="text-xs text-zinc-500 mb-1.5 block">
             Amount (CHF) <span className="text-zinc-600">— use minus for outflows</span>
@@ -151,7 +221,7 @@ export const QuickAddForm = ({ onSuccess }) => {
           <div>
             <Label className="text-xs text-zinc-500 mb-1.5 block">Certainty</Label>
             <Select value={certainty} onValueChange={setCertainty}>
-              <SelectTrigger className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2.5 text-zinc-100 h-[42px]" data-testid="quick-add-certainty">
+              <SelectTrigger className="w-full bg-zinc-950 border-zinc-800 text-sm h-[42px]" data-testid="quick-add-certainty">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -185,7 +255,7 @@ export const QuickAddForm = ({ onSuccess }) => {
             <div>
               <Label className="text-xs text-zinc-500 mb-1.5 block">Category</Label>
               <Select value={category} onValueChange={setCategory}>
-                <SelectTrigger className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2.5 text-zinc-100 h-[42px]" data-testid="quick-add-category">
+                <SelectTrigger className="w-full bg-zinc-950 border-zinc-800 text-sm h-[42px]" data-testid="quick-add-category">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -203,7 +273,7 @@ export const QuickAddForm = ({ onSuccess }) => {
               <div>
                 <Label className="text-xs text-zinc-500 mb-1.5 block">Recurrence</Label>
                 <Select value={recurrence} onValueChange={setRecurrence}>
-                  <SelectTrigger className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2.5 text-zinc-100 h-[42px]" data-testid="quick-add-recurrence">
+                  <SelectTrigger className="w-full bg-zinc-950 border-zinc-800 text-sm h-[42px]" data-testid="quick-add-recurrence">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -229,17 +299,68 @@ export const QuickAddForm = ({ onSuccess }) => {
               )}
             </div>
 
-            {/* Entity */}
-            <div>
-              <Label className="text-xs text-zinc-500 mb-1.5 block">Entity (optional)</Label>
-              <input
-                type="text"
-                placeholder="e.g., Company A"
-                value={entity}
-                onChange={(e) => setEntity(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2.5 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-600 focus:border-zinc-600"
-                data-testid="quick-add-entity"
-              />
+            {/* Linked Flows Section */}
+            <div className="pt-3 border-t border-zinc-800/50">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Link size={14} className="text-zinc-500" />
+                  <Label className="text-xs text-zinc-400">Linked Flows</Label>
+                </div>
+                <button
+                  type="button"
+                  onClick={addLinkedFlow}
+                  className="text-xs text-zinc-400 hover:text-zinc-200 flex items-center gap-1"
+                >
+                  <Plus size={12} /> Add linked
+                </button>
+              </div>
+              
+              {linkedFlows.length === 0 && (
+                <p className="text-xs text-zinc-600 mb-2">
+                  Link related flows (e.g., Revenue + COGS)
+                </p>
+              )}
+
+              {linkedFlows.map((linked, idx) => (
+                <div key={linked.id} className="flex gap-2 mb-2 items-start">
+                  <div className="flex-1 grid grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      placeholder="Description"
+                      value={linked.label}
+                      onChange={(e) => updateLinkedFlow(linked.id, "label", e.target.value)}
+                      className="col-span-1 bg-zinc-950 border border-zinc-800 text-xs rounded-md px-2 py-2 text-zinc-100 placeholder-zinc-500"
+                    />
+                    <input
+                      type="number"
+                      placeholder="Amount"
+                      value={linked.amount}
+                      onChange={(e) => updateLinkedFlow(linked.id, "amount", e.target.value)}
+                      className="col-span-1 bg-zinc-950 border border-zinc-800 text-xs rounded-md px-2 py-2 text-zinc-100 placeholder-zinc-500 font-mono"
+                    />
+                    <Select 
+                      value={linked.category} 
+                      onValueChange={(v) => updateLinkedFlow(linked.id, "category", v)}
+                    >
+                      <SelectTrigger className="col-span-1 bg-zinc-950 border-zinc-800 text-xs h-[34px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {categories.map((c) => (
+                          <SelectItem key={c} value={c}>{c}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeLinkedFlow(linked.id)}
+                    className="p-1.5 text-zinc-500 hover:text-rose-400"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -247,12 +368,12 @@ export const QuickAddForm = ({ onSuccess }) => {
         {/* Submit */}
         <button
           type="submit"
-          disabled={loading || !label.trim() || !amount}
+          disabled={loading || !canSubmit}
           className="btn-primary w-full flex items-center justify-center gap-2"
           data-testid="quick-add-submit"
         >
           <Plus size={16} weight="bold" />
-          {loading ? 'Adding...' : 'Add Cash Flow'}
+          {loading ? 'Adding...' : linkedFlows.length > 0 ? `Add ${1 + linkedFlows.filter(f => f.label && f.amount).length} Flows` : 'Add Cash Flow'}
         </button>
       </form>
     </div>
