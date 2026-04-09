@@ -1,0 +1,124 @@
+{
+  "summary": "Completed Phase 3 Audit testing of Cash Piloting Dashboard. All 24 backend tests passed (100%). Frontend UI testing verified all critical features: Matrix cells with has_actual/actual/planned fields, Total NM column, actual input dialog with carry forward/write off buttons, 'A' indicator for actuals, FlowEditor as canonical editor for both matrix row click and Entry Log edit, all 3 tabs rendering correctly, and undo button working.",
+  
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "console_warnings": [
+      {
+        "component": "ProjectionChart",
+        "issue": "Chart width/height warnings (-1) during tab switching - non-blocking, cosmetic only",
+        "priority": "LOW"
+      }
+    ]
+  },
+  
+  "test_report_links": [
+    "/app/backend/tests/test_phase3_audit.py",
+    "/app/test_reports/pytest/pytest_results_phase3_audit.xml"
+  ],
+  
+  "action_items": [],
+  
+  "critical_code_review_comments": [],
+  
+  "updated_files": [
+    "/app/backend/tests/test_phase3_audit.py"
+  ],
+  
+  "success_rate": {
+    "backend": "100% (24/24 tests passed)",
+    "frontend": "100%"
+  },
+  
+  "seed_data_creation": "None - used existing test data with cleanup fixtures",
+  
+  "retest_needed": false,
+  
+  "should_main_agent_self_test": true,
+  
+  "context_for_next_testing_agent": "Phase 3 Audit complete. All features verified: 1) Matrix cells have has_actual, actual, planned fields - when actual is recorded, cell shows actual value with 'A' superscript indicator. 2) Matrix net_per_month EXACTLY matches projection months.net (tested for 12M and 24M horizons). 3) PUT /api/flow-occurrences with carry_forward creates carryover flow in next month with variance amount. 4) PUT /api/flow-occurrences with write_off does NOT create carryover. 5) DELETE /api/flow-occurrences clears actual and removes carryover. 6) Projection uses actual_amount when recorded (replaces planned). 7) Undo works for create, edit, delete, batch_create. 8) No legacy paid/unpaid status logic - only variance_action (carry_forward/write_off). 9) expand_recurring_flows no longer accepts unpaid_set parameter. 10) FlowEditor is canonical editor used by both CashFlowTable (row click) and EntryLogPage (edit button). 11) Total NM column shows row totals. 12) Actual input dialog shows planned amount, variance when different, and carry forward/write off buttons.",
+  
+  "passed_tests": [
+    "Backend: Matrix cells have has_actual field",
+    "Backend: Matrix cells show actual and planned fields when actual is recorded",
+    "Backend: Matrix net_per_month EXACTLY matches projection months.net (12M)",
+    "Backend: Matrix net_per_month EXACTLY matches projection months.net (24M)",
+    "Backend: PUT /api/flow-occurrences with carry_forward creates carryover flow",
+    "Backend: PUT /api/flow-occurrences with write_off does NOT create carryover",
+    "Backend: DELETE /api/flow-occurrences clears actual and removes carryover",
+    "Backend: Projection uses actual_amount when recorded (replaces planned)",
+    "Backend: Undo create works",
+    "Backend: Undo edit works",
+    "Backend: Undo delete works",
+    "Backend: Undo batch_create works",
+    "Backend: No legacy status field in flow_occurrences",
+    "Backend: No legacy status field in month_details",
+    "Backend: Projection works without unpaid_set parameter",
+    "Backend: Matrix works without unpaid_set parameter",
+    "Backend: All API endpoints exist and return 200",
+    "Frontend: All 3 tabs (Projection, Cash Flow Table, Entries) render correctly",
+    "Frontend: Cash Flow Table has Total 12M column on right side",
+    "Frontend: Clicking matrix cell opens actual input dialog with planned/actual info",
+    "Frontend: Actual input dialog has carry forward and write off buttons when variance exists",
+    "Frontend: Variance amount displayed in dialog (e.g., 'Variance: CHF 200.00 (under)')",
+    "Frontend: Matrix row label click opens full canonical FlowEditor",
+    "Frontend: FlowEditor has all fields: description, entity, amount, date, category, certainty, recurrence, mode, count",
+    "Frontend: Entry Log tab uses FlowEditor for editing",
+    "Frontend: Quick Add form has recurrence field in main form",
+    "Frontend: Undo button visible in header and works"
+  ],
+  
+  "features_verified": {
+    "matrix_cells_with_actuals": {
+      "status": "WORKING",
+      "details": "Matrix cells have has_actual, actual, planned fields. When actual is recorded, cell shows actual value with cyan 'A' superscript indicator."
+    },
+    "matrix_net_matches_projection": {
+      "status": "WORKING",
+      "details": "Matrix net_per_month values EXACTLY match projection months.net values. Tested for 12M and 24M horizons with no mismatches."
+    },
+    "record_actual_carry_forward": {
+      "status": "WORKING",
+      "details": "PUT /api/flow-occurrences with carry_forward creates carryover flow in next month. Variance = planned - actual."
+    },
+    "record_actual_write_off": {
+      "status": "WORKING",
+      "details": "PUT /api/flow-occurrences with write_off does NOT create carryover. Variance is ignored."
+    },
+    "delete_occurrence_clears_actual": {
+      "status": "WORKING",
+      "details": "DELETE /api/flow-occurrences clears actual and removes any associated carryover flow."
+    },
+    "actual_replaces_planned_in_projection": {
+      "status": "WORKING",
+      "details": "Projection engine uses actual_amount when recorded, replacing planned amount in calculations."
+    },
+    "undo_system": {
+      "status": "WORKING",
+      "details": "Undo works for create (deletes flow), edit (restores previous values), delete (restores flow), batch_create (removes all created flows)."
+    },
+    "no_legacy_paid_unpaid_status": {
+      "status": "WORKING",
+      "details": "No legacy 'status' field in flow_occurrences or month_details. Only variance_action (carry_forward/write_off) is used."
+    },
+    "canonical_flow_editor": {
+      "status": "WORKING",
+      "details": "FlowEditor.jsx is the single canonical editor used by CashFlowTable (row click) and EntryLogPage (edit button). Has all fields: description, entity, amount, date, category, certainty, recurrence, mode, count, linked flows."
+    },
+    "total_nm_column": {
+      "status": "WORKING",
+      "details": "Cash Flow Table has Total 12M/24M/36M column on right side showing row totals."
+    },
+    "actual_input_dialog": {
+      "status": "WORKING",
+      "details": "Clicking matrix cell opens actual input dialog showing planned amount, actual input field, variance display when different, and carry forward/write off buttons."
+    }
+  }
+}

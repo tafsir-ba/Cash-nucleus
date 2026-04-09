@@ -322,6 +322,7 @@ function App() {
                 horizon={horizon}
                 onDataChange={handleDataChange}
                 refreshKey={projection?.cash_now}
+                entities={entities}
               />
             </section>
 

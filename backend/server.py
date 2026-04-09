@@ -48,10 +48,6 @@ class RecurrenceMode(str, Enum):
     REPEAT = "repeat"
     DISTRIBUTE = "distribute"
 
-class FlowStatus(str, Enum):
-    PLANNED = "planned"
-    ACTUAL = "actual"
-
 # ============== ENTITY MODELS ==============
 class Entity(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -654,11 +650,9 @@ async def update_settings(update: SettingsUpdate):
     return result
 
 # ============== PROJECTION ENGINE ==============
-def expand_recurring_flows(flows: List[dict], start_date: date, end_date: date, unpaid_set: set = None) -> List[dict]:
-    """Expand recurring flows. Supports monthly/quarterly recurrence, repeat/distribute modes, and unpaid skipping."""
+def expand_recurring_flows(flows: List[dict], start_date: date, end_date: date) -> List[dict]:
+    """Expand recurring flows. Supports monthly/quarterly recurrence and repeat/distribute modes."""
     expanded = []
-    if unpaid_set is None:
-        unpaid_set = set()
     
     for flow in flows:
         flow_date = date.fromisoformat(flow["date"][:10])
@@ -668,20 +662,18 @@ def expand_recurring_flows(flows: List[dict], start_date: date, end_date: date, 
         
         if recurrence == "none":
             if start_date <= flow_date <= end_date:
-                month_key = flow_date.strftime("%Y-%m")
-                if (flow_id, month_key) not in unpaid_set:
-                    expanded.append({
-                        "date": flow_date,
-                        "amount": flow["amount"],
-                        "label": flow["label"],
-                        "certainty": flow["certainty"],
-                        "category": flow["category"],
-                        "entity_id": flow.get("entity_id", ""),
-                        "flow_id": flow_id,
-                        "parent_id": flow.get("parent_id"),
-                        "is_percentage": flow.get("is_percentage", False),
-                        "carryover_from": flow.get("carryover_from"),
-                    })
+                expanded.append({
+                    "date": flow_date,
+                    "amount": flow["amount"],
+                    "label": flow["label"],
+                    "certainty": flow["certainty"],
+                    "category": flow["category"],
+                    "entity_id": flow.get("entity_id", ""),
+                    "flow_id": flow_id,
+                    "parent_id": flow.get("parent_id"),
+                    "is_percentage": flow.get("is_percentage", False),
+                    "carryover_from": flow.get("carryover_from"),
+                })
         else:
             # Monthly or quarterly
             interval_months = 1 if recurrence == "monthly" else 3
@@ -701,26 +693,23 @@ def expand_recurring_flows(flows: List[dict], start_date: date, end_date: date, 
             
             while current <= min(end_date, end_rec) and count < max_count:
                 if current >= start_date:
-                    month_key = current.strftime("%Y-%m")
-                    # Skip unpaid occurrences
-                    if (flow_id, month_key) not in unpaid_set:
-                        # For distribute: last period gets rounding remainder
-                        if recurrence_mode == "distribute" and max_count < 999:
-                            period_amount = last_period if count == max_count - 1 else per_period
-                        else:
-                            period_amount = total_amount
-                        
-                        expanded.append({
-                            "date": current,
-                            "amount": period_amount,
-                            "label": flow["label"],
-                            "certainty": flow["certainty"],
-                            "category": flow["category"],
-                            "entity_id": flow.get("entity_id", ""),
-                            "flow_id": flow_id,
-                            "parent_id": flow.get("parent_id"),
-                            "is_percentage": flow.get("is_percentage", False),
-                        })
+                    # For distribute: last period gets rounding remainder
+                    if recurrence_mode == "distribute" and max_count < 999:
+                        period_amount = last_period if count == max_count - 1 else per_period
+                    else:
+                        period_amount = total_amount
+                    
+                    expanded.append({
+                        "date": current,
+                        "amount": period_amount,
+                        "label": flow["label"],
+                        "certainty": flow["certainty"],
+                        "category": flow["category"],
+                        "entity_id": flow.get("entity_id", ""),
+                        "flow_id": flow_id,
+                        "parent_id": flow.get("parent_id"),
+                        "is_percentage": flow.get("is_percentage", False),
+                    })
                 count += 1
                 current = flow_date + relativedelta(months=count * interval_months)
     
@@ -903,6 +892,14 @@ async def get_projection_matrix(
     # Same expand function
     expanded = expand_recurring_flows(filtered, start_of_month, end_date)
     
+    # Store planned amounts before actuals overlay
+    planned_map = {}  # (flow_id, month) -> planned_amount
+    for ef in expanded:
+        fid = ef.get("flow_id", "")
+        mkey = ef["date"].strftime("%Y-%m")
+        if fid:
+            planned_map[(fid, mkey)] = ef["amount"]
+    
     # Apply actuals overlay
     for ef in expanded:
         fid = ef.get("flow_id", "")
@@ -920,7 +917,6 @@ async def get_projection_matrix(
         })
     
     # Group expanded flows by flow_id + month
-    # flow_id -> { month_key -> amount }
     flow_month_map = {}
     flow_info = {}
     
@@ -932,16 +928,17 @@ async def get_projection_matrix(
         
         if fid not in flow_month_map:
             flow_month_map[fid] = {}
+            # Use planned amount to determine revenue/expense classification
+            planned_amt = planned_map.get((fid, mkey), ef["amount"])
             flow_info[fid] = {
                 "flow_id": fid,
                 "label": ef["label"],
                 "category": ef["category"],
-                "is_revenue": ef["amount"] > 0,
+                "is_revenue": planned_amt > 0,
                 "parent_id": ef.get("parent_id"),
                 "is_percentage": ef.get("is_percentage", False),
             }
         
-        # Sum amounts for same flow in same month (shouldn't happen but be safe)
         flow_month_map[fid][mkey] = flow_month_map[fid].get(mkey, 0) + ef["amount"]
     
     # Build rows: separate revenues and expenses, exclude children (show net on parent)
@@ -953,7 +950,16 @@ async def get_projection_matrix(
         for mk in month_keys:
             amt = flow_month_map[fid].get(mk["key"])
             if amt is not None:
-                cells[mk["key"]] = round(amt, 2)
+                planned = planned_map.get((fid, mk["key"]))
+                actual = actuals_map.get((fid, mk["key"]))
+                cell_data = {"amount": round(amt, 2)}
+                if actual is not None:
+                    cell_data["actual"] = round(actual, 2)
+                    cell_data["planned"] = round(planned, 2) if planned is not None else round(amt, 2)
+                    cell_data["has_actual"] = True
+                else:
+                    cell_data["has_actual"] = False
+                cells[mk["key"]] = cell_data
         
         row = {
             "flow_id": fid,
