@@ -5,6 +5,7 @@ import { Trash, PencilSimple, ArrowsClockwise } from "@phosphor-icons/react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog";
@@ -100,6 +101,7 @@ export const CashFlowsDialog = ({ open, onOpenChange, onDataChange }) => {
       <DialogContent className="bg-zinc-900 border-zinc-800 max-w-2xl" data-testid="cash-flows-dialog">
         <DialogHeader>
           <DialogTitle className="text-zinc-100 font-heading">Cash Flows</DialogTitle>
+          <DialogDescription className="text-zinc-500">View and manage cash flow entries</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">

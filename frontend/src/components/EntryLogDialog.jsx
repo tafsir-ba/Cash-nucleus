@@ -8,6 +8,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog";
@@ -120,6 +121,7 @@ const EditFlowDialog = ({ flow, open, onOpenChange, entities, onSave }) => {
       <DialogContent className="bg-zinc-900 border-zinc-800 max-w-md">
         <DialogHeader>
           <DialogTitle className="text-zinc-100 font-heading">Edit Cash Flow</DialogTitle>
+          <DialogDescription className="text-zinc-500">Modify cash flow details</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <div>
@@ -409,6 +411,7 @@ export const EntryLogDialog = ({ open, onOpenChange, entities, onDataChange, sel
         <DialogContent className="bg-zinc-900 border-zinc-800 max-w-3xl max-h-[85vh]" data-testid="entry-log-dialog">
           <DialogHeader>
             <DialogTitle className="text-zinc-100 font-heading">Entry Log</DialogTitle>
+            <DialogDescription className="text-zinc-500">View, edit, and manage all cash flow entries</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -498,6 +501,7 @@ export const EntryLogDialog = ({ open, onOpenChange, entities, onDataChange, sel
         <DialogContent className="bg-zinc-900 border-zinc-800 max-w-sm">
           <DialogHeader>
             <DialogTitle className="text-zinc-100 font-heading">Delete Entry</DialogTitle>
+            <DialogDescription className="text-zinc-500">Confirm deletion</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-zinc-400">

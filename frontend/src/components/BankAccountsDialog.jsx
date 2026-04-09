@@ -5,6 +5,7 @@ import { Plus, Trash, PencilSimple } from "@phosphor-icons/react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog";
@@ -161,6 +162,7 @@ export const BankAccountsDialog = ({ open, onOpenChange, onDataChange, entities,
       <DialogContent className="bg-zinc-900 border-zinc-800 max-w-lg" data-testid="bank-accounts-dialog">
         <DialogHeader>
           <DialogTitle className="text-zinc-100 font-heading">Bank Accounts</DialogTitle>
+          <DialogDescription className="text-zinc-500">Manage your bank accounts and balances</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
