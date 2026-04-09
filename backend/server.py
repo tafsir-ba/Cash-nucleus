@@ -152,6 +152,7 @@ class ProjectionResponse(BaseModel):
     cash_now: float
     lowest_cash: float
     lowest_cash_month: str
+    highest_pressure_month: str = ""
     first_watch_month: Optional[str] = None
     first_danger_month: Optional[str] = None
     overall_status: str
@@ -535,6 +536,8 @@ async def get_projection(
     closing = cash_now
     lowest_cash = cash_now
     lowest_cash_month = start_of_month.strftime("%b %Y")
+    highest_pressure_month = start_of_month.strftime("%b %Y")
+    highest_pressure = 0.0
     first_watch_month = None
     first_danger_month = None
     
@@ -558,6 +561,10 @@ async def get_projection(
             lowest_cash = closing
             lowest_cash_month = data["month_label"]
         
+        if data["outflows"] > highest_pressure:
+            highest_pressure = data["outflows"]
+            highest_pressure_month = data["month_label"]
+        
         months.append(MonthProjection(
             month=data["month"],
             month_label=data["month_label"],
@@ -574,6 +581,7 @@ async def get_projection(
         cash_now=round(cash_now, 2),
         lowest_cash=round(lowest_cash, 2),
         lowest_cash_month=lowest_cash_month,
+        highest_pressure_month=highest_pressure_month,
         first_watch_month=first_watch_month,
         first_danger_month=first_danger_month,
         overall_status=overall_status,
