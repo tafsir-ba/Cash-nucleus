@@ -1,34 +1,154 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
+/* Cash Piloting Dashboard Styles */
+
+/* Status colors */
+.status-good {
+  @apply text-emerald-400;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
-    }
+.status-watch {
+  @apply text-amber-400;
 }
 
-.App-header {
-    background-color: #0f0f10;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    font-size: calc(10px + 2vmin);
-    color: white;
+.status-danger {
+  @apply text-rose-400;
 }
 
-.App-link {
-    color: #61dafb;
+.status-good-bg {
+  @apply bg-emerald-500/10 border-emerald-500/20;
 }
 
-@keyframes App-logo-spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
+.status-watch-bg {
+  @apply bg-amber-500/10 border-amber-500/20;
+}
+
+.status-danger-bg {
+  @apply bg-rose-500/10 border-rose-500/20;
+}
+
+/* KPI Card styles */
+.kpi-card {
+  @apply bg-zinc-900/40 border border-zinc-800 p-5 md:p-6 flex flex-col gap-2 rounded-lg transition-colors duration-200;
+}
+
+.kpi-card:hover {
+  @apply bg-zinc-800/50;
+}
+
+.kpi-label {
+  @apply text-xs sm:text-sm font-medium tracking-[0.15em] uppercase text-zinc-400;
+  font-family: var(--font-heading);
+}
+
+.kpi-value {
+  @apply text-3xl sm:text-4xl lg:text-5xl font-light tracking-tighter text-zinc-50;
+  font-family: var(--font-heading);
+}
+
+.kpi-meta {
+  @apply text-xs text-zinc-500;
+  font-family: var(--font-body);
+}
+
+/* Scenario toggle */
+.scenario-toggle {
+  @apply bg-zinc-900 border border-zinc-800 p-1 rounded-md flex gap-1;
+}
+
+.scenario-btn {
+  @apply px-3 py-1.5 text-xs font-medium rounded transition-all duration-200 text-zinc-400 hover:text-zinc-200;
+  font-family: var(--font-body);
+}
+
+.scenario-btn-active {
+  @apply bg-zinc-800 text-zinc-50 shadow-sm;
+}
+
+/* Table styles */
+.data-table {
+  @apply w-full border-collapse;
+}
+
+.data-table th {
+  @apply text-xs font-semibold uppercase tracking-wider text-zinc-500 text-left py-3 px-4 border-b border-zinc-800;
+  font-family: var(--font-body);
+}
+
+.data-table td {
+  @apply text-sm text-zinc-300 py-3 px-4 border-b border-zinc-800/50;
+  font-family: var(--font-mono);
+}
+
+.data-table tr {
+  @apply transition-colors duration-200;
+}
+
+.data-table tbody tr:hover {
+  @apply bg-zinc-800/30 cursor-pointer;
+}
+
+.data-table tr.selected {
+  @apply bg-zinc-800/50;
+}
+
+/* Input styles for quick add form */
+.quick-input {
+  @apply bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-500 focus:border-zinc-500 transition-all duration-200 w-full;
+  font-family: var(--font-body);
+}
+
+.quick-input:disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+
+/* Primary button */
+.btn-primary {
+  @apply bg-zinc-100 text-zinc-900 hover:bg-white font-medium px-4 py-2 rounded-md transition-all duration-200 text-sm;
+  font-family: var(--font-body);
+}
+
+.btn-primary:active {
+  @apply scale-[0.98];
+}
+
+.btn-primary:disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+
+/* Secondary button */
+.btn-secondary {
+  @apply bg-zinc-800 text-zinc-100 hover:bg-zinc-700 font-medium px-4 py-2 rounded-md transition-all duration-200 text-sm border border-zinc-700;
+  font-family: var(--font-body);
+}
+
+/* Chart container */
+.chart-container {
+  @apply bg-zinc-900/40 border border-zinc-800 rounded-lg p-4 md:p-6;
+}
+
+/* Pressure panel */
+.pressure-panel {
+  @apply bg-zinc-900/40 border border-zinc-800 rounded-lg p-4 md:p-6;
+}
+
+/* Surface card */
+.surface-card {
+  @apply bg-zinc-900/40 border border-zinc-800 rounded-lg;
+}
+
+/* Amount display */
+.amount-positive {
+  @apply text-emerald-400;
+}
+
+.amount-negative {
+  @apply text-rose-400;
+}
+
+/* Responsive grid for dashboard */
+.dashboard-grid {
+  @apply grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6;
+}
+
+.main-content-grid {
+  @apply grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-6;
 }
