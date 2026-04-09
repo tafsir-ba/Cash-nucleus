@@ -1332,16 +1332,25 @@ async def get_cash_runway(
         proj = await get_projection(scenario=sc, entity_id=entity_id, horizon=horizon)
         breach_idx = None
         breach_month = None
+        min_balance = proj.cash_now
         for i, m in enumerate(proj.months):
-            if m.closing_cash < 0:
+            if m.closing_cash < min_balance:
+                min_balance = m.closing_cash
+            if m.closing_cash < 0 and breach_idx is None:
                 breach_idx = i + 1
                 breach_month = m.month_label
-                break
+        
+        # required_injection = max(0, -min_cash_balance + buffer)
+        # buffer defaults to 0, uses system safety_buffer if available
+        required_injection = max(0, round(-min_balance, 2))
+        
         result[sc] = {
             "months_until_breach": breach_idx,
             "breach_month": breach_month,
             "runway_months": breach_idx if breach_idx else horizon,
             "is_safe": breach_idx is None,
+            "min_cash_balance": round(min_balance, 2),
+            "required_injection": required_injection,
         }
     
     return result

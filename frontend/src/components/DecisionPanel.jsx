@@ -10,6 +10,37 @@ const formatCHF = (val) => {
   return val.toFixed(0);
 };
 
+// ============== 0. REQUIRED INJECTION — top priority ==============
+const InjectionCard = ({ runway }) => {
+  if (!runway) return null;
+  const likely = runway.likely;
+
+  return (
+    <div className="surface-card p-4" data-testid="injection-card">
+      <h3 className="text-[10px] text-zinc-500 uppercase tracking-[0.2em] font-medium mb-2">Required Cash Injection</h3>
+      {likely.required_injection > 0 ? (
+        <div>
+          <div className="text-xl font-bold font-mono text-rose-400" data-testid="injection-amount">
+            CHF {Math.round(likely.required_injection).toLocaleString('de-CH')}
+          </div>
+          <div className="text-[10px] text-zinc-600 mt-1">
+            to cover lowest point of CHF {Math.round(likely.min_cash_balance).toLocaleString('de-CH')}
+          </div>
+          {runway.committed.required_injection !== likely.required_injection && (
+            <div className="text-[10px] text-zinc-600 mt-0.5">
+              Committed scenario: CHF {Math.round(runway.committed.required_injection).toLocaleString('de-CH')}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="text-emerald-400 text-sm font-semibold" data-testid="injection-amount">
+          No injection needed
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ============== 1. RUNWAY — breach month is primary ==============
 const RunwayCard = ({ runway }) => {
   if (!runway) return null;
@@ -230,6 +261,7 @@ export const DecisionPanel = ({ scenario, selectedEntityId, horizon, refreshKey 
 
   return (
     <div className="space-y-3" data-testid="decision-panel">
+      <InjectionCard runway={runway} />
       <RunwayCard runway={runway} />
       <DriversCard drivers={drivers} />
       <ScenarioDeltaCard delta={delta} horizon={horizon} />
