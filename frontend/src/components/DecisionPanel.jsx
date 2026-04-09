@@ -10,10 +10,9 @@ const formatCHF = (val) => {
   return val.toFixed(0);
 };
 
-// ============== RUNWAY CARD ==============
+// ============== 1. RUNWAY — breach month is primary ==============
 const RunwayCard = ({ runway }) => {
   if (!runway) return null;
-  const { committed, likely } = runway;
 
   return (
     <div className="surface-card p-4" data-testid="runway-card">
@@ -21,22 +20,21 @@ const RunwayCard = ({ runway }) => {
       <div className="flex gap-4">
         {["committed", "likely"].map((sc) => {
           const r = runway[sc];
-          const isSafe = r.is_safe;
           return (
             <div key={sc} className="flex-1">
               <div className="text-[10px] text-zinc-500 capitalize mb-1">{sc}</div>
-              {isSafe ? (
-                <div className="text-emerald-400 text-sm font-semibold" data-testid={`runway-${sc}`}>
-                  Safe
-                  <span className="text-[10px] text-zinc-500 font-normal ml-1">({r.runway_months}M+)</span>
+              {r.is_safe ? (
+                <div className="text-emerald-400 font-semibold" data-testid={`runway-${sc}`}>
+                  <div className="text-sm">No breach</div>
+                  <div className="text-[10px] text-zinc-600 font-normal">{r.runway_months}M+ horizon clear</div>
                 </div>
               ) : (
                 <div data-testid={`runway-${sc}`}>
-                  <span className={`text-sm font-semibold ${r.months_until_breach <= 3 ? 'text-rose-400' : r.months_until_breach <= 6 ? 'text-amber-400' : 'text-zinc-300'}`}>
-                    {r.months_until_breach} months
-                  </span>
+                  <div className={`text-sm font-semibold ${r.months_until_breach <= 3 ? 'text-rose-400' : r.months_until_breach <= 6 ? 'text-amber-400' : 'text-zinc-300'}`}>
+                    {r.breach_month}
+                  </div>
                   <div className="text-[10px] text-zinc-600">
-                    Breach in {r.breach_month}
+                    {r.months_until_breach} month{r.months_until_breach !== 1 ? 's' : ''} from now
                   </div>
                 </div>
               )}
@@ -48,44 +46,7 @@ const RunwayCard = ({ runway }) => {
   );
 };
 
-// ============== SCENARIO DELTA CARD ==============
-const ScenarioDeltaCard = ({ delta }) => {
-  if (!delta) return null;
-  const gap = delta.total_gap_net;
-
-  return (
-    <div className="surface-card p-4" data-testid="scenario-delta-card">
-      <h3 className="text-[10px] text-zinc-500 uppercase tracking-[0.2em] font-medium mb-3">
-        Scenario Gap <span className="text-zinc-600 normal-case tracking-normal">(Likely - Committed)</span>
-      </h3>
-      <div className={`text-lg font-semibold font-mono ${gap > 0 ? 'text-emerald-400' : gap < 0 ? 'text-rose-400' : 'text-zinc-400'}`}
-        data-testid="scenario-gap-total">
-        {gap > 0 ? '+' : ''}{formatCHF(gap)}
-      </div>
-      <div className="mt-3 flex gap-1 overflow-x-auto">
-        {delta.months.slice(0, 12).map((m) => {
-          const g = m.gap_net;
-          const maxAbs = Math.max(...delta.months.map((mm) => Math.abs(mm.gap_net)), 1);
-          const height = Math.min(Math.abs(g) / maxAbs * 24, 24);
-          return (
-            <div key={m.month} className="flex flex-col items-center gap-0.5 flex-1 min-w-[20px]"
-              title={`${m.month_label}: Gap ${g > 0 ? '+' : ''}${formatCHF(g)}`}>
-              <div className="h-6 flex items-end">
-                <div
-                  className={`w-full rounded-sm ${g > 0 ? 'bg-emerald-500/40' : g < 0 ? 'bg-rose-500/40' : 'bg-zinc-700'}`}
-                  style={{ height: `${Math.max(height, 2)}px` }}
-                />
-              </div>
-              <span className="text-[8px] text-zinc-600">{m.month_label.split(' ')[0].substring(0, 1)}</span>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
-
-// ============== TOP DRIVERS CARD ==============
+// ============== 2. TOP DRIVERS — aggregated by label, total + count ==============
 const DriversCard = ({ drivers }) => {
   if (!drivers || drivers.negative_months.length === 0) return null;
 
@@ -94,7 +55,7 @@ const DriversCard = ({ drivers }) => {
       <h3 className="text-[10px] text-zinc-500 uppercase tracking-[0.2em] font-medium mb-3">
         Top Drivers of Negative Months
       </h3>
-      <div className="space-y-3 max-h-[280px] overflow-y-auto">
+      <div className="space-y-3 max-h-[240px] overflow-y-auto">
         {drivers.negative_months.slice(0, 6).map((m) => (
           <div key={m.month} className="space-y-1">
             <div className="flex items-center justify-between">
@@ -105,10 +66,11 @@ const DriversCard = ({ drivers }) => {
             </div>
             {m.drivers.map((d, i) => (
               <div key={i} className="flex items-center justify-between pl-2">
-                <span className="text-[10px] text-zinc-500 truncate max-w-[140px]">
-                  {d.label}{d.count > 1 ? ` (${d.count}x)` : ''}
+                <span className="text-[10px] text-zinc-500 truncate max-w-[130px]">
+                  {d.label}
+                  {d.count > 1 && <span className="text-zinc-600 ml-0.5">({d.count}x)</span>}
                 </span>
-                <span className="text-[10px] font-mono text-rose-400/70">{formatCHF(d.amount)}</span>
+                <span className="text-[10px] font-mono text-rose-400/80 tabular-nums">{formatCHF(d.amount)}</span>
               </div>
             ))}
           </div>
@@ -118,7 +80,50 @@ const DriversCard = ({ drivers }) => {
   );
 };
 
-// ============== VARIANCE INSIGHT CARD ==============
+// ============== 3. SCENARIO GAP — with monthly time context ==============
+const ScenarioDeltaCard = ({ delta, horizon }) => {
+  if (!delta) return null;
+  const gap = delta.total_gap_net;
+
+  return (
+    <div className="surface-card p-4" data-testid="scenario-delta-card">
+      <h3 className="text-[10px] text-zinc-500 uppercase tracking-[0.2em] font-medium mb-3">
+        Scenario Gap <span className="text-zinc-600 normal-case tracking-normal">(Likely - Committed)</span>
+      </h3>
+      <div className="flex items-baseline gap-2 mb-3">
+        <span className={`text-lg font-semibold font-mono ${gap > 0 ? 'text-emerald-400' : gap < 0 ? 'text-rose-400' : 'text-zinc-400'}`}
+          data-testid="scenario-gap-total">
+          {gap > 0 ? '+' : ''}{formatCHF(gap)}
+        </span>
+        <span className="text-[10px] text-zinc-600">cumulative over {horizon || 12}M</span>
+      </div>
+      <div className="space-y-0.5">
+        {delta.months.slice(0, 12).map((m) => {
+          const g = m.gap_net;
+          if (Math.abs(g) < 0.01) return null;
+          const maxAbs = Math.max(...delta.months.map((mm) => Math.abs(mm.gap_net)), 1);
+          const pct = Math.abs(g) / maxAbs * 100;
+          return (
+            <div key={m.month} className="flex items-center gap-2 group" data-testid={`gap-${m.month}`}>
+              <span className="text-[9px] text-zinc-600 w-[28px] shrink-0">{m.month_label.split(' ')[0].substring(0, 3)}</span>
+              <div className="flex-1 h-3 bg-zinc-800/30 rounded-sm overflow-hidden">
+                <div
+                  className={`h-full rounded-sm ${g > 0 ? 'bg-emerald-500/40' : 'bg-rose-500/40'}`}
+                  style={{ width: `${Math.max(pct, 4)}%` }}
+                />
+              </div>
+              <span className={`text-[9px] font-mono w-[36px] text-right tabular-nums ${g > 0 ? 'text-emerald-400/70' : 'text-rose-400/70'}`}>
+                {g > 0 ? '+' : ''}{formatCHF(g)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+// ============== 4. VARIANCE — unchanged ==============
 const VarianceInsightCard = ({ variance }) => {
   if (!variance || variance.actuals_recorded === 0) return null;
 
@@ -170,7 +175,7 @@ const VarianceInsightCard = ({ variance }) => {
   );
 };
 
-// ============== MAIN DECISION PANEL ==============
+// ============== MAIN — ORDER: Runway → Drivers → Gap → Variance ==============
 export const DecisionPanel = ({ scenario, selectedEntityId, horizon, refreshKey }) => {
   const [runway, setRunway] = useState(null);
   const [delta, setDelta] = useState(null);
@@ -205,8 +210,8 @@ export const DecisionPanel = ({ scenario, selectedEntityId, horizon, refreshKey 
   return (
     <div className="space-y-3" data-testid="decision-panel">
       <RunwayCard runway={runway} />
-      <ScenarioDeltaCard delta={delta} />
       <DriversCard drivers={drivers} />
+      <ScenarioDeltaCard delta={delta} horizon={horizon} />
       <VarianceInsightCard variance={variance} />
     </div>
   );
