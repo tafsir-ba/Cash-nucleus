@@ -294,8 +294,8 @@ function App() {
               </div>
             </section>
 
-            {/* Table + P&L + Decision Panel */}
-            <section className="main-content-grid">
+            {/* Table + P&L + Decision Panel — right column is sticky */}
+            <section className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-6 items-start">
               <div className="lg:col-span-8">
                 <MonthlyTable 
                   months={projection?.months || []}
@@ -304,37 +304,52 @@ function App() {
                   hasData={hasData}
                 />
               </div>
-              <div className="lg:col-span-4 space-y-4">
-                <MonthlyPLPanel 
-                  monthDetails={monthDetails}
-                  selectedMonth={selectedMonth}
-                  onDataChange={handleDataChange}
-                />
+              <div className="lg:col-span-4 lg:sticky lg:top-4 space-y-4" data-testid="right-panel-sticky">
                 <DecisionPanel
                   scenario={scenario}
                   selectedEntityId={selectedEntityId}
                   horizon={horizon}
                   refreshKey={projection?.cash_now}
                 />
+                <MonthlyPLPanel 
+                  monthDetails={monthDetails}
+                  selectedMonth={selectedMonth}
+                  onDataChange={handleDataChange}
+                />
               </div>
             </section>
           </>
         ) : activeTab === "table" ? (
           <>
-            {/* Cash Flow Table (Matrix View) */}
-            <section className="mb-6">
-              <CashFlowTable
-                scenario={scenario}
-                selectedEntityId={selectedEntityId}
-                horizon={horizon}
-                onDataChange={handleDataChange}
-                refreshKey={projection?.cash_now}
-                entities={entities}
-              />
+            {/* Cash Flow Table (Matrix) + Decision Panel side-by-side */}
+            <section className="grid grid-cols-1 xl:grid-cols-[1fr_280px] gap-4 items-start">
+              <div className="min-w-0">
+                <CashFlowTable
+                  scenario={scenario}
+                  selectedEntityId={selectedEntityId}
+                  horizon={horizon}
+                  onDataChange={handleDataChange}
+                  refreshKey={projection?.cash_now}
+                  entities={entities}
+                />
+              </div>
+              <div className="xl:sticky xl:top-4 space-y-4" data-testid="table-right-panel">
+                <DecisionPanel
+                  scenario={scenario}
+                  selectedEntityId={selectedEntityId}
+                  horizon={horizon}
+                  refreshKey={projection?.cash_now}
+                />
+                <QuickAddForm 
+                  onSuccess={handleCashFlowAdded} 
+                  entities={entities}
+                  onEntitiesChange={fetchEntities}
+                />
+              </div>
             </section>
 
-            {/* Quick Add below table */}
-            <section className="main-content-grid">
+            {/* Monthly breakdown below */}
+            <section className="main-content-grid mt-6">
               <div className="lg:col-span-8">
                 <MonthlyTable 
                   months={projection?.months || []}
@@ -344,11 +359,6 @@ function App() {
                 />
               </div>
               <div className="lg:col-span-4">
-                <QuickAddForm 
-                  onSuccess={handleCashFlowAdded} 
-                  entities={entities}
-                  onEntitiesChange={fetchEntities}
-                />
               </div>
             </section>
           </>
