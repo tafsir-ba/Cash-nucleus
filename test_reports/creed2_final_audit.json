@@ -1,0 +1,1048 @@
+{
+  "audit": "Creed 2 Final \u2014 Failure Mode Testing",
+  "timestamp": "2026-04-09T17:53:16.770911",
+  "pass_count": 171,
+  "fail_count": 2,
+  "total": 173,
+  "status": "FAIL",
+  "results": [
+    {
+      "section": "Integrity",
+      "test": "[committed/12M] Month count match",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/12M] Net per month",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/12M] Rev-Cost=Net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/12M] Balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/12M] Total net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/12M] Cash now",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/24M] Month count match",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/24M] Net per month",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/24M] Rev-Cost=Net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/24M] Balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/24M] Total net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/24M] Cash now",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/36M] Month count match",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/36M] Net per month",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/36M] Rev-Cost=Net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/36M] Balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/36M] Total net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[committed/36M] Cash now",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/12M] Month count match",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/12M] Net per month",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/12M] Rev-Cost=Net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/12M] Balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/12M] Total net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/12M] Cash now",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/24M] Month count match",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/24M] Net per month",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/24M] Rev-Cost=Net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/24M] Balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/24M] Total net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/24M] Cash now",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/36M] Month count match",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/36M] Net per month",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/36M] Rev-Cost=Net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/36M] Balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/36M] Total net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[likely/36M] Cash now",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/12M] Month count match",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/12M] Net per month",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/12M] Rev-Cost=Net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/12M] Balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/12M] Total net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/12M] Cash now",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/24M] Month count match",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/24M] Net per month",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/24M] Rev-Cost=Net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/24M] Balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/24M] Total net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/24M] Cash now",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/36M] Month count match",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/36M] Net per month",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/36M] Rev-Cost=Net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/36M] Balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/36M] Total net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[extended/36M] Cash now",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/12M] Month count match",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/12M] Net per month",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/12M] Rev-Cost=Net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/12M] Balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/12M] Total net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/12M] Cash now",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/24M] Month count match",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/24M] Net per month",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/24M] Rev-Cost=Net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/24M] Balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/24M] Total net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/24M] Cash now",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/36M] Month count match",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/36M] Net per month",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/36M] Rev-Cost=Net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/36M] Balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/36M] Total net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "[full/36M] Cash now",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "P&L vs Matrix net [2026-04]",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "P&L vs Matrix rev [2026-04]",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "P&L vs Matrix net [2026-05]",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "P&L vs Matrix rev [2026-05]",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "P&L vs Matrix net [2026-06]",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Integrity",
+      "test": "P&L vs Matrix rev [2026-06]",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Undo",
+      "test": "Carry-forward creates carryover",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Undo",
+      "test": "Undo removes carryover",
+      "status": "PASS",
+      "detail": "remaining=0"
+    },
+    {
+      "section": "Undo",
+      "test": "Undo removes occurrence",
+      "status": "PASS",
+      "detail": "remaining=0"
+    },
+    {
+      "section": "Undo",
+      "test": "A: total_net restored",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Undo",
+      "test": "A: total_revenue restored",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Undo",
+      "test": "A: flow count restored",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Undo",
+      "test": "B: Write-off undo removes occurrence",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Undo",
+      "test": "B: Baseline restored after write-off undo",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Undo",
+      "test": "C: 10-step undo \u2014 zero residual flows",
+      "status": "PASS",
+      "detail": "remaining=0"
+    },
+    {
+      "section": "Undo",
+      "test": "C: 10-step undo \u2014 exact baseline net",
+      "status": "PASS",
+      "detail": "diff=0.0"
+    },
+    {
+      "section": "Undo",
+      "test": "C: 10-step undo \u2014 exact baseline rev",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Undo",
+      "test": "C: 10-step undo \u2014 exact baseline cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Undo",
+      "test": "D: Child orphaned after parent delete",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Undo",
+      "test": "D: Parent restored",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Undo",
+      "test": "D: Child parent_id restored",
+      "status": "PASS",
+      "detail": "parent_id=3d538b82-c8f4-48ea-b38e-d1d8ee3e1875"
+    },
+    {
+      "section": "Undo",
+      "test": "D: Child amount intact",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Undo",
+      "test": "E: Parent+child deleted",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Undo",
+      "test": "E: Parent restored after cascade delete undo",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Undo",
+      "test": "E: Child restored after cascade delete undo",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Undo",
+      "test": "FINAL: Net matches original baseline",
+      "status": "PASS",
+      "detail": "diff=0.0"
+    },
+    {
+      "section": "Undo",
+      "test": "FINAL: Flow count matches baseline",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Dependency",
+      "test": "Child 1 (40%) = -40000",
+      "status": "PASS",
+      "detail": "got=-40000.0"
+    },
+    {
+      "section": "Dependency",
+      "test": "Child 2 (15%) = -15000",
+      "status": "PASS",
+      "detail": "got=-15000.0"
+    },
+    {
+      "section": "Dependency",
+      "test": "After edit: Child 1 (40%) = -80000",
+      "status": "PASS",
+      "detail": "got=-80000.0"
+    },
+    {
+      "section": "Dependency",
+      "test": "After edit: Child 2 (15%) = -30000",
+      "status": "PASS",
+      "detail": "got=-30000.0"
+    },
+    {
+      "section": "Dependency",
+      "test": "Parent in revenue rows",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Dependency",
+      "test": "Children in expense rows",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Dependency",
+      "test": "Parent matrix cell = 200000",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Dependency",
+      "test": "Undo: Child 1 reverted to -40000",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Dependency",
+      "test": "Undo: Child 2 reverted to -15000",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Dependency",
+      "test": "No orphan carryovers",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/12M] Main Com balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/12M] Family balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/12M] Evohom S balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/12M] Ba Franc balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/12M] Evahomes balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/12M] Test Ent balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/12M] Sum(entity rev) == global rev",
+      "status": "PASS",
+      "detail": "sum=46004.48 global=46004.48"
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/12M] Sum(entity cost) == global cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/12M] Sum(entity net) == global net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/12M] No per-month leakage",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/24M] Main Com balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/24M] Family balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/24M] Evohom S balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/24M] Ba Franc balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/24M] Evahomes balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/24M] Test Ent balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/24M] Sum(entity rev) == global rev",
+      "status": "PASS",
+      "detail": "sum=49604.48 global=49604.48"
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/24M] Sum(entity cost) == global cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/24M] Sum(entity net) == global net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[committed/24M] No per-month leakage",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/12M] Main Com balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/12M] Family balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/12M] Evohom S balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/12M] Ba Franc balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/12M] Evahomes balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/12M] Test Ent balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/12M] Sum(entity rev) == global rev",
+      "status": "PASS",
+      "detail": "sum=46004.48 global=46004.48"
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/12M] Sum(entity cost) == global cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/12M] Sum(entity net) == global net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/12M] No per-month leakage",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/24M] Main Com balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/24M] Family balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/24M] Evohom S balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/24M] Ba Franc balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/24M] Evahomes balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/24M] Test Ent balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/24M] Sum(entity rev) == global rev",
+      "status": "PASS",
+      "detail": "sum=49604.48 global=49604.48"
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/24M] Sum(entity cost) == global cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/24M] Sum(entity net) == global net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Entity",
+      "test": "[likely/24M] No per-month leakage",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Horizon",
+      "test": "12M is exact subset of 24M (net)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Horizon",
+      "test": "12M is exact subset of 36M (net)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Horizon",
+      "test": "24M is exact subset of 36M (net)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Horizon",
+      "test": "Same cash_now 12/24/36",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Horizon",
+      "test": "Revenue 12M subset of 24M",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Horizon",
+      "test": "Cost 12M subset of 24M",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Horizon",
+      "test": "Repeated fetch \u2014 no drift",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Decision",
+      "test": "Runway [committed] breach month matches projection",
+      "status": "PASS",
+      "detail": "runway=Nov 2026 proj=Nov 2026"
+    },
+    {
+      "section": "Decision",
+      "test": "Runway [committed] months count matches",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Decision",
+      "test": "Runway [likely] breach month matches projection",
+      "status": "PASS",
+      "detail": "runway=Sep 2026 proj=Sep 2026"
+    },
+    {
+      "section": "Decision",
+      "test": "Runway [likely] months count matches",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Decision",
+      "test": "Scenario delta matches projection exactly",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Decision",
+      "test": "Global driver 'Profit tax' is negative",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Decision",
+      "test": "Global driver 'Rent' is negative",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Decision",
+      "test": "Global driver 'Personal expenses' is negative",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Decision",
+      "test": "Global driver 'AVS' is negative",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Decision",
+      "test": "Global driver 'Tax' is negative",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "section": "Decision",
+      "test": "Variance actuals_recorded matches DB",
+      "status": "PASS",
+      "detail": "api=3 db=3"
+    },
+    {
+      "section": "Performance",
+      "test": "200 flows created in 61.1s",
+      "status": "FAIL",
+      "detail": "61.1s"
+    },
+    {
+      "section": "Performance",
+      "test": "Projection (200+ flows) in 0.18s",
+      "status": "PASS",
+      "detail": "0.18s"
+    },
+    {
+      "section": "Performance",
+      "test": "Matrix (200+ flows) in 0.23s",
+      "status": "PASS",
+      "detail": "0.23s"
+    },
+    {
+      "section": "Performance",
+      "test": "Matrix 36M (200+ flows) in 0.29s",
+      "status": "PASS",
+      "detail": "0.29s"
+    },
+    {
+      "section": "Performance",
+      "test": "Projection == Matrix under load",
+      "status": "PASS",
+      "detail": "diff=0.0"
+    },
+    {
+      "section": "Performance",
+      "test": "200 undos completed cleanly",
+      "status": "FAIL",
+      "detail": ""
+    }
+  ]
+}
