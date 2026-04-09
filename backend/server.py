@@ -1255,7 +1255,24 @@ async def get_negative_month_drivers(
             "drivers": drivers,
         })
     
-    return {"negative_months": result}
+    # Global aggregation: all negative flows across full horizon, aggregated by label
+    global_agg = {}
+    for key in sorted(months_data.keys()):
+        for ef in months_data[key]["flows"]:
+            if ef["amount"] >= 0:
+                continue
+            lbl = ef["label"]
+            if lbl not in global_agg:
+                global_agg[lbl] = {"label": lbl, "total": 0.0, "count": 0, "category": ef["category"]}
+            global_agg[lbl]["total"] += ef["amount"]
+            global_agg[lbl]["count"] += 1
+    
+    global_drivers = [
+        {"label": d["label"], "amount": round(d["total"], 2), "count": d["count"], "category": d["category"]}
+        for d in sorted(global_agg.values(), key=lambda x: x["total"])[:5]
+    ]
+    
+    return {"negative_months": result, "global_drivers": global_drivers}
 
 
 @api_router.get("/projection/scenario-delta")

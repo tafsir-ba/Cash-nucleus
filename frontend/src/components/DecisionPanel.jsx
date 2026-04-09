@@ -48,34 +48,55 @@ const RunwayCard = ({ runway }) => {
 
 // ============== 2. TOP DRIVERS — aggregated by label, total + count ==============
 const DriversCard = ({ drivers }) => {
-  if (!drivers || drivers.negative_months.length === 0) return null;
+  if (!drivers || (drivers.negative_months.length === 0 && (!drivers.global_drivers || drivers.global_drivers.length === 0))) return null;
 
   return (
     <div className="surface-card p-4" data-testid="drivers-card">
       <h3 className="text-[10px] text-zinc-500 uppercase tracking-[0.2em] font-medium mb-3">
-        Top Drivers of Negative Months
+        Top Cost Drivers
       </h3>
-      <div className="space-y-3 max-h-[240px] overflow-y-auto">
-        {drivers.negative_months.slice(0, 6).map((m) => (
-          <div key={m.month} className="space-y-1">
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-zinc-300 font-medium">{m.month_label}</span>
-              <span className={`text-[10px] font-mono ${m.cash_balance < 0 ? 'text-rose-400' : 'text-zinc-500'}`}>
-                bal: {formatCHF(m.cash_balance)}
+
+      {/* Global — full horizon aggregation */}
+      {drivers.global_drivers && drivers.global_drivers.length > 0 && (
+        <div className="mb-3 pb-3 border-b border-zinc-800" data-testid="global-drivers">
+          <div className="text-[10px] text-zinc-500 mb-1.5">Full horizon</div>
+          {drivers.global_drivers.map((d, i) => (
+            <div key={i} className="flex items-center justify-between py-0.5">
+              <span className="text-[10px] text-zinc-400 truncate max-w-[130px]">
+                {d.label}
+                {d.count > 1 && <span className="text-zinc-600 ml-0.5">({d.count}x)</span>}
               </span>
+              <span className="text-[10px] font-mono text-rose-400 tabular-nums">{formatCHF(d.amount)}</span>
             </div>
-            {m.drivers.map((d, i) => (
-              <div key={i} className="flex items-center justify-between pl-2">
-                <span className="text-[10px] text-zinc-500 truncate max-w-[130px]">
-                  {d.label}
-                  {d.count > 1 && <span className="text-zinc-600 ml-0.5">({d.count}x)</span>}
+          ))}
+        </div>
+      )}
+
+      {/* Per negative month */}
+      {drivers.negative_months.length > 0 && (
+        <div className="space-y-3 max-h-[200px] overflow-y-auto">
+          <div className="text-[10px] text-zinc-500 mb-1">Per negative month</div>
+          {drivers.negative_months.slice(0, 4).map((m) => (
+            <div key={m.month} className="space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-zinc-300 font-medium">{m.month_label}</span>
+                <span className={`text-[10px] font-mono ${m.cash_balance < 0 ? 'text-rose-400' : 'text-zinc-500'}`}>
+                  bal: {formatCHF(m.cash_balance)}
                 </span>
-                <span className="text-[10px] font-mono text-rose-400/80 tabular-nums">{formatCHF(d.amount)}</span>
               </div>
-            ))}
-          </div>
-        ))}
-      </div>
+              {m.drivers.map((d, i) => (
+                <div key={i} className="flex items-center justify-between pl-2">
+                  <span className="text-[10px] text-zinc-500 truncate max-w-[130px]">
+                    {d.label}
+                    {d.count > 1 && <span className="text-zinc-600 ml-0.5">({d.count}x)</span>}
+                  </span>
+                  <span className="text-[10px] font-mono text-rose-400/80 tabular-nums">{formatCHF(d.amount)}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
