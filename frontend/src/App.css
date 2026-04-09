@@ -27,7 +27,7 @@
 
 /* KPI Card styles */
 .kpi-card {
-  @apply bg-zinc-900/40 border border-zinc-800 p-5 md:p-6 flex flex-col gap-2 rounded-lg transition-colors duration-200;
+  @apply bg-zinc-900/40 border border-zinc-800 p-4 md:p-5 flex flex-col gap-1.5 rounded-lg transition-colors duration-200 min-w-0 overflow-hidden;
 }
 
 .kpi-card:hover {
@@ -40,7 +40,7 @@
 }
 
 .kpi-value {
-  @apply text-3xl sm:text-4xl lg:text-5xl font-light tracking-tighter text-zinc-50;
+  @apply text-xl sm:text-2xl lg:text-3xl font-light tracking-tighter text-zinc-50;
   font-family: var(--font-heading);
 }
 

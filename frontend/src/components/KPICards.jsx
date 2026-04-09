@@ -81,14 +81,14 @@ export const KPICards = ({ projection, hasAccounts, onAddAccount }) => {
           <span className="text-lg text-zinc-500 mt-1">—</span>
         ) : hasDanger ? (
           <>
-            <span className="kpi-value text-2xl sm:text-3xl lg:text-4xl text-rose-400 font-semibold">
+            <span className="kpi-value text-rose-400 font-semibold">
               {first_danger_month}
             </span>
             <span className="kpi-meta text-rose-400/70">Cash drops below zero</span>
           </>
         ) : (
           <>
-            <span className="kpi-value text-2xl sm:text-3xl lg:text-4xl text-emerald-400">Never</span>
+            <span className="kpi-value text-emerald-400">Never</span>
             <span className="kpi-meta text-zinc-500">Within projection horizon</span>
           </>
         )}
@@ -101,7 +101,7 @@ export const KPICards = ({ projection, hasAccounts, onAddAccount }) => {
           <span className="text-lg text-zinc-500 mt-1">—</span>
         ) : (
           <>
-            <span className={`kpi-value font-mono text-2xl sm:text-3xl ${lowest_cash < 0 ? 'text-rose-400' : lowest_cash < safety_buffer ? 'text-amber-400' : ''}`}>
+            <span className={`kpi-value font-mono ${lowest_cash < 0 ? 'text-rose-400' : lowest_cash < safety_buffer ? 'text-amber-400' : ''}`}>
               {formatCurrency(lowest_cash)}
             </span>
             <span className="kpi-meta">{lowest_cash_month}</span>
@@ -116,14 +116,14 @@ export const KPICards = ({ projection, hasAccounts, onAddAccount }) => {
           <span className="text-lg text-zinc-500 mt-1">—</span>
         ) : first_watch_month ? (
           <>
-            <span className="kpi-value text-2xl sm:text-3xl lg:text-4xl text-amber-400">
+            <span className="kpi-value text-amber-400">
               {first_watch_month}
             </span>
             <span className="kpi-meta text-zinc-500">Below buffer</span>
           </>
         ) : (
           <>
-            <span className="kpi-value text-2xl sm:text-3xl lg:text-4xl text-zinc-500">—</span>
+            <span className="kpi-value text-zinc-500">—</span>
             <span className="kpi-meta text-zinc-600">Always above buffer</span>
           </>
         )}
@@ -138,7 +138,7 @@ export const KPICards = ({ projection, hasAccounts, onAddAccount }) => {
           <>
             <div className="flex items-center gap-2">
               <StatusIcon status={overall_status} />
-              <span className={`kpi-value text-2xl sm:text-3xl ${getStatusColor(overall_status)}`}>
+              <span className={`kpi-value text-xl sm:text-2xl ${getStatusColor(overall_status)}`}>
                 {overall_status}
               </span>
             </div>
