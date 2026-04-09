@@ -214,7 +214,7 @@ async def get_flow_with_dynamic_amount(flow: dict) -> dict:
 MAX_UNDO_STACK = 50
 
 async def push_undo(action_type: str, collection: str, target_ids: List[str], 
-                     previous_data=None, created_data=None, description=""):
+                     previous_data=None, created_data=None, description="", side_effects=None):
     """Push an action to the undo stack."""
     action = UndoAction(
         action_type=action_type,
@@ -223,6 +223,7 @@ async def push_undo(action_type: str, collection: str, target_ids: List[str],
         previous_data=previous_data,
         created_data=created_data,
         description=description,
+        side_effects=side_effects,
     )
     await db.undo_stack.insert_one(action.model_dump())
     # Trim stack to max size

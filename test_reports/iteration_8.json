@@ -1,0 +1,126 @@
+{
+  "summary": "Phase 3 Audit Iteration 8 - All tests passed. Fixed critical bug in push_undo() function missing side_effects parameter. Backend 13/13 tests passed. Frontend UI verified all Phase 3 Audit requirements: semantic cell display (actual/planned/variance), single scroll container, carry-forward with target month, write-off with explicit message, undo hint, and backend-driven totals.",
+  
+  "backend_issues": {
+    "critical": [],
+    "minor": [],
+    "fixed": [
+      {
+        "endpoint": "PUT /api/flow-occurrences, DELETE /api/flow-occurrences",
+        "issue": "500 Internal Server Error - push_undo() missing side_effects parameter",
+        "fix": "Added side_effects parameter to push_undo() function signature",
+        "file": "/app/backend/server.py",
+        "line": "216-217"
+      }
+    ]
+  },
+  
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  
+  "test_report_links": [
+    "/app/backend/tests/test_phase3_audit_v2.py",
+    "/app/test_reports/pytest/pytest_results_phase3_audit_v2.xml"
+  ],
+  
+  "action_items": [],
+  
+  "critical_code_review_comments": [],
+  
+  "updated_files": [
+    "/app/backend/server.py",
+    "/app/backend/tests/test_phase3_audit_v2.py"
+  ],
+  
+  "success_rate": {
+    "backend": "100% (13/13 tests passed)",
+    "frontend": "100%"
+  },
+  
+  "seed_data_creation": "Test flows created and cleaned up automatically by pytest fixtures",
+  
+  "retest_needed": false,
+  
+  "should_main_agent_self_test": true,
+  
+  "context_for_next_testing_agent": "Phase 3 Audit complete. All features verified: 1) Matrix cells with actuals show semantic display: actual value (cyan), planned (strikethrough), variance delta (amber/emerald). 2) Single scroll container for matrix header/body/totals. 3) ActualInputDialog carry-forward button shows target month name and 'Creates a one-time recovery flow' description. 4) ActualInputDialog write-off button shows 'permanently ignored — no carryover created' message. 5) Undo hint text present in dialog. 6) Backend returns revenue_per_month, cost_per_month, cash_balance_per_month, net_per_month in matrix endpoint. 7) 24M horizon returns 24 months of totals. 8) Undo chain restores occurrence AND carryover flows. 9) Carryover flows appear in matrix with '(variance carryover)' label. Fixed bug: push_undo() was missing side_effects parameter causing 500 errors on flow-occurrences endpoints.",
+  
+  "passed_tests": [
+    "Backend: Matrix returns revenue_per_month",
+    "Backend: Matrix returns cost_per_month",
+    "Backend: Matrix returns cash_balance_per_month",
+    "Backend: Matrix returns net_per_month",
+    "Backend: 24M horizon returns 24 months",
+    "Backend: Cell without actual has has_actual=false",
+    "Backend: Cell with actual shows actual, planned, variance",
+    "Backend: Carry-forward creates carryover flow in next month",
+    "Backend: Carry-forward response includes target_month",
+    "Backend: Write-off does NOT create carryover",
+    "Backend: Undo removes occurrence AND carryover flow",
+    "Backend: Distributed revenue with linked COGS shows correct per-period amounts",
+    "Backend: Undo peek returns has_undo field",
+    "Frontend: Matrix scroll container (single container)",
+    "Frontend: Total Revenue row present",
+    "Frontend: Total Cost row present",
+    "Frontend: Net P/L row present",
+    "Frontend: Cash Balance row present",
+    "Frontend: ActualInputDialog opens on cell click",
+    "Frontend: Planned amount displayed in dialog",
+    "Frontend: Variance summary displayed when actual differs",
+    "Frontend: Carry forward button shows target month name",
+    "Frontend: Carry forward button mentions one-time recovery flow",
+    "Frontend: Write off button shows 'permanently ignored, no carryover' message",
+    "Frontend: Undo hint text present in dialog",
+    "Frontend: Cell semantic display - actual value (cyan)",
+    "Frontend: Cell semantic display - planned (strikethrough)",
+    "Frontend: Cell semantic display - variance delta",
+    "Frontend: 24M horizon shows Total 24M column",
+    "Frontend: Carryover flow appears in matrix after carry-forward"
+  ],
+  
+  "features_verified": {
+    "matrix_cell_semantic_display": {
+      "status": "WORKING",
+      "details": "Cells with actuals show: actual value (cyan), planned (strikethrough), variance delta (amber for under, emerald for over)"
+    },
+    "single_scroll_container": {
+      "status": "WORKING",
+      "details": "Matrix header, body rows, total rows, and cash balance all scroll in sync within single container"
+    },
+    "carry_forward_dialog": {
+      "status": "WORKING",
+      "details": "Shows target month name (e.g., 'Carry forward to May 2026') and description 'Creates a one-time recovery flow'"
+    },
+    "write_off_dialog": {
+      "status": "WORKING",
+      "details": "Shows explicit message 'CHF X variance is permanently ignored — no carryover created'"
+    },
+    "undo_hint": {
+      "status": "WORKING",
+      "details": "Dialog shows 'All actions are undoable via the undo button in the header'"
+    },
+    "backend_driven_totals": {
+      "status": "WORKING",
+      "details": "Matrix endpoint returns revenue_per_month, cost_per_month, cash_balance_per_month, net_per_month - frontend reads these directly"
+    },
+    "24m_horizon": {
+      "status": "WORKING",
+      "details": "24M horizon returns 24 months of data with Total 24M column"
+    },
+    "undo_chain": {
+      "status": "WORKING",
+      "details": "Undo restores both occurrence record AND removes carryover flows created by carry-forward"
+    }
+  },
+  
+  "bug_fixed": {
+    "description": "push_undo() function was missing side_effects parameter",
+    "root_cause": "The UndoAction model had side_effects field but push_undo() function didn't accept it as parameter",
+    "fix_applied": "Added side_effects=None parameter to push_undo() function and passed it to UndoAction constructor",
+    "file_changed": "/app/backend/server.py",
+    "lines_changed": "216-227"
+  }
+}

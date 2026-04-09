@@ -62,8 +62,18 @@ const ActualInput = ({ flow, month, onUpdate }) => {
   };
 
   if (editing) {
+    const inputAbs = actualVal ? parseFloat(actualVal) : null;
+    const plannedAbs = Math.abs(planned);
+    const hasInputVariance = inputAbs !== null && Math.abs(inputAbs - plannedAbs) > 0.01;
+    const inputUnder = hasInputVariance && inputAbs < plannedAbs;
+    const inputVariance = hasInputVariance ? Math.abs(inputAbs - plannedAbs) : 0;
+
+    // Compute next month label for carry-forward preview
+    const [y, m] = month.split("-");
+    const nextMonthLabel = new Date(parseInt(y), parseInt(m), 1).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+
     return (
-      <div className="mt-1 space-y-1.5" data-testid={`actual-edit-${flow.flow_id}`}>
+      <div className="mt-1.5 space-y-1.5 bg-zinc-900/50 border border-zinc-700/50 rounded-md p-2" data-testid={`actual-edit-${flow.flow_id}`}>
         <div className="flex gap-1 items-center">
           <input
             type="number"
@@ -74,35 +84,41 @@ const ActualInput = ({ flow, month, onUpdate }) => {
             autoFocus
             data-testid={`actual-input-${flow.flow_id}`}
           />
+          <span className="text-[10px] text-zinc-600">vs planned {formatCurrency(planned)}</span>
           <button
             onClick={() => setEditing(false)}
-            className="p-0.5 text-zinc-500 hover:text-zinc-300"
+            className="p-0.5 text-zinc-500 hover:text-zinc-300 ml-auto"
             disabled={saving}
           >
             <X size={12} />
           </button>
         </div>
-        {actualVal && parseFloat(actualVal) !== Math.abs(planned) && (
+        {hasInputVariance && (
+          <div className={`text-[10px] p-1.5 rounded ${inputUnder ? 'bg-amber-500/10 text-amber-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
+            {inputUnder ? 'Under' : 'Over'}-performance: {formatCurrency(inputVariance)}
+          </div>
+        )}
+        {hasInputVariance && (
           <div className="flex gap-1">
             <button
               onClick={() => saveActual("carry_forward")}
               disabled={saving}
-              className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 hover:bg-amber-500/30"
+              className="text-[10px] px-1.5 py-1 rounded bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 flex-1 text-left"
               data-testid={`carry-forward-${flow.flow_id}`}
             >
-              Carry fwd
+              Carry to {nextMonthLabel}
             </button>
             <button
               onClick={() => saveActual("write_off")}
               disabled={saving}
-              className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300 hover:bg-zinc-600"
+              className="text-[10px] px-1.5 py-1 rounded bg-zinc-700 text-zinc-300 hover:bg-zinc-600 flex-1 text-left"
               data-testid={`write-off-${flow.flow_id}`}
             >
               Write off
             </button>
           </div>
         )}
-        {actualVal && parseFloat(actualVal) === Math.abs(planned) && (
+        {!hasInputVariance && actualVal && (
           <button
             onClick={() => saveActual(null)}
             disabled={saving}
@@ -118,23 +134,32 @@ const ActualInput = ({ flow, month, onUpdate }) => {
   return (
     <div className="flex items-center gap-1.5 mt-0.5">
       {hasActual ? (
-        <>
-          <span className="text-[10px] text-emerald-400 flex items-center gap-0.5">
-            <Check size={10} weight="bold" /> actual: {formatCurrency(flow.actual_amount)}
-          </span>
-          {variance !== null && Math.abs(variance) > 0.01 && (
-            <span className={`text-[10px] ${flow.variance_action === 'carry_forward' ? 'text-amber-400' : 'text-zinc-500'}`}>
-              ({flow.variance_action === 'carry_forward' ? 'carried' : 'written off'})
+        <div className="w-full space-y-0.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-cyan-400 flex items-center gap-0.5 font-medium">
+              <Check size={10} weight="bold" /> Actual: {formatCurrency(flow.actual_amount)}
             </span>
-          )}
-          <button
-            onClick={clearActual}
-            className="text-[10px] text-zinc-600 hover:text-zinc-400 ml-auto"
-            data-testid={`clear-actual-${flow.flow_id}`}
-          >
-            reset
-          </button>
-        </>
+            <button
+              onClick={clearActual}
+              className="text-[10px] text-zinc-600 hover:text-zinc-400"
+              data-testid={`clear-actual-${flow.flow_id}`}
+            >
+              reset
+            </button>
+          </div>
+          <div className="flex items-center gap-2 text-[10px]">
+            <span className="text-zinc-600 line-through">P: {formatCurrency(planned)}</span>
+            {variance !== null && Math.abs(variance) > 0.01 && (
+              <span className={`font-medium ${variance > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                {variance > 0 ? '-' : '+'}
+                {formatCurrency(variance)}
+                <span className="text-zinc-600 font-normal ml-1">
+                  ({flow.variance_action === 'carry_forward' ? 'carried fwd' : 'written off'})
+                </span>
+              </span>
+            )}
+          </div>
+        </div>
       ) : (
         <button
           onClick={startEdit}

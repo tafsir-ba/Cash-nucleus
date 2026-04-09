@@ -116,13 +116,26 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
           </div>
           
           {hasVariance && (
-            <div className={`text-xs p-2.5 rounded-md space-y-1 ${
+            <div className={`text-xs p-2.5 rounded-md space-y-2 ${
               isUnder ? 'bg-amber-500/10 border border-amber-500/20' : 'bg-emerald-500/10 border border-emerald-500/20'
-            }`}>
-              <div className="flex justify-between">
+            }`} data-testid="variance-summary">
+              <div className="flex justify-between font-medium">
                 <span className={isUnder ? 'text-amber-400' : 'text-emerald-400'}>
-                  Variance: {isUnder ? 'Under' : 'Over'} by CHF {formatCHF(varianceAmount)}
+                  {isUnder ? 'Under-performance' : 'Over-performance'}
                 </span>
+                <span className={isUnder ? 'text-amber-400' : 'text-emerald-400'}>
+                  CHF {formatCHF(varianceAmount)}
+                </span>
+              </div>
+              <div className="text-zinc-500 text-[10px] space-y-0.5">
+                <div className="flex justify-between"><span>Planned</span><span className="font-mono">CHF {formatCHF(plannedAbs)}</span></div>
+                <div className="flex justify-between"><span>Actual</span><span className="font-mono text-cyan-400">CHF {formatCHF(actualAbs)}</span></div>
+                <div className="flex justify-between border-t border-zinc-700/50 pt-0.5">
+                  <span>Variance</span>
+                  <span className={`font-mono font-medium ${isUnder ? 'text-amber-400' : 'text-emerald-400'}`}>
+                    {isUnder ? '-' : '+'}CHF {formatCHF(varianceAmount)}
+                  </span>
+                </div>
               </div>
             </div>
           )}
@@ -131,15 +144,22 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
             {hasVariance ? (
               <>
                 <button onClick={() => handleSave("carry_forward")} disabled={saving}
-                  className="btn-primary text-xs flex items-center justify-center gap-2 py-2" data-testid="actual-carry">
-                  <Check size={12} /> Carry forward to {nextMonth}
-                  <span className="text-amber-400/80 ml-1">
-                    ({isUnder ? '+' : '-'}CHF {formatCHF(varianceAmount)})
-                  </span>
+                  className="btn-primary text-xs py-2.5 text-left px-3 space-y-0.5" data-testid="actual-carry">
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <ArrowRight size={12} /> Carry forward to {nextMonth}
+                  </div>
+                  <div className="text-[10px] text-zinc-400 pl-5">
+                    Creates a one-time {isUnder ? 'recovery' : 'adjustment'} flow of {isUnder ? '+' : '-'}CHF {formatCHF(varianceAmount)} in {nextMonth}
+                  </div>
                 </button>
                 <button onClick={() => handleSave("write_off")} disabled={saving}
-                  className="btn-secondary text-xs py-2" data-testid="actual-writeoff">
-                  Write off variance
+                  className="btn-secondary text-xs py-2.5 text-left px-3 space-y-0.5" data-testid="actual-writeoff">
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <X size={12} /> Write off variance
+                  </div>
+                  <div className="text-[10px] text-zinc-500 pl-5">
+                    CHF {formatCHF(varianceAmount)} variance is permanently ignored — no carryover created
+                  </div>
                 </button>
               </>
             ) : (
@@ -154,6 +174,9 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
                 Clear actual (revert to planned)
               </button>
             )}
+            <p className="text-[10px] text-zinc-600 text-center mt-0.5">
+              All actions are undoable via the undo button in the header
+            </p>
           </div>
         </div>
       </DialogContent>
@@ -222,19 +245,48 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
       );
     }
     const hasActual = cell.has_actual;
+
+    if (hasActual) {
+      const variance = cell.actual - cell.planned;
+      const varianceAbs = Math.abs(variance);
+      const isOver = variance > 0.01;
+      const isUnder = variance < -0.01;
+      return (
+        <td key={month.key}
+          className={`text-right px-2 py-1 font-mono cursor-pointer transition-colors ${
+            hoveredCol === ci ? 'bg-zinc-800/20' : ''
+          } bg-cyan-500/5 border-b-2 border-cyan-500/40 hover:bg-zinc-700/30`}
+          onClick={() => handleCellClick(row, month, cell)}
+          onMouseEnter={() => setHoveredCol(ci)} onMouseLeave={() => setHoveredCol(null)}
+          data-testid={`cell-${row.flow_id}-${month.key}`}>
+          <div className="flex flex-col items-end gap-0">
+            <span className="text-cyan-300 font-semibold leading-tight" data-testid={`cell-actual-${row.flow_id}-${month.key}`}>
+              {formatCompact(cell.actual)}
+            </span>
+            <span className="text-zinc-600 text-[9px] leading-tight line-through" data-testid={`cell-planned-${row.flow_id}-${month.key}`}>
+              {formatCompact(cell.planned)}
+            </span>
+            {varianceAbs > 0.01 && (
+              <span className={`text-[9px] leading-tight font-medium ${isOver ? 'text-emerald-400' : 'text-amber-400'}`}
+                data-testid={`cell-variance-${row.flow_id}-${month.key}`}>
+                {isOver ? '+' : ''}{formatCompact(variance)}
+              </span>
+            )}
+          </div>
+        </td>
+      );
+    }
+
     return (
       <td key={month.key}
         className={`text-right px-2 py-1.5 font-mono cursor-pointer transition-colors ${
           hoveredCol === ci ? 'bg-zinc-800/20' : ''
-        } ${hasActual ? 'font-semibold ring-1 ring-inset ring-cyan-500/30 bg-cyan-500/5' : ''} ${colorClass} hover:bg-zinc-700/30`}
+        } ${colorClass} hover:bg-zinc-700/30`}
         onClick={() => handleCellClick(row, month, cell)}
         onMouseEnter={() => setHoveredCol(ci)} onMouseLeave={() => setHoveredCol(null)}
-        title={hasActual
-          ? `Actual: CHF ${formatCHF(cell.actual)} | Planned: CHF ${formatCHF(cell.planned)}`
-          : `Planned: CHF ${formatCHF(cell.amount)} — click to record actual`}
+        title={`Planned: CHF ${formatCHF(cell.amount)} — click to record actual`}
         data-testid={`cell-${row.flow_id}-${month.key}`}>
         {formatCompact(cell.amount)}
-        {hasActual && <span className="ml-0.5 text-cyan-400 text-[8px] align-super font-normal">A</span>}
       </td>
     );
   };
@@ -251,14 +303,14 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
         {loading && <span className="text-xs text-zinc-600">Updating...</span>}
       </div>
 
-      <div className="overflow-x-auto">
-        <div className="min-w-max">
-          <table className="w-full text-xs">
+      {/* Single scroll container — header, body, totals all in one table for sync */}
+      <div className="overflow-x-auto" data-testid="matrix-scroll-container">
+        <table className="w-full text-xs" style={{ minWidth: `${200 + months.length * 90 + 100}px` }}>
             <thead>
               <tr className="border-b border-zinc-800">
                 <th className="sticky left-0 bg-zinc-900 z-10 text-left px-3 py-2.5 text-zinc-400 font-medium w-[200px] min-w-[200px]">Flow</th>
                 {months.map((m, ci) => (
-                  <th key={m.key} className={`text-right px-2 py-2.5 text-zinc-500 font-medium min-w-[80px] transition-colors ${hoveredCol === ci ? 'bg-zinc-800/30' : ''}`}>
+                  <th key={m.key} className={`text-right px-2 py-2.5 text-zinc-500 font-medium min-w-[90px] transition-colors ${hoveredCol === ci ? 'bg-zinc-800/30' : ''}`}>
                     {m.label.split(' ')[0]}
                   </th>
                 ))}
@@ -385,7 +437,6 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
               )}
             </tbody>
           </table>
-        </div>
       </div>
 
       <FlowEditor flow={editingFlow} open={!!editingFlow} onOpenChange={(open) => !open && setEditingFlow(null)}
