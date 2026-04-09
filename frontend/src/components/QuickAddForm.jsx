@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
-import { Plus, CaretDown, Link, X } from "@phosphor-icons/react";
+import { Plus, CaretDown, Link, X, CalendarBlank } from "@phosphor-icons/react";
 import { 
   Select, 
   SelectContent, 
@@ -9,13 +9,14 @@ import {
   SelectValue 
 } from "../components/ui/select";
 import { Label } from "../components/ui/label";
+import { Calendar } from "../components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { EntitySelector } from "./EntitySelector";
+import { format } from "date-fns";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
-const categories = [
-  "Revenue", "Salary", "Tax", "Debt", "Expense", "COGS", "Transfer", "Other"
-];
+const categories = ["Revenue", "Salary", "Tax", "Debt", "Expense", "COGS", "Transfer", "Other"];
 
 const certainties = [
   { value: "Materialized", label: "Materialized" },
@@ -24,12 +25,12 @@ const certainties = [
   { value: "Idea", label: "Idea" },
 ];
 
-const getCurrentMonth = () => {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-};
+const recurrenceOptions = [
+  { value: "none", label: "One-time" },
+  { value: "monthly", label: "Monthly" },
+  { value: "quarterly", label: "Quarterly" },
+];
 
-// Get last used entity from localStorage
 const getLastEntity = () => localStorage.getItem('lastUsedEntityId') || '';
 const setLastEntity = (id) => localStorage.setItem('lastUsedEntityId', id);
 
@@ -46,45 +47,36 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
   const [loading, setLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   
-  // Core fields (always visible)
+  // Core fields
   const [label, setLabel] = useState("");
   const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(getCurrentMonth());
+  const [selectedDate, setSelectedDate] = useState(new Date());
   const [certainty, setCertainty] = useState("Materialized");
   const [entityId, setEntityId] = useState(getLastEntity());
   
-  // Advanced fields
+  // Advanced
   const [category, setCategory] = useState("Expense");
   const [recurrence, setRecurrence] = useState("none");
   const [recurrenceCount, setRecurrenceCount] = useState("");
   const [linkedFlows, setLinkedFlows] = useState([]);
 
-  // Auto-select entity: last used > first available
+  // Auto-select entity
   useEffect(() => {
     if (!entityId && entities.length > 0) {
       const lastUsed = getLastEntity();
-      const validLast = entities.find(e => e.id === lastUsed);
-      setEntityId(validLast ? validLast.id : entities[0].id);
+      const valid = entities.find(e => e.id === lastUsed);
+      setEntityId(valid ? valid.id : entities[0].id);
     }
   }, [entities, entityId]);
 
-  // Save last used entity
   useEffect(() => {
     if (entityId) setLastEntity(entityId);
   }, [entityId]);
 
-  const addLinkedFlow = () => {
-    setLinkedFlows([...linkedFlows, emptyLinkedFlow()]);
-  };
-
-  const removeLinkedFlow = (id) => {
-    setLinkedFlows(linkedFlows.filter(f => f.id !== id));
-  };
-
+  const addLinkedFlow = () => setLinkedFlows([...linkedFlows, emptyLinkedFlow()]);
+  const removeLinkedFlow = (id) => setLinkedFlows(linkedFlows.filter(f => f.id !== id));
   const updateLinkedFlow = (id, field, value) => {
-    setLinkedFlows(linkedFlows.map(f => 
-      f.id === id ? { ...f, [field]: value } : f
-    ));
+    setLinkedFlows(linkedFlows.map(f => f.id === id ? { ...f, [field]: value } : f));
   };
 
   const handleSubmit = async (e) => {
@@ -93,10 +85,10 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
 
     setLoading(true);
     try {
-      const dateStr = `${date}-01`;
+      // Format date as YYYY-MM-DD (first of selected month)
+      const dateStr = format(selectedDate, "yyyy-MM") + "-01";
       const numAmount = parseFloat(amount);
       
-      // Build linked flows
       const validLinked = linkedFlows
         .filter(f => f.label.trim() && (f.amount || (f.isPercentage && f.percentage)))
         .map(f => ({
@@ -105,43 +97,33 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
           date: dateStr,
           certainty,
           category: f.category,
-          recurrence: "none", // Will be overridden by backend
+          recurrence: "none",
           entity_id: entityId,
           is_percentage: f.isPercentage,
           percentage_of_parent: f.isPercentage ? parseFloat(f.percentage) : null,
         }));
 
+      const payload = {
+        label: label.trim(),
+        amount: numAmount,
+        date: dateStr,
+        certainty,
+        category,
+        recurrence,
+        recurrence_count: recurrence !== "none" && recurrenceCount ? parseInt(recurrenceCount) : null,
+        entity_id: entityId,
+      };
+
       if (validLinked.length > 0) {
-        await axios.post(`${API}/cash-flows/batch`, {
-          parent: {
-            label: label.trim(),
-            amount: numAmount,
-            date: dateStr,
-            certainty,
-            category,
-            recurrence,
-            recurrence_count: recurrence === "monthly" && recurrenceCount ? parseInt(recurrenceCount) : null,
-            entity_id: entityId,
-          },
-          linked: validLinked
-        });
+        await axios.post(`${API}/cash-flows/batch`, { parent: payload, linked: validLinked });
       } else {
-        await axios.post(`${API}/cash-flows`, {
-          label: label.trim(),
-          amount: numAmount,
-          date: dateStr,
-          certainty,
-          category,
-          recurrence,
-          recurrence_count: recurrence === "monthly" && recurrenceCount ? parseInt(recurrenceCount) : null,
-          entity_id: entityId,
-        });
+        await axios.post(`${API}/cash-flows`, payload);
       }
       
-      // Reset form (keep entity)
+      // Reset
       setLabel("");
       setAmount("");
-      setDate(getCurrentMonth());
+      setSelectedDate(new Date());
       setCertainty("Materialized");
       setCategory("Expense");
       setRecurrence("none");
@@ -150,7 +132,7 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
       
       onSuccess?.();
     } catch (error) {
-      console.error("Failed to add cash flow:", error);
+      console.error("Failed to add:", error);
     } finally {
       setLoading(false);
     }
@@ -167,7 +149,6 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
       </div>
       
       <form onSubmit={handleSubmit} className="p-4 space-y-3">
-        {/* Entity - compact selector */}
         <EntitySelector
           value={entityId}
           onChange={setEntityId}
@@ -175,11 +156,9 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
           onEntitiesChange={onEntitiesChange}
         />
 
-        {/* Description */}
         <div>
-          <Label htmlFor="desc-input" className="text-xs text-zinc-500 mb-1 block">Description</Label>
+          <Label className="text-xs text-zinc-500 mb-1 block">Description</Label>
           <input
-            id="desc-input"
             type="text"
             autoComplete="off"
             placeholder="e.g., Office rent"
@@ -190,7 +169,6 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
           />
         </div>
 
-        {/* Amount + Month (same row for speed) */}
         <div className="grid grid-cols-2 gap-2">
           <div>
             <Label className="text-xs text-zinc-500 mb-1 block">Amount (CHF)</Label>
@@ -207,17 +185,30 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
           </div>
           <div>
             <Label className="text-xs text-zinc-500 mb-1 block">Month</Label>
-            <input
-              type="month"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-600"
-              data-testid="quick-add-date"
-            />
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 hover:bg-zinc-900 transition-colors"
+                  data-testid="quick-add-date"
+                >
+                  <span>{format(selectedDate, "MMM yyyy")}</span>
+                  <CalendarBlank size={16} className="text-zinc-500" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0 bg-zinc-900 border-zinc-800" align="start">
+                <Calendar
+                  mode="single"
+                  selected={selectedDate}
+                  onSelect={(date) => date && setSelectedDate(date)}
+                  defaultMonth={selectedDate}
+                  className="rounded-md"
+                />
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
 
-        {/* Certainty */}
         <div>
           <Label className="text-xs text-zinc-500 mb-1 block">Certainty</Label>
           <Select value={certainty} onValueChange={setCertainty}>
@@ -225,14 +216,11 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {certainties.map((c) => (
-                <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
-              ))}
+              {certainties.map(c => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>
 
-        {/* Advanced toggle */}
         <button
           type="button"
           onClick={() => setShowAdvanced(!showAdvanced)}
@@ -242,10 +230,8 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
           {showAdvanced ? 'Hide' : 'More'} options
         </button>
 
-        {/* Advanced fields */}
         {showAdvanced && (
           <div className="space-y-3 pt-2 border-t border-zinc-800/50">
-            {/* Category + Recurrence */}
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <Label className="text-xs text-zinc-500 mb-1 block">Category</Label>
@@ -265,19 +251,20 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">One-time</SelectItem>
-                    <SelectItem value="monthly">Monthly</SelectItem>
+                    {recurrenceOptions.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
             </div>
 
-            {recurrence === "monthly" && (
+            {recurrence !== "none" && (
               <div>
-                <Label className="text-xs text-zinc-500 mb-1 block"># of months</Label>
+                <Label className="text-xs text-zinc-500 mb-1 block">
+                  # of {recurrence === "quarterly" ? "quarters" : "months"}
+                </Label>
                 <input
                   type="number"
-                  placeholder="12"
+                  placeholder={recurrence === "quarterly" ? "4" : "12"}
                   min="1"
                   max="120"
                   value={recurrenceCount}
@@ -291,24 +278,20 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
             <div className="pt-2 border-t border-zinc-800/50">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-1.5">
-                  <Link size={12} className="text-zinc-500" />
+                  <Link size={12} className="text-amber-400" />
                   <span className="text-xs text-zinc-400">Linked Flows</span>
                 </div>
-                <button
-                  type="button"
-                  onClick={addLinkedFlow}
-                  className="text-xs text-zinc-500 hover:text-zinc-300 flex items-center gap-1"
-                >
+                <button type="button" onClick={addLinkedFlow} className="text-xs text-zinc-500 hover:text-zinc-300 flex items-center gap-1">
                   <Plus size={10} /> Add
                 </button>
               </div>
               
               {linkedFlows.length === 0 && (
-                <p className="text-xs text-zinc-600">e.g., Revenue + COGS</p>
+                <p className="text-xs text-zinc-600">e.g., Revenue + COGS (40%)</p>
               )}
 
               {linkedFlows.map((linked) => (
-                <div key={linked.id} className="flex gap-1.5 mb-2 items-start bg-zinc-900/50 p-2 rounded border border-zinc-800/50">
+                <div key={linked.id} className="flex gap-1.5 mb-2 items-start bg-zinc-900/50 p-2 rounded border border-amber-500/20">
                   <div className="flex-1 space-y-1.5">
                     <input
                       type="text"
@@ -318,7 +301,6 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
                       className="w-full bg-zinc-950 border border-zinc-800 text-xs rounded px-2 py-1.5 text-zinc-100 placeholder-zinc-500"
                     />
                     <div className="flex gap-1.5">
-                      {/* Toggle: Fixed vs Percentage */}
                       <button
                         type="button"
                         onClick={() => updateLinkedFlow(linked.id, "isPercentage", !linked.isPercentage)}
@@ -349,10 +331,7 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
                         />
                       )}
                       
-                      <Select 
-                        value={linked.category} 
-                        onValueChange={(v) => updateLinkedFlow(linked.id, "category", v)}
-                      >
+                      <Select value={linked.category} onValueChange={(v) => updateLinkedFlow(linked.id, "category", v)}>
                         <SelectTrigger className="w-20 bg-zinc-950 border-zinc-800 text-xs h-[30px] px-2">
                           <SelectValue />
                         </SelectTrigger>
@@ -362,16 +341,12 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
                       </Select>
                     </div>
                     {linked.isPercentage && linked.percentage && amount && (
-                      <p className="text-xs text-zinc-500">
+                      <p className="text-xs text-amber-400">
                         = CHF {Math.round(Math.abs(parseFloat(amount)) * parseFloat(linked.percentage) / 100).toLocaleString()}
                       </p>
                     )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => removeLinkedFlow(linked.id)}
-                    className="p-1 text-zinc-500 hover:text-rose-400"
-                  >
+                  <button type="button" onClick={() => removeLinkedFlow(linked.id)} className="p-1 text-zinc-500 hover:text-rose-400">
                     <X size={12} />
                   </button>
                 </div>
@@ -380,7 +355,6 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
           </div>
         )}
 
-        {/* Submit */}
         <button
           type="submit"
           disabled={loading || !canSubmit}

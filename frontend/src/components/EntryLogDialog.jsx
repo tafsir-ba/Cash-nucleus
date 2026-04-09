@@ -323,7 +323,7 @@ const FlowEntry = ({ flow, linkedFlows, entities, onEdit, onDelete, expanded, on
   );
 };
 
-export const EntryLogDialog = ({ open, onOpenChange, entities, onDataChange }) => {
+export const EntryLogDialog = ({ open, onOpenChange, entities, onDataChange, selectedEntityId }) => {
   const [flowsWithLinked, setFlowsWithLinked] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState("all");
@@ -335,7 +335,8 @@ export const EntryLogDialog = ({ open, onOpenChange, entities, onDataChange }) =
   const fetchFlows = async () => {
     setLoading(true);
     try {
-      const response = await axios.get(`${API}/cash-flows/with-linked`);
+      const params = selectedEntityId ? { entity_id: selectedEntityId } : {};
+      const response = await axios.get(`${API}/cash-flows/with-linked`, { params });
       setFlowsWithLinked(response.data);
     } catch (error) {
       console.error("Failed to fetch flows:", error);

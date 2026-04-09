@@ -13,6 +13,7 @@ import { PressurePanel } from "./components/PressurePanel";
 import { BankAccountsDialog } from "./components/BankAccountsDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { EntryLogDialog } from "./components/EntryLogDialog";
+import { EntityFilter } from "./components/EntityFilter";
 
 // Icons
 import { Gear, Bank, ListBullets } from "@phosphor-icons/react";
@@ -29,6 +30,7 @@ function App() {
   const [hasAccounts, setHasAccounts] = useState(false);
   const [hasFlows, setHasFlows] = useState(false);
   const [entities, setEntities] = useState([]);
+  const [selectedEntityId, setSelectedEntityId] = useState(null); // null = all entities
   
   // Dialog states
   const [bankAccountsOpen, setBankAccountsOpen] = useState(false);
@@ -46,9 +48,10 @@ function App() {
 
   const fetchProjection = useCallback(async () => {
     try {
-      const response = await axios.get(`${API}/projection`, {
-        params: { scenario }
-      });
+      const params = { scenario };
+      if (selectedEntityId) params.entity_id = selectedEntityId;
+      
+      const response = await axios.get(`${API}/projection`, { params });
       setProjection(response.data);
     } catch (error) {
       console.error("Failed to fetch projection:", error);
@@ -56,38 +59,43 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [scenario]);
+  }, [scenario, selectedEntityId]);
 
   const checkData = useCallback(async () => {
     try {
+      const params = selectedEntityId ? { entity_id: selectedEntityId } : {};
       const [accountsRes, flowsRes] = await Promise.all([
-        axios.get(`${API}/bank-accounts`),
-        axios.get(`${API}/cash-flows`)
+        axios.get(`${API}/bank-accounts`, { params }),
+        axios.get(`${API}/cash-flows`, { params })
       ]);
       setHasAccounts(accountsRes.data.length > 0);
       setHasFlows(flowsRes.data.length > 0);
     } catch (error) {
       console.error("Failed to check data:", error);
     }
-  }, []);
+  }, [selectedEntityId]);
 
   const fetchMonthDetails = useCallback(async (month) => {
     if (!month) return;
     try {
-      const response = await axios.get(`${API}/month-details/${month}`, {
-        params: { scenario }
-      });
+      const params = { scenario };
+      if (selectedEntityId) params.entity_id = selectedEntityId;
+      
+      const response = await axios.get(`${API}/month-details/${month}`, { params });
       setMonthDetails(response.data);
     } catch (error) {
       console.error("Failed to fetch month details:", error);
     }
-  }, [scenario]);
+  }, [scenario, selectedEntityId]);
 
   useEffect(() => {
     fetchEntities();
+  }, [fetchEntities]);
+
+  useEffect(() => {
     fetchProjection();
     checkData();
-  }, [fetchEntities, fetchProjection, checkData]);
+  }, [fetchProjection, checkData]);
 
   useEffect(() => {
     if (selectedMonth) {
@@ -100,18 +108,14 @@ function App() {
   const handleCashFlowAdded = () => {
     fetchProjection();
     checkData();
-    if (selectedMonth) {
-      fetchMonthDetails(selectedMonth);
-    }
+    if (selectedMonth) fetchMonthDetails(selectedMonth);
     toast.success("Cash flow added");
   };
 
   const handleDataChange = () => {
     fetchProjection();
     checkData();
-    if (selectedMonth) {
-      fetchMonthDetails(selectedMonth);
-    }
+    if (selectedMonth) fetchMonthDetails(selectedMonth);
   };
 
   const handleMonthSelect = (month) => {
@@ -136,18 +140,24 @@ function App() {
       <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-50">
         <div className="w-full max-w-[1600px] mx-auto px-4 md:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-50 font-heading">
-                Cash Pilot
-              </h1>
-              <p className="text-xs text-zinc-500 mt-0.5">12-Month Cash Projection</p>
+            <div className="flex items-center gap-4">
+              <div>
+                <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-50 font-heading">
+                  Cash Pilot
+                </h1>
+                <p className="text-xs text-zinc-500 mt-0.5">12-Month Cash Projection</p>
+              </div>
+              
+              {/* Entity Filter */}
+              <EntityFilter
+                entities={entities}
+                selectedId={selectedEntityId}
+                onChange={setSelectedEntityId}
+              />
             </div>
             
             <div className="flex items-center gap-3">
-              <ScenarioToggle 
-                value={scenario} 
-                onChange={setScenario}
-              />
+              <ScenarioToggle value={scenario} onChange={setScenario} />
               
               <div className="flex items-center gap-2 ml-4 border-l border-zinc-800 pl-4">
                 <button
@@ -191,7 +201,7 @@ function App() {
           />
         </section>
 
-        {/* Chart + Quick Add Row */}
+        {/* Chart + Quick Add */}
         <section className="main-content-grid mb-6">
           <div className="lg:col-span-8">
             <ProjectionChart 
@@ -210,7 +220,7 @@ function App() {
           </div>
         </section>
 
-        {/* Table + Pressure Panel Row */}
+        {/* Table + Pressure Panel */}
         <section className="main-content-grid">
           <div className="lg:col-span-8">
             <MonthlyTable 
@@ -248,6 +258,7 @@ function App() {
         onOpenChange={setEntryLogOpen}
         entities={entities}
         onDataChange={handleDataChange}
+        selectedEntityId={selectedEntityId}
       />
     </div>
   );
