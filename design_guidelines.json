@@ -1,0 +1,164 @@
+{
+  "theme": "dark",
+  "archetype": "Swiss & High-Contrast",
+  "archetype_description": "Objective, rigid, functional. The dashboard acts as a 'Command Center'. High contrast, monochrome base with strict color-coding for status (Green, Orange, Red). Minimalist and dense.",
+  "typography": {
+    "fonts": {
+      "heading": "Outfit",
+      "body": "Manrope",
+      "mono": "IBM Plex Mono"
+    },
+    "hierarchy": {
+      "h1": "text-2xl sm:text-3xl font-semibold tracking-tight text-zinc-50",
+      "h2": "text-sm sm:text-base font-medium tracking-[0.2em] uppercase text-zinc-400",
+      "h3": "text-lg font-medium tracking-tight text-zinc-100",
+      "kpi_value": "text-4xl sm:text-5xl font-light tracking-tighter text-zinc-50",
+      "body": "text-sm text-zinc-300",
+      "small": "text-xs text-zinc-500",
+      "table_header": "text-xs font-semibold uppercase tracking-wider text-zinc-500"
+    },
+    "rules": [
+      "No Inter for headings. Use Outfit for a geometric, technical feel.",
+      "Use IBM Plex Mono for financial numbers in tables to ensure tabular lining.",
+      "Never use bold for massive KPI numbers; use font-light with tight tracking."
+    ]
+  },
+  "colors": {
+    "background": {
+      "page": "bg-zinc-950",
+      "surface": "bg-zinc-900/40",
+      "surface_hover": "hover:bg-zinc-800/50",
+      "input": "bg-zinc-950"
+    },
+    "border": {
+      "default": "border-zinc-800",
+      "focus": "focus:border-zinc-600",
+      "divider": "divide-zinc-800"
+    },
+    "text": {
+      "primary": "text-zinc-50",
+      "secondary": "text-zinc-400",
+      "muted": "text-zinc-600",
+      "inverse": "text-zinc-950"
+    },
+    "status": {
+      "safe": {
+        "text": "text-emerald-400",
+        "bg": "bg-emerald-500/10",
+        "border": "border-emerald-500/20",
+        "fill": "#34d399"
+      },
+      "watch": {
+        "text": "text-amber-400",
+        "bg": "bg-amber-500/10",
+        "border": "border-amber-500/20",
+        "fill": "#fbbf24"
+      },
+      "danger": {
+        "text": "text-rose-400",
+        "bg": "bg-rose-500/10",
+        "border": "border-rose-500/20",
+        "fill": "#fb7185"
+      }
+    },
+    "rules": [
+      "Color is used exclusively for function (risk indication).",
+      "Do not use generic gradients. Use solid colors with low opacity for status backgrounds.",
+      "Ensure all text against colored backgrounds meets minimum 4.5:1 contrast."
+    ]
+  },
+  "layout": {
+    "grid_system": {
+      "type": "Control Room Grid",
+      "container": "w-full max-w-[1600px] mx-auto p-4 md:p-6 lg:p-8",
+      "columns": "grid-cols-1 md:grid-cols-4 lg:grid-cols-12",
+      "gap": "gap-4 md:gap-6"
+    },
+    "spacing_scale": {
+      "card_padding": "p-5 md:p-6",
+      "section_gap": "mb-8",
+      "element_gap": "gap-3"
+    },
+    "surface_strategy": {
+      "style": "Grid Borders (Technical Look)",
+      "radius": "rounded-none md:rounded-lg",
+      "shadow": "shadow-none",
+      "border": "border border-zinc-800",
+      "description": "Flat, dark surfaces with crisp 1px borders. No soft shadows. Elements should feel like precise instruments."
+    }
+  },
+  "components": {
+    "kpi_card": {
+      "structure": "Flex col, label top (overline), value middle (huge), meta bottom (small, colored by status).",
+      "styling": "bg-zinc-900/40 border border-zinc-800 p-6 flex flex-col gap-2 rounded-lg"
+    },
+    "main_chart": {
+      "library": "recharts",
+      "styling": "LineChart with distinct risk zones (ReferenceArea or gradient fills). Line color should be white. Use subtle CartesianGrid with stroke-dasharray. X-axis and Y-axis should use IBM Plex Mono."
+    },
+    "scenario_toggle": {
+      "structure": "Segmented control in header.",
+      "styling": "bg-zinc-900 border border-zinc-800 p-1 rounded-md flex gap-1",
+      "active_state": "bg-zinc-800 text-zinc-50 shadow-sm",
+      "inactive_state": "text-zinc-400 hover:text-zinc-200"
+    },
+    "data_table": {
+      "styling": "Dense table. border-collapse. th: uppercase, text-xs, text-zinc-500, font-semibold. td: text-sm text-zinc-300 font-mono. Row hover: bg-zinc-800/30. Use color sparingly for positive/negative cashflows."
+    },
+    "quick_add_form": {
+      "styling": "Compact vertical form. Inputs: bg-zinc-950 border-zinc-800 text-sm. Button: bg-zinc-100 text-zinc-900 hover:bg-white font-medium."
+    }
+  },
+  "motion": {
+    "interactions": {
+      "hover": "transition-colors duration-200 ease-in-out",
+      "active": "scale-[0.98]",
+      "focus": "focus:outline-none focus:ring-1 focus:ring-zinc-500 focus:border-zinc-500"
+    },
+    "data_loading": {
+      "style": "Staggered fade-in for table rows (framer-motion). Number counting animation for KPIs."
+    }
+  },
+  "icons": {
+    "library": "@phosphor-icons/react",
+    "weight": "regular",
+    "usage_examples": [
+      "TrendUp/TrendDown for cashflows",
+      "WarningCircle for Danger status",
+      "CheckCircle for Good status",
+      "Eye for Watch status"
+    ]
+  },
+  "media": {
+    "images": [],
+    "rules": [
+      "No images or lifestyle photography allowed. This is a pure data cockpit.",
+      "Avoid visual clutter."
+    ]
+  },
+  "accessibility": {
+    "contrast": "Strict adherence to APCA guidelines. High contrast text on dark background.",
+    "focus": "Visible focus rings on all interactive elements (forms, toggles, table rows).",
+    "motion": "Respect prefers-reduced-motion."
+  },
+  "testing": {
+    "attributes": [
+      "data-testid='kpi-cash-now'",
+      "data-testid='kpi-lowest-cash'",
+      "data-testid='scenario-toggle'",
+      "data-testid='chart-projection'",
+      "data-testid='table-monthly'",
+      "data-testid='quick-add-form'",
+      "data-testid='quick-add-submit'"
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Install required fonts: Outfit, Manrope, IBM Plex Mono via Google Fonts.",
+    "Install @phosphor-icons/react for icons.",
+    "Install recharts for the projection chart.",
+    "Ensure the layout fits on a single screen (no scroll if possible, or minimal scroll) to meet 'dashboard must load directly' constraint.",
+    "Build the bento grid: Top row = 4 KPIs. Middle row = Chart (span 8) + Quick Add (span 4). Bottom row = Table (span 8) + Pressure Panel (span 4).",
+    "The scenario toggle should instantly update the chart and table data. Use React state to manage this.",
+    "For the chart, implement horizontal colored zones representing Safe (Green), Watch (Orange), and Danger (Red) thresholds to visualize risk."
+  ]
+}
