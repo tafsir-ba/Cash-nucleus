@@ -26,6 +26,8 @@ function App() {
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [monthDetails, setMonthDetails] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [hasAccounts, setHasAccounts] = useState(false);
+  const [hasFlows, setHasFlows] = useState(false);
   
   // Dialog states
   const [bankAccountsOpen, setBankAccountsOpen] = useState(false);
@@ -46,6 +48,19 @@ function App() {
     }
   }, [scenario]);
 
+  const checkData = useCallback(async () => {
+    try {
+      const [accountsRes, flowsRes] = await Promise.all([
+        axios.get(`${API}/bank-accounts`),
+        axios.get(`${API}/cash-flows`)
+      ]);
+      setHasAccounts(accountsRes.data.length > 0);
+      setHasFlows(flowsRes.data.length > 0);
+    } catch (error) {
+      console.error("Failed to check data:", error);
+    }
+  }, []);
+
   const fetchMonthDetails = useCallback(async (month) => {
     if (!month) return;
     try {
@@ -60,7 +75,8 @@ function App() {
 
   useEffect(() => {
     fetchProjection();
-  }, [fetchProjection]);
+    checkData();
+  }, [fetchProjection, checkData]);
 
   useEffect(() => {
     if (selectedMonth) {
@@ -72,14 +88,16 @@ function App() {
 
   const handleCashFlowAdded = () => {
     fetchProjection();
+    checkData();
     if (selectedMonth) {
       fetchMonthDetails(selectedMonth);
     }
-    toast.success("Cash flow added successfully");
+    toast.success("Cash flow added");
   };
 
   const handleDataChange = () => {
     fetchProjection();
+    checkData();
     if (selectedMonth) {
       fetchMonthDetails(selectedMonth);
     }
@@ -88,6 +106,8 @@ function App() {
   const handleMonthSelect = (month) => {
     setSelectedMonth(month === selectedMonth ? null : month);
   };
+
+  const hasData = hasAccounts || hasFlows;
 
   if (loading) {
     return (
@@ -153,7 +173,11 @@ function App() {
       <main className="w-full max-w-[1600px] mx-auto px-4 md:px-6 lg:px-8 py-6">
         {/* KPI Cards */}
         <section className="mb-6">
-          <KPICards projection={projection} />
+          <KPICards 
+            projection={projection} 
+            hasAccounts={hasAccounts}
+            onAddAccount={() => setBankAccountsOpen(true)}
+          />
         </section>
 
         {/* Chart + Quick Add Row */}
@@ -163,6 +187,7 @@ function App() {
               projection={projection} 
               selectedMonth={selectedMonth}
               onMonthSelect={handleMonthSelect}
+              hasData={hasData}
             />
           </div>
           <div className="lg:col-span-4">
@@ -177,6 +202,7 @@ function App() {
               months={projection?.months || []}
               selectedMonth={selectedMonth}
               onMonthSelect={handleMonthSelect}
+              hasData={hasData}
             />
           </div>
           <div className="lg:col-span-4">

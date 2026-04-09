@@ -1,4 +1,4 @@
-import { TrendDown, ArrowsClockwise, Lightning } from "@phosphor-icons/react";
+import { TrendDown, ArrowsClockwise, Crosshair } from "@phosphor-icons/react";
 
 const formatCurrency = (amount) => {
   return new Intl.NumberFormat('de-CH', {
@@ -10,18 +10,25 @@ const formatCurrency = (amount) => {
 };
 
 export const PressurePanel = ({ monthDetails, selectedMonth }) => {
+  // Empty state - no month selected
   if (!selectedMonth || !monthDetails) {
     return (
       <div className="pressure-panel h-full flex flex-col">
         <div className="p-4 border-b border-zinc-800">
           <h2 className="text-sm font-medium tracking-[0.15em] uppercase text-zinc-400 font-heading">
-            Pressure Analysis
+            Month Analysis
           </h2>
         </div>
         <div className="flex-1 flex items-center justify-center p-6">
-          <p className="text-zinc-600 text-sm text-center">
-            Select a month from the chart or table to see detailed pressure analysis
-          </p>
+          <div className="text-center">
+            <Crosshair size={32} className="text-zinc-700 mx-auto mb-3" />
+            <p className="text-zinc-500 text-sm">
+              Select a month to see main cash drivers
+            </p>
+            <p className="text-zinc-600 text-xs mt-1">
+              Click on chart or table row
+            </p>
+          </div>
         </div>
       </div>
     );
@@ -35,15 +42,22 @@ export const PressurePanel = ({ monthDetails, selectedMonth }) => {
     .filter(f => f.amount > 0)
     .reduce((sum, f) => sum + f.amount, 0);
 
+  // Format month for display
+  const [year, month] = selectedMonth.split('-');
+  const monthLabel = new Date(parseInt(year), parseInt(month) - 1).toLocaleDateString('en-GB', { 
+    month: 'long', 
+    year: 'numeric' 
+  });
+
   return (
     <div className="pressure-panel h-full" data-testid="pressure-panel">
       <div className="p-4 border-b border-zinc-800">
         <h2 className="text-sm font-medium tracking-[0.15em] uppercase text-zinc-400 font-heading">
-          {selectedMonth} Analysis
+          {monthLabel}
         </h2>
       </div>
       
-      <div className="p-4 space-y-6 overflow-y-auto max-h-[360px]">
+      <div className="p-4 space-y-5 overflow-y-auto max-h-[360px]">
         {/* Summary */}
         <div className="grid grid-cols-2 gap-3">
           <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-md p-3">
@@ -56,13 +70,13 @@ export const PressurePanel = ({ monthDetails, selectedMonth }) => {
           </div>
         </div>
 
-        {/* Top Outflows */}
+        {/* Top Outflows - THE KEY INFO */}
         {top_outflows && top_outflows.length > 0 && (
           <div>
             <div className="flex items-center gap-2 mb-3">
               <TrendDown size={16} className="text-rose-400" />
               <h3 className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                Top Outflows
+                Top 3 Outflows
               </h3>
             </div>
             <div className="space-y-2">
@@ -71,11 +85,11 @@ export const PressurePanel = ({ monthDetails, selectedMonth }) => {
                   key={index}
                   className="flex items-center justify-between py-2 px-3 bg-zinc-900/50 rounded-md border border-zinc-800/50"
                 >
-                  <div>
-                    <p className="text-sm text-zinc-200">{flow.label}</p>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-zinc-200 truncate">{flow.label}</p>
                     <p className="text-xs text-zinc-500">{flow.category}</p>
                   </div>
-                  <p className="text-sm font-mono text-rose-400">
+                  <p className="text-sm font-mono text-rose-400 ml-3">
                     -{formatCurrency(flow.amount)}
                   </p>
                 </div>
@@ -90,20 +104,20 @@ export const PressurePanel = ({ monthDetails, selectedMonth }) => {
             <div className="flex items-center gap-2 mb-3">
               <ArrowsClockwise size={16} className="text-amber-400" />
               <h3 className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                Recurring Burdens
+                Recurring Costs
               </h3>
             </div>
             <div className="space-y-2">
-              {recurring_burdens.map((flow, index) => (
+              {recurring_burdens.slice(0, 3).map((flow, index) => (
                 <div 
                   key={index}
                   className="flex items-center justify-between py-2 px-3 bg-zinc-900/50 rounded-md border border-zinc-800/50"
                 >
-                  <div>
-                    <p className="text-sm text-zinc-200">{flow.label}</p>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-zinc-200 truncate">{flow.label}</p>
                     <p className="text-xs text-zinc-500">{flow.category}</p>
                   </div>
-                  <p className={`text-sm font-mono ${flow.amount < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                  <p className={`text-sm font-mono ml-3 ${flow.amount < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
                     {flow.amount < 0 ? '-' : '+'}{formatCurrency(flow.amount)}
                   </p>
                 </div>
@@ -112,14 +126,11 @@ export const PressurePanel = ({ monthDetails, selectedMonth }) => {
           </div>
         )}
 
-        {/* Empty state */}
+        {/* Empty month state */}
         {(!top_outflows || top_outflows.length === 0) && 
          (!recurring_burdens || recurring_burdens.length === 0) && (
-          <div className="flex items-center justify-center py-8">
-            <div className="text-center">
-              <Lightning size={32} className="text-zinc-700 mx-auto mb-2" />
-              <p className="text-zinc-600 text-sm">No cash flows in this month</p>
-            </div>
+          <div className="flex items-center justify-center py-6">
+            <p className="text-zinc-600 text-sm">No cash flows in this month</p>
           </div>
         )}
       </div>

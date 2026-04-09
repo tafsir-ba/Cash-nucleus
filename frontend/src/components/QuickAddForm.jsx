@@ -9,7 +9,6 @@ import {
   SelectValue 
 } from "../components/ui/select";
 import { Label } from "../components/ui/label";
-import { Switch } from "../components/ui/switch";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -38,62 +37,53 @@ const getCurrentMonth = () => {
 export const QuickAddForm = ({ onSuccess }) => {
   const [loading, setLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [isInflow, setIsInflow] = useState(false);
   
-  const [formData, setFormData] = useState({
-    label: "",
-    amount: "",
-    date: getCurrentMonth(),
-    certainty: "Materialized",
-    category: "Expense",
-    recurrence: "none",
-    recurrence_count: "",
-    entity: "",
-  });
+  const [label, setLabel] = useState("");
+  const [amount, setAmount] = useState("");
+  const [date, setDate] = useState(getCurrentMonth());
+  const [certainty, setCertainty] = useState("Materialized");
+  const [category, setCategory] = useState("Expense");
+  const [recurrence, setRecurrence] = useState("none");
+  const [recurrenceCount, setRecurrenceCount] = useState("");
+  const [entity, setEntity] = useState("");
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (!formData.label || !formData.amount) {
+    if (!label.trim() || !amount) {
       return;
     }
 
     setLoading(true);
     try {
-      // Convert month to first day of month for API
-      const dateStr = `${formData.date}-01`;
-      
-      // Amount is negative for outflows, positive for inflows
-      const amount = parseFloat(formData.amount) * (isInflow ? 1 : -1);
+      const dateStr = `${date}-01`;
+      const numAmount = parseFloat(amount);
       
       const payload = {
-        label: formData.label,
-        amount,
+        label: label.trim(),
+        amount: numAmount,
         date: dateStr,
-        certainty: formData.certainty,
-        category: formData.category,
-        recurrence: formData.recurrence,
-        entity: formData.entity,
+        certainty,
+        category,
+        recurrence,
+        entity: entity.trim(),
       };
 
-      if (formData.recurrence === "monthly" && formData.recurrence_count) {
-        payload.recurrence_count = parseInt(formData.recurrence_count);
+      if (recurrence === "monthly" && recurrenceCount) {
+        payload.recurrence_count = parseInt(recurrenceCount);
       }
 
       await axios.post(`${API}/cash-flows`, payload);
       
-      // Reset form
-      setFormData({
-        label: "",
-        amount: "",
-        date: getCurrentMonth(),
-        certainty: "Materialized",
-        category: "Expense",
-        recurrence: "none",
-        recurrence_count: "",
-        entity: "",
-      });
-      setIsInflow(false);
+      // Reset
+      setLabel("");
+      setAmount("");
+      setDate(getCurrentMonth());
+      setCertainty("Materialized");
+      setCategory("Expense");
+      setRecurrence("none");
+      setRecurrenceCount("");
+      setEntity("");
       
       onSuccess?.();
     } catch (error) {
@@ -112,67 +102,56 @@ export const QuickAddForm = ({ onSuccess }) => {
       </div>
       
       <form onSubmit={handleSubmit} className="p-4 space-y-4">
-        {/* Label */}
+        {/* Description */}
         <div>
-          <Label className="text-xs text-zinc-500 mb-1.5 block">Description</Label>
+          <Label htmlFor="desc-input" className="text-xs text-zinc-500 mb-1.5 block">Description</Label>
           <input
+            id="desc-input"
             type="text"
+            autoComplete="off"
             placeholder="e.g., Office rent"
-            value={formData.label}
-            onChange={(e) => setFormData({ ...formData, label: e.target.value })}
-            className="quick-input"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2.5 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-600 focus:border-zinc-600"
             data-testid="quick-add-label"
           />
         </div>
 
-        {/* Amount + Type */}
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label className="text-xs text-zinc-500 mb-1.5 block">Amount (CHF)</Label>
-            <input
-              type="number"
-              placeholder="0"
-              min="0"
-              step="0.01"
-              value={formData.amount}
-              onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-              className="quick-input font-mono"
-              data-testid="quick-add-amount"
-            />
-          </div>
-          <div>
-            <Label className="text-xs text-zinc-500 mb-1.5 block">Type</Label>
-            <div className="flex items-center gap-3 h-[38px]">
-              <span className={`text-sm ${!isInflow ? 'text-rose-400' : 'text-zinc-500'}`}>Out</span>
-              <Switch
-                checked={isInflow}
-                onCheckedChange={setIsInflow}
-                data-testid="quick-add-type-toggle"
-              />
-              <span className={`text-sm ${isInflow ? 'text-emerald-400' : 'text-zinc-500'}`}>In</span>
-            </div>
-          </div>
+        {/* Amount - use sign for in/out */}
+        <div>
+          <Label htmlFor="amount-input" className="text-xs text-zinc-500 mb-1.5 block">
+            Amount (CHF) <span className="text-zinc-600">— use minus for outflows</span>
+          </Label>
+          <input
+            id="amount-input"
+            type="number"
+            autoComplete="off"
+            placeholder="-5000"
+            step="0.01"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2.5 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-600 focus:border-zinc-600 font-mono"
+            data-testid="quick-add-amount"
+          />
         </div>
 
         {/* Month + Certainty */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <Label className="text-xs text-zinc-500 mb-1.5 block">Month</Label>
+            <Label htmlFor="month-input" className="text-xs text-zinc-500 mb-1.5 block">Month</Label>
             <input
+              id="month-input"
               type="month"
-              value={formData.date}
-              onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-              className="quick-input"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2.5 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-600 focus:border-zinc-600"
               data-testid="quick-add-date"
             />
           </div>
           <div>
             <Label className="text-xs text-zinc-500 mb-1.5 block">Certainty</Label>
-            <Select 
-              value={formData.certainty} 
-              onValueChange={(v) => setFormData({ ...formData, certainty: v })}
-            >
-              <SelectTrigger className="quick-input" data-testid="quick-add-certainty">
+            <Select value={certainty} onValueChange={setCertainty}>
+              <SelectTrigger className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2.5 text-zinc-100 h-[42px]" data-testid="quick-add-certainty">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -205,11 +184,8 @@ export const QuickAddForm = ({ onSuccess }) => {
             {/* Category */}
             <div>
               <Label className="text-xs text-zinc-500 mb-1.5 block">Category</Label>
-              <Select 
-                value={formData.category} 
-                onValueChange={(v) => setFormData({ ...formData, category: v })}
-              >
-                <SelectTrigger className="quick-input" data-testid="quick-add-category">
+              <Select value={category} onValueChange={setCategory}>
+                <SelectTrigger className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2.5 text-zinc-100 h-[42px]" data-testid="quick-add-category">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -226,11 +202,8 @@ export const QuickAddForm = ({ onSuccess }) => {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label className="text-xs text-zinc-500 mb-1.5 block">Recurrence</Label>
-                <Select 
-                  value={formData.recurrence} 
-                  onValueChange={(v) => setFormData({ ...formData, recurrence: v })}
-                >
-                  <SelectTrigger className="quick-input" data-testid="quick-add-recurrence">
+                <Select value={recurrence} onValueChange={setRecurrence}>
+                  <SelectTrigger className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2.5 text-zinc-100 h-[42px]" data-testid="quick-add-recurrence">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -239,7 +212,7 @@ export const QuickAddForm = ({ onSuccess }) => {
                   </SelectContent>
                 </Select>
               </div>
-              {formData.recurrence === "monthly" && (
+              {recurrence === "monthly" && (
                 <div>
                   <Label className="text-xs text-zinc-500 mb-1.5 block"># of months</Label>
                   <input
@@ -247,9 +220,9 @@ export const QuickAddForm = ({ onSuccess }) => {
                     placeholder="12"
                     min="1"
                     max="120"
-                    value={formData.recurrence_count}
-                    onChange={(e) => setFormData({ ...formData, recurrence_count: e.target.value })}
-                    className="quick-input font-mono"
+                    value={recurrenceCount}
+                    onChange={(e) => setRecurrenceCount(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2.5 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-600 focus:border-zinc-600 font-mono"
                     data-testid="quick-add-recurrence-count"
                   />
                 </div>
@@ -262,9 +235,9 @@ export const QuickAddForm = ({ onSuccess }) => {
               <input
                 type="text"
                 placeholder="e.g., Company A"
-                value={formData.entity}
-                onChange={(e) => setFormData({ ...formData, entity: e.target.value })}
-                className="quick-input"
+                value={entity}
+                onChange={(e) => setEntity(e.target.value)}
+                className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2.5 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-600 focus:border-zinc-600"
                 data-testid="quick-add-entity"
               />
             </div>
@@ -274,7 +247,7 @@ export const QuickAddForm = ({ onSuccess }) => {
         {/* Submit */}
         <button
           type="submit"
-          disabled={loading || !formData.label || !formData.amount}
+          disabled={loading || !label.trim() || !amount}
           className="btn-primary w-full flex items-center justify-center gap-2"
           data-testid="quick-add-submit"
         >
