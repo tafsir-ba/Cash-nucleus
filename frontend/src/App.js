@@ -11,6 +11,7 @@ import { MonthlyTable } from "./components/MonthlyTable";
 import { QuickAddForm } from "./components/QuickAddForm";
 import { MonthlyPLPanel } from "./components/MonthlyPLPanel";
 import { CashFlowTable } from "./components/CashFlowTable";
+import { EntryLogPage } from "./components/EntryLogPage";
 import { BankAccountsDialog } from "./components/BankAccountsDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { EntryLogDialog } from "./components/EntryLogDialog";
@@ -18,7 +19,7 @@ import { EntityFilter } from "./components/EntityFilter";
 import { HorizonSelector } from "./components/HorizonSelector";
 
 // Icons
-import { Gear, Bank, ListBullets } from "@phosphor-icons/react";
+import { Gear, Bank, ListBullets, ArrowCounterClockwise } from "@phosphor-icons/react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -41,8 +42,30 @@ function App() {
   const [entryLogOpen, setEntryLogOpen] = useState(false);
   
   // Tab state + flows for table
-  const [activeTab, setActiveTab] = useState("chart"); // "chart" | "table"
+  const [activeTab, setActiveTab] = useState("chart"); // "chart" | "table" | "entries"
   const [allFlows, setAllFlows] = useState([]);
+  
+  // Undo state
+  const [undoInfo, setUndoInfo] = useState(null);
+  
+  const checkUndo = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API}/undo/peek`);
+      setUndoInfo(res.data.has_undo ? res.data : null);
+    } catch { setUndoInfo(null); }
+  }, []);
+  
+  const handleUndo = async () => {
+    try {
+      const res = await axios.post(`${API}/undo`);
+      if (res.data.status === "undone") {
+        toast.success(`Undone: ${res.data.description}`);
+        handleDataChange();
+      }
+    } catch (err) {
+      toast.error("Undo failed");
+    }
+  };
 
   const fetchEntities = useCallback(async () => {
     try {
@@ -103,7 +126,8 @@ function App() {
   useEffect(() => {
     fetchProjection();
     checkData();
-  }, [fetchProjection, checkData]);
+    checkUndo();
+  }, [fetchProjection, checkData, checkUndo]);
 
   useEffect(() => {
     if (selectedMonth) {
@@ -116,6 +140,7 @@ function App() {
   const handleCashFlowAdded = () => {
     fetchProjection();
     checkData();
+    checkUndo();
     if (selectedMonth) fetchMonthDetails(selectedMonth);
     toast.success("Added");
   };
@@ -123,6 +148,7 @@ function App() {
   const handleDataChange = () => {
     fetchProjection();
     checkData();
+    checkUndo();
     if (selectedMonth) fetchMonthDetails(selectedMonth);
   };
 
@@ -163,6 +189,16 @@ function App() {
               <ScenarioToggle value={scenario} onChange={setScenario} />
               
               <div className="flex items-center gap-2 ml-4 border-l border-zinc-800 pl-4">
+                {undoInfo && (
+                  <button
+                    onClick={handleUndo}
+                    className="p-2 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 rounded-md transition-colors"
+                    title={`Undo: ${undoInfo.description}`}
+                    data-testid="undo-btn"
+                  >
+                    <ArrowCounterClockwise size={20} />
+                  </button>
+                )}
                 <button
                   onClick={() => setEntryLogOpen(true)}
                   className="p-2 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md transition-colors"
@@ -224,6 +260,15 @@ function App() {
           >
             Cash Flow Table
           </button>
+          <button
+            onClick={() => setActiveTab("entries")}
+            className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+              activeTab === "entries" ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
+            }`}
+            data-testid="tab-entries"
+          >
+            Entries
+          </button>
         </div>
 
         {activeTab === "chart" ? (
@@ -267,16 +312,16 @@ function App() {
               </div>
             </section>
           </>
-        ) : (
+        ) : activeTab === "table" ? (
           <>
             {/* Cash Flow Table (Matrix View) */}
             <section className="mb-6">
               <CashFlowTable
-                projection={projection}
-                flows={allFlows}
                 scenario={scenario}
                 selectedEntityId={selectedEntityId}
+                horizon={horizon}
                 onDataChange={handleDataChange}
+                refreshKey={projection?.cash_now}
               />
             </section>
 
@@ -299,6 +344,14 @@ function App() {
               </div>
             </section>
           </>
+        ) : (
+          /* Full Page Entry Log */
+          <section>
+            <EntryLogPage
+              entities={entities}
+              onDataChange={handleDataChange}
+            />
+          </section>
         )}
       </main>
 

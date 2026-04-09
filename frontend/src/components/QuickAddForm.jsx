@@ -38,18 +38,20 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
   const [loading, setLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   
-  // Core fields ONLY (visible by default)
+  // Core fields (visible by default)
   const [label, setLabel] = useState("");
   const [amount, setAmount] = useState("");
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [certainty, setCertainty] = useState("Materialized");
   const [entityId, setEntityId] = useState(getLastEntity());
   
-  // Advanced (hidden by default)
-  const [category, setCategory] = useState("Expense");
+  // Recurrence (visible in main area)
   const [recurrence, setRecurrence] = useState("none");
   const [recurrenceMode, setRecurrenceMode] = useState("repeat");
   const [recurrenceCount, setRecurrenceCount] = useState("");
+  
+  // Advanced (hidden under "More")
+  const [category, setCategory] = useState("Expense");
   const [linkedFlows, setLinkedFlows] = useState([]);
 
   useEffect(() => {
@@ -64,15 +66,14 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
     if (entityId) setLastEntity(entityId);
   }, [entityId]);
 
-  // Auto-generate linked flow description when using percentage
   const addLinkedFlow = () => {
     setLinkedFlows([...linkedFlows, {
       id: Date.now(),
       label: "",
       amount: "",
       category: "COGS",
-      isPercentage: true, // Default to percentage
-      percentage: "40", // Common default
+      isPercentage: true,
+      percentage: "40",
     }]);
   };
 
@@ -82,7 +83,6 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
     setLinkedFlows(linkedFlows.map(f => {
       if (f.id !== id) return f;
       const updated = { ...f, [field]: value };
-      // Auto-generate description for percentage flows
       if (field === 'percentage' && updated.isPercentage && !updated.label) {
         updated.label = `COGS (${value}%)`;
       }
@@ -154,6 +154,9 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
   };
 
   const canSubmit = label.trim() && amount && entityId;
+  const isRecurring = recurrence !== "none";
+  const isDistribute = recurrenceMode === "distribute";
+  const hasDistributePreview = isDistribute && amount && recurrenceCount && parseInt(recurrenceCount) > 0;
 
   return (
     <div className="surface-card h-full" data-testid="quick-add-form">
@@ -164,7 +167,7 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
       </div>
       
       <form onSubmit={handleSubmit} className="p-4 space-y-3">
-        {/* Entity - minimal */}
+        {/* Entity */}
         <EntitySelector
           value={entityId}
           onChange={setEntityId}
@@ -189,7 +192,9 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
         {/* Amount + Date */}
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <Label className="text-xs text-zinc-500 mb-1 block">Amount</Label>
+            <Label className="text-xs text-zinc-500 mb-1 block">
+              {isDistribute ? "Total Amount" : "Amount"}
+            </Label>
             <input
               type="number"
               autoComplete="off"
@@ -226,20 +231,90 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
           </div>
         </div>
 
-        {/* Certainty */}
-        <div>
-          <Label className="text-xs text-zinc-500 mb-1 block">Certainty</Label>
-          <Select value={certainty} onValueChange={setCertainty}>
-            <SelectTrigger className="w-full bg-zinc-950 border-zinc-800 text-sm h-[38px]" data-testid="quick-add-certainty">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {certainties.map(c => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
+        {/* Certainty + Recurrence - ALWAYS VISIBLE */}
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <Label className="text-xs text-zinc-500 mb-1 block">Certainty</Label>
+            <Select value={certainty} onValueChange={setCertainty}>
+              <SelectTrigger className="w-full bg-zinc-950 border-zinc-800 text-sm h-[38px]" data-testid="quick-add-certainty">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {certainties.map(c => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="text-xs text-zinc-500 mb-1 block">Recurrence</Label>
+            <Select value={recurrence} onValueChange={setRecurrence}>
+              <SelectTrigger className="w-full bg-zinc-950 border-zinc-800 text-sm h-[38px]" data-testid="quick-add-recurrence">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {recurrenceOptions.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
-        {/* Advanced toggle */}
+        {/* Recurrence Mode + Count — ALWAYS visible when recurring (never hidden) */}
+        {isRecurring && (
+          <div className="space-y-2 p-2.5 rounded-md bg-zinc-900/50 border border-zinc-800/50" data-testid="recurrence-settings">
+            {/* Mode Toggle */}
+            <div className="flex gap-1 bg-zinc-950 border border-zinc-800 rounded-md p-0.5" data-testid="recurrence-mode-toggle">
+              <button
+                type="button"
+                onClick={() => setRecurrenceMode("repeat")}
+                className={`flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors ${
+                  !isDistribute ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+                data-testid="mode-repeat"
+              >
+                Repeat full amount
+              </button>
+              <button
+                type="button"
+                onClick={() => setRecurrenceMode("distribute")}
+                className={`flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors ${
+                  isDistribute ? 'bg-amber-500/20 text-amber-400' : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+                data-testid="mode-distribute"
+              >
+                Distribute total
+              </button>
+            </div>
+
+            {/* Period count */}
+            <div>
+              <Label className="text-xs text-zinc-500 mb-1 block">
+                {isDistribute ? "# periods (required)" : "# occurrences"}
+              </Label>
+              <input
+                type="number"
+                placeholder={recurrence === "quarterly" ? "4" : "12"}
+                min="1"
+                value={recurrenceCount}
+                onChange={(e) => setRecurrenceCount(e.target.value)}
+                className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 placeholder-zinc-500 font-mono"
+                data-testid="recurrence-count"
+              />
+            </div>
+
+            {/* Per-period preview — always shown when distribute + valid inputs */}
+            {hasDistributePreview && (
+              <div className="bg-amber-500/10 border border-amber-500/20 rounded-md p-2.5" data-testid="distribute-preview">
+                <p className="text-sm font-mono text-amber-300 font-medium">
+                  ≈ CHF {Math.abs(Math.round(parseFloat(amount) / parseInt(recurrenceCount) * 100) / 100).toLocaleString('de-CH', { minimumFractionDigits: 2 })} / {recurrence === "monthly" ? "month" : "quarter"}
+                </p>
+                <p className="text-xs text-amber-400/70 mt-0.5">
+                  CHF {Math.abs(parseFloat(amount)).toLocaleString('de-CH')} total ÷ {recurrenceCount} periods
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Advanced toggle (category + linked flows only) */}
         <button
           type="button"
           onClick={() => setShowAdvanced(!showAdvanced)}
@@ -249,95 +324,22 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
           {showAdvanced ? 'Less' : 'More'}
         </button>
 
-        {/* Advanced - ALL hidden by default */}
         {showAdvanced && (
           <div className="space-y-3 pt-2 border-t border-zinc-800/50">
-            {/* Category + Recurrence */}
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <Label className="text-xs text-zinc-500 mb-1 block">Category</Label>
-                <Select value={category} onValueChange={setCategory}>
-                  <SelectTrigger className="bg-zinc-950 border-zinc-800 text-sm h-[38px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {categories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-xs text-zinc-500 mb-1 block">Recurrence</Label>
-                <Select value={recurrence} onValueChange={setRecurrence}>
-                  <SelectTrigger className="bg-zinc-950 border-zinc-800 text-sm h-[38px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {recurrenceOptions.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
+            {/* Category */}
+            <div>
+              <Label className="text-xs text-zinc-500 mb-1 block">Category</Label>
+              <Select value={category} onValueChange={setCategory}>
+                <SelectTrigger className="bg-zinc-950 border-zinc-800 text-sm h-[38px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {categories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
 
-            {recurrence !== "none" && (
-              <div className="space-y-2">
-                {/* Recurrence Mode Toggle */}
-                <div>
-                  <Label className="text-xs text-zinc-500 mb-1 block">Mode</Label>
-                  <div className="flex gap-1 bg-zinc-950 border border-zinc-800 rounded-md p-0.5" data-testid="recurrence-mode-toggle">
-                    <button
-                      type="button"
-                      onClick={() => setRecurrenceMode("repeat")}
-                      className={`flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors ${
-                        recurrenceMode === "repeat" ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
-                      }`}
-                      data-testid="mode-repeat"
-                    >
-                      Repeat
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRecurrenceMode("distribute")}
-                      className={`flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors ${
-                        recurrenceMode === "distribute" ? 'bg-amber-500/20 text-amber-400' : 'text-zinc-500 hover:text-zinc-300'
-                      }`}
-                      data-testid="mode-distribute"
-                    >
-                      Distribute
-                    </button>
-                  </div>
-                </div>
-
-                {/* Period count */}
-                <div>
-                  <Label className="text-xs text-zinc-500 mb-1 block">
-                    {recurrenceMode === "distribute" ? "# of periods (required)" : "# of occurrences"}
-                  </Label>
-                  <input
-                    type="number"
-                    placeholder={recurrence === "quarterly" ? "4" : "12"}
-                    min="1"
-                    value={recurrenceCount}
-                    onChange={(e) => setRecurrenceCount(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 placeholder-zinc-500 font-mono"
-                    data-testid="recurrence-count"
-                  />
-                </div>
-
-                {/* Per-period preview for distribute */}
-                {recurrenceMode === "distribute" && amount && recurrenceCount && parseInt(recurrenceCount) > 0 && (
-                  <div className="bg-amber-500/10 border border-amber-500/20 rounded-md p-2" data-testid="distribute-preview">
-                    <p className="text-xs text-amber-400">
-                      CHF {Math.abs(parseFloat(amount)).toLocaleString('de-CH')} total ÷ {recurrenceCount} periods
-                    </p>
-                    <p className="text-sm font-mono text-amber-300 mt-0.5">
-                      = CHF {Math.abs(Math.round(parseFloat(amount) / parseInt(recurrenceCount) * 100) / 100).toLocaleString('de-CH', { minimumFractionDigits: 2 })} / {recurrence === "monthly" ? "month" : "quarter"}
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Linked Flows - improved UX */}
+            {/* Linked Flows */}
             <div className="pt-2 border-t border-zinc-800/50">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs text-zinc-400 flex items-center gap-1.5">
@@ -406,8 +408,8 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
                   
                   {linked.isPercentage && linked.percentage && amount && (
                     <p className="text-xs text-amber-400 mt-1.5">
-                      {recurrenceMode === "distribute" && recurrenceCount && parseInt(recurrenceCount) > 0
-                        ? `= CHF ${Math.round(Math.abs(parseFloat(amount) / parseInt(recurrenceCount)) * parseFloat(linked.percentage) / 100).toLocaleString()}/period`
+                      {isDistribute && recurrenceCount && parseInt(recurrenceCount) > 0
+                        ? `≈ CHF ${Math.round(Math.abs(parseFloat(amount) / parseInt(recurrenceCount)) * parseFloat(linked.percentage) / 100).toLocaleString()}/period`
                         : `= CHF ${Math.round(Math.abs(parseFloat(amount)) * parseFloat(linked.percentage) / 100).toLocaleString()}`
                       }
                     </p>

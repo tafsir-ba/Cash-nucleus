@@ -1,0 +1,106 @@
+{
+  "summary": "Completed comprehensive testing of Cash Piloting Dashboard Phase 3 features. All 21 backend tests passed (100%). Frontend UI testing verified all 6 Phase 3 features: Matrix endpoint matching projection, Actuals & Variance system, Undo system, Entry Log tab, Recurrence toggle with Repeat/Distribute, and Matrix UX.",
+  
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "console_warnings": [
+      {
+        "component": "ProjectionChart",
+        "issue": "Chart width/height warnings (-1) during tab switching - non-blocking",
+        "priority": "LOW"
+      }
+    ]
+  },
+  
+  "test_report_links": [
+    "/app/backend/tests/test_phase3_features.py",
+    "/app/test_reports/pytest/pytest_results_phase3.xml"
+  ],
+  
+  "action_items": [],
+  
+  "critical_code_review_comments": [],
+  
+  "updated_files": [
+    "/app/backend/tests/test_phase3_features.py"
+  ],
+  
+  "success_rate": {
+    "backend": "100% (21/21 tests passed)",
+    "frontend": "100%"
+  },
+  
+  "seed_data_creation": "None - used existing test data with cleanup fixtures",
+  
+  "retest_needed": false,
+  
+  "should_main_agent_self_test": true,
+  
+  "context_for_next_testing_agent": "Phase 3 features fully tested and working: 1) Matrix endpoint (/api/projection/matrix) returns revenue_rows, expense_rows, net_per_month, months - net values EXACTLY match /api/projection months.net values. 2) Actuals & Variance system - PUT /api/flow-occurrences with actual_amount and variance_action (carry_forward creates carryover, write_off does not). DELETE /api/flow-occurrences clears actual. Projection uses actual_amount when recorded. 3) Undo system - POST /api/undo reverses last action, GET /api/undo/peek shows has_undo and description. Works for create, edit, delete, batch_create. 4) Entry Log is now a full-page tab with search, category filter, type filter, parent/child grouping. 5) Quick Add shows Recurrence dropdown in main form, Repeat/Distribute toggle visible when recurrence selected, per-period preview shown for distribute mode. 6) Matrix UX - row labels clickable (open edit dialog), row/column hover highlighting, frozen first column.",
+  
+  "passed_tests": [
+    "Backend: GET /api/projection/matrix returns revenue_rows, expense_rows, net_per_month, months",
+    "Backend: Matrix net_per_month values EXACTLY match GET /api/projection months.net values",
+    "Backend: Matrix endpoint respects entity_id filter",
+    "Backend: Matrix endpoint respects horizon parameter (12, 24, 36)",
+    "Backend: PUT /api/flow-occurrences with actual_amount and variance_action=carry_forward creates carryover",
+    "Backend: PUT /api/flow-occurrences with actual_amount and variance_action=write_off does NOT create carryover",
+    "Backend: DELETE /api/flow-occurrences clears actual and removes carryover",
+    "Backend: GET /api/month-details returns all_flows with planned_amount, actual_amount, variance_action",
+    "Backend: Projection engine uses actual_amount when recorded (replaces planned in projection)",
+    "Backend: GET /api/undo/peek returns has_undo and description of last action",
+    "Backend: Creating a flow pushes to undo stack, undo deletes it",
+    "Backend: Editing a flow pushes to undo stack, undo restores previous values",
+    "Backend: Deleting a flow pushes to undo stack, undo restores it",
+    "Backend: Batch create pushes one undo entry, undo removes all created flows (parent+children)",
+    "Backend: POST /api/undo when stack is empty returns nothing_to_undo",
+    "Backend: GET /api/cash-flows/with-linked returns parent/child grouping",
+    "Backend: Entry log shows parent/child grouping with linked flow indicators",
+    "Frontend: Projection tab has KPIs, chart, quick add, monthly breakdown, P&L panel",
+    "Frontend: Cash Flow Table tab shows matrix derived from projection engine",
+    "Frontend: Entries tab shows full-page entry log with search, category filter, type filter",
+    "Frontend: Entry log shows parent/child grouping with linked flow indicators",
+    "Frontend: Entry log edit/delete actions work",
+    "Frontend: Quick Add shows Recurrence dropdown in main form (not hidden under More)",
+    "Frontend: When recurrence is set, Repeat/Distribute toggle visible with per-period preview",
+    "Frontend: Undo button visible in header when actions exist",
+    "Frontend: Matrix row labels are clickable (open edit dialog)",
+    "Frontend: Matrix has row and column hover highlighting",
+    "Frontend: P&L panel shows Record actual button for each flow",
+    "Frontend: Tab switching between Projection, Cash Flow Table, Entries works"
+  ],
+  
+  "features_verified": {
+    "matrix_endpoint": {
+      "status": "WORKING",
+      "details": "GET /api/projection/matrix returns revenue_rows, expense_rows, net_per_month, months. Net values exactly match projection endpoint. Respects entity_id and horizon parameters."
+    },
+    "actuals_variance_system": {
+      "status": "WORKING",
+      "details": "PUT /api/flow-occurrences with actual_amount and variance_action. carry_forward creates carryover in next month, write_off does not. DELETE clears actual and removes carryover. Projection uses actual when recorded."
+    },
+    "undo_system": {
+      "status": "WORKING",
+      "details": "POST /api/undo reverses last action. GET /api/undo/peek shows has_undo and description. Works for create (deletes flow), edit (restores previous values), delete (restores flow), batch_create (removes all created flows)."
+    },
+    "entry_log_tab": {
+      "status": "WORKING",
+      "details": "Full-page Entry Log tab with search, category filter, type filter. Shows parent/child grouping with linked flow indicators. Edit/delete actions work."
+    },
+    "recurrence_toggle": {
+      "status": "WORKING",
+      "details": "Recurrence dropdown visible in main Quick Add form. When Monthly/Quarterly selected, Repeat/Distribute toggle appears. Distribute mode shows per-period preview (e.g., CHF 3000/month for 36000 total ÷ 12 periods)."
+    },
+    "matrix_ux": {
+      "status": "WORKING",
+      "details": "Row labels clickable (open edit dialog). Row and column hover highlighting. Frozen first column. 15 clickable row labels, 180 cells for hover highlighting."
+    }
+  }
+}

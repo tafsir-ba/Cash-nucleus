@@ -50,8 +50,7 @@ class RecurrenceMode(str, Enum):
 
 class FlowStatus(str, Enum):
     PLANNED = "planned"
-    PAID = "paid"
-    UNPAID = "unpaid"
+    ACTUAL = "actual"
 
 # ============== ENTITY MODELS ==============
 class Entity(BaseModel):
@@ -144,19 +143,33 @@ class CashFlowBatchCreate(BaseModel):
     parent: CashFlowCreate
     linked: List[CashFlowCreate] = []
 
-# ============== FLOW OCCURRENCE MODELS ==============
+# ============== FLOW OCCURRENCE MODELS (ACTUALS & VARIANCE) ==============
 class FlowOccurrence(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     flow_id: str
     month: str  # "YYYY-MM"
-    status: FlowStatus = FlowStatus.PLANNED
+    actual_amount: Optional[float] = None  # None = no actual recorded yet (planned)
+    variance_action: Optional[str] = None  # "carry_forward" | "write_off" | None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 class FlowOccurrenceUpdate(BaseModel):
     flow_id: str
     month: str
-    status: FlowStatus
+    actual_amount: Optional[float] = None
+    variance_action: Optional[str] = None  # "carry_forward" | "write_off"
+
+
+# ============== UNDO SYSTEM ==============
+class UndoAction(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    action_type: str  # "create" | "update" | "delete" | "batch_create"
+    collection: str  # "cash_flows" | "bank_accounts" | "entities"
+    target_ids: List[str] = []  # IDs affected
+    previous_data: Optional[List[dict]] = None  # Snapshots before change
+    created_data: Optional[List[dict]] = None  # Data that was created (for undoing creates)
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    description: str = ""
 
 # ============== SETTINGS & PROJECTION MODELS ==============
 class Settings(BaseModel):
@@ -198,6 +211,75 @@ async def get_flow_with_dynamic_amount(flow: dict) -> dict:
             # Percentage flows are costs (negative) based on parent's absolute value
             flow["amount"] = -(parent_abs * pct / 100)
     return flow
+
+
+# ============== UNDO HELPERS ==============
+MAX_UNDO_STACK = 50
+
+async def push_undo(action_type: str, collection: str, target_ids: List[str], 
+                     previous_data=None, created_data=None, description=""):
+    """Push an action to the undo stack."""
+    action = UndoAction(
+        action_type=action_type,
+        collection=collection,
+        target_ids=target_ids,
+        previous_data=previous_data,
+        created_data=created_data,
+        description=description,
+    )
+    await db.undo_stack.insert_one(action.model_dump())
+    # Trim stack to max size
+    count = await db.undo_stack.count_documents({})
+    if count > MAX_UNDO_STACK:
+        oldest = await db.undo_stack.find({}, {"_id": 0, "id": 1}).sort("timestamp", 1).limit(count - MAX_UNDO_STACK).to_list(100)
+        if oldest:
+            await db.undo_stack.delete_many({"id": {"$in": [o["id"] for o in oldest]}})
+
+@api_router.post("/undo")
+async def undo_last_action():
+    """Undo the most recent action."""
+    last = await db.undo_stack.find_one({}, {"_id": 0}, sort=[("timestamp", -1)])
+    if not last:
+        return {"status": "nothing_to_undo"}
+    
+    action_type = last["action_type"]
+    collection = last["collection"]
+    coll = db[collection]
+    
+    if action_type in ["create", "batch_create"]:
+        # Delete the created items
+        for tid in last.get("target_ids", []):
+            await coll.delete_one({"id": tid})
+        # For batch_create, also delete linked children
+        if action_type == "batch_create" and collection == "cash_flows":
+            for tid in last.get("target_ids", []):
+                await coll.delete_many({"parent_id": tid})
+    
+    elif action_type == "update":
+        # Restore previous data
+        for prev in (last.get("previous_data") or []):
+            fid = prev.get("id")
+            if fid:
+                await coll.replace_one({"id": fid}, prev, upsert=True)
+    
+    elif action_type == "delete":
+        # Re-insert previously deleted data
+        for prev in (last.get("previous_data") or []):
+            prev.pop("_id", None)
+            await coll.insert_one(prev)
+    
+    # Remove the action from stack
+    await db.undo_stack.delete_one({"id": last["id"]})
+    
+    return {"status": "undone", "description": last.get("description", "")}
+
+@api_router.get("/undo/peek")
+async def peek_undo():
+    """Peek at the last undoable action."""
+    last = await db.undo_stack.find_one({}, {"_id": 0}, sort=[("timestamp", -1)])
+    if not last:
+        return {"has_undo": False}
+    return {"has_undo": True, "description": last.get("description", ""), "action_type": last["action_type"]}
 
 # ============== ENTITY ROUTES ==============
 @api_router.get("/entities", response_model=List[Entity])
@@ -320,6 +402,7 @@ async def create_cash_flow(flow: CashFlowCreate):
         raise HTTPException(status_code=400, detail="Entity not found")
     flow_obj = CashFlow(**flow.model_dump())
     await db.cash_flows.insert_one(flow_obj.model_dump())
+    await push_undo("create", "cash_flows", [flow_obj.id], description=f"Create: {flow_obj.label}")
     return flow_obj
 
 @api_router.post("/cash-flows/batch")
@@ -354,7 +437,11 @@ async def create_cash_flow_batch(batch: CashFlowBatchCreate):
         await db.cash_flows.insert_one(linked_obj.model_dump())
         linked_results.append(linked_obj.model_dump())
     
+    all_ids = [parent_obj.id] + [lr["id"] for lr in linked_results]
+    await push_undo("batch_create", "cash_flows", all_ids, description=f"Create: {parent_obj.label} + {len(linked_results)} linked")
+    
     return {"parent": parent_obj.model_dump(), "linked": linked_results}
+    # Note: undo tracking done above after all inserts
 
 @api_router.put("/cash-flows/{flow_id}", response_model=CashFlow)
 async def update_cash_flow(flow_id: str, update: CashFlowUpdate):
@@ -365,10 +452,14 @@ async def update_cash_flow(flow_id: str, update: CashFlowUpdate):
     
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     
-    # Get current flow to check if parent
+    # Get current flow to check if parent — snapshot for undo
     current = await db.cash_flows.find_one({"id": flow_id}, {"_id": 0})
     if not current:
         raise HTTPException(status_code=404, detail="Cash flow not found")
+    
+    # Snapshot children too for undo
+    children_snapshot = await db.cash_flows.find({"parent_id": flow_id}, {"_id": 0}).to_list(100)
+    all_snapshots = [current] + children_snapshot
     
     # Update the flow
     result = await db.cash_flows.find_one_and_update(
@@ -418,11 +509,18 @@ async def update_cash_flow(flow_id: str, update: CashFlowUpdate):
                         {"$set": {"amount": new_child_amount, "updated_at": datetime.now(timezone.utc).isoformat()}}
                     )
     
+    await push_undo("update", "cash_flows", [flow_id], previous_data=all_snapshots, description=f"Edit: {current.get('label', '')}")
+    
     return result
 
 @api_router.delete("/cash-flows/{flow_id}")
 async def delete_cash_flow(flow_id: str, delete_linked: bool = False):
     """Delete flow. Optionally delete linked children or orphan them."""
+    # Snapshot for undo
+    current = await db.cash_flows.find_one({"id": flow_id}, {"_id": 0})
+    children = await db.cash_flows.find({"parent_id": flow_id}, {"_id": 0}).to_list(100) if delete_linked else []
+    all_snapshots = ([current] if current else []) + children
+    
     if delete_linked:
         await db.cash_flows.delete_many({"parent_id": flow_id})
     else:
@@ -435,12 +533,15 @@ async def delete_cash_flow(flow_id: str, delete_linked: bool = False):
     result = await db.cash_flows.delete_one({"id": flow_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Cash flow not found")
+    
+    await push_undo("delete", "cash_flows", [flow_id], previous_data=all_snapshots, description=f"Delete: {current.get('label', '') if current else 'flow'}")
+    
     return {"message": "Cash flow deleted"}
 
 # ============== FLOW OCCURRENCE ROUTES ==============
 @api_router.get("/flow-occurrences")
 async def get_flow_occurrences(month: Optional[str] = None, flow_id: Optional[str] = None):
-    """Get occurrence statuses. Filter by month and/or flow_id."""
+    """Get occurrence records (actuals + variance actions). Filter by month and/or flow_id."""
     query = {}
     if month:
         query["month"] = month
@@ -451,49 +552,64 @@ async def get_flow_occurrences(month: Optional[str] = None, flow_id: Optional[st
 
 @api_router.put("/flow-occurrences")
 async def set_flow_occurrence(update: FlowOccurrenceUpdate):
-    """Set status for a flow occurrence. Creates carryover when marking unpaid."""
-    # Upsert the occurrence
+    """Record an actual amount for a flow occurrence.
+    
+    Variance = planned - actual.
+    If variance_action = 'carry_forward': creates a one-time flow for the difference in next month.
+    If variance_action = 'write_off': difference is ignored.
+    """
+    # Upsert the occurrence record
     existing = await db.flow_occurrences.find_one(
         {"flow_id": update.flow_id, "month": update.month}, {"_id": 0}
     )
     
+    update_fields = {}
+    if update.actual_amount is not None:
+        update_fields["actual_amount"] = update.actual_amount
+    if update.variance_action is not None:
+        update_fields["variance_action"] = update.variance_action
+    
     if existing:
         await db.flow_occurrences.update_one(
             {"flow_id": update.flow_id, "month": update.month},
-            {"$set": {"status": update.status}}
+            {"$set": update_fields}
         )
     else:
-        occ = FlowOccurrence(flow_id=update.flow_id, month=update.month, status=update.status)
+        occ = FlowOccurrence(
+            flow_id=update.flow_id,
+            month=update.month,
+            actual_amount=update.actual_amount,
+            variance_action=update.variance_action,
+        )
         await db.flow_occurrences.insert_one(occ.model_dump())
     
-    # Handle carryover logic
-    if update.status == FlowStatus.UNPAID:
-        # Check if carryover already exists for this flow+month
-        existing_carryover = await db.cash_flows.find_one({
-            "carryover_from": update.flow_id,
-            "carryover_month": update.month
-        }, {"_id": 0})
-        
-        if not existing_carryover:
-            # Get the original flow
-            original = await db.cash_flows.find_one({"id": update.flow_id}, {"_id": 0})
-            if original:
-                # Calculate next month
+    # Remove any old carryover for this flow+month first
+    await db.cash_flows.delete_many({
+        "carryover_from": update.flow_id,
+        "carryover_month": update.month
+    })
+    
+    # Handle carry_forward: create a flow for the variance in next month
+    if update.variance_action == "carry_forward" and update.actual_amount is not None:
+        original = await db.cash_flows.find_one({"id": update.flow_id}, {"_id": 0})
+        if original:
+            # Get planned amount for this occurrence
+            planned = original["amount"]
+            rec_mode = original.get("recurrence_mode", "repeat")
+            rec_count = original.get("recurrence_count")
+            if rec_mode == "distribute" and rec_count and rec_count > 0:
+                planned = round(planned / rec_count, 2)
+            
+            variance = planned - update.actual_amount
+            
+            if abs(variance) > 0.01:  # Only create carryover if meaningful variance
                 year, mon = update.month.split("-")
                 next_date = date(int(year), int(mon), 1) + relativedelta(months=1)
                 next_month_str = next_date.strftime("%Y-%m")
                 
-                # For distribute mode, calculate per-period amount
-                amount = original["amount"]
-                rec_mode = original.get("recurrence_mode", "repeat")
-                rec_count = original.get("recurrence_count")
-                if rec_mode == "distribute" and rec_count and rec_count > 0:
-                    amount = round(amount / rec_count, 2)
-                
-                # Create carryover flow
                 carryover = CashFlow(
-                    label=f"{original['label']} (carryover)",
-                    amount=amount,
+                    label=f"{original['label']} (variance carryover)",
+                    amount=round(variance, 2),
                     date=f"{next_month_str}-01",
                     category=original.get("category", "Expense"),
                     certainty="Materialized",
@@ -505,13 +621,17 @@ async def set_flow_occurrence(update: FlowOccurrenceUpdate):
                 )
                 await db.cash_flows.insert_one(carryover.model_dump())
     
-    elif update.status in [FlowStatus.PLANNED, FlowStatus.PAID]:
-        # Remove carryover if status changed back from unpaid
-        await db.cash_flows.delete_many({
-            "carryover_from": update.flow_id,
-            "carryover_month": update.month
-        })
-    
+    return {"status": "ok"}
+
+@api_router.delete("/flow-occurrences")
+async def clear_flow_occurrence(flow_id: str, month: str):
+    """Clear actual recording for a flow occurrence (revert to planned)."""
+    await db.flow_occurrences.delete_one({"flow_id": flow_id, "month": month})
+    # Also remove any carryover
+    await db.cash_flows.delete_many({
+        "carryover_from": flow_id,
+        "carryover_month": month
+    })
     return {"status": "ok"}
 
 # ============== SETTINGS ROUTES ==============
@@ -556,7 +676,11 @@ def expand_recurring_flows(flows: List[dict], start_date: date, end_date: date, 
                         "label": flow["label"],
                         "certainty": flow["certainty"],
                         "category": flow["category"],
-                        "entity_id": flow.get("entity_id", "")
+                        "entity_id": flow.get("entity_id", ""),
+                        "flow_id": flow_id,
+                        "parent_id": flow.get("parent_id"),
+                        "is_percentage": flow.get("is_percentage", False),
+                        "carryover_from": flow.get("carryover_from"),
                     })
         else:
             # Monthly or quarterly
@@ -592,7 +716,10 @@ def expand_recurring_flows(flows: List[dict], start_date: date, end_date: date, 
                             "label": flow["label"],
                             "certainty": flow["certainty"],
                             "category": flow["category"],
-                            "entity_id": flow.get("entity_id", "")
+                            "entity_id": flow.get("entity_id", ""),
+                            "flow_id": flow_id,
+                            "parent_id": flow.get("parent_id"),
+                            "is_percentage": flow.get("is_percentage", False),
                         })
                 count += 1
                 current = flow_date + relativedelta(months=count * interval_months)
@@ -645,12 +772,22 @@ async def get_projection(
     certainty_levels = get_certainty_levels(scenario)
     filtered = [f for f in flows_with_amounts if f.get("certainty") in certainty_levels]
     
-    # Get unpaid occurrences to exclude from projection
-    unpaid_occs = await db.flow_occurrences.find({"status": "unpaid"}, {"_id": 0}).to_list(1000)
-    unpaid_set = {(o["flow_id"], o["month"]) for o in unpaid_occs}
+    # Get actuals — when recorded, projection uses actual amount instead of planned
+    all_occs = await db.flow_occurrences.find({}, {"_id": 0}).to_list(1000)
+    actuals_map = {}  # (flow_id, month) -> actual_amount
+    for occ in all_occs:
+        if occ.get("actual_amount") is not None:
+            actuals_map[(occ["flow_id"], occ["month"])] = occ["actual_amount"]
     
-    # Expand recurring (skipping unpaid occurrences)
-    expanded = expand_recurring_flows(filtered, start_of_month, end_date, unpaid_set)
+    # Expand recurring
+    expanded = expand_recurring_flows(filtered, start_of_month, end_date)
+    
+    # Apply actuals overlay: replace planned with actual where recorded
+    for ef in expanded:
+        fid = ef.get("flow_id", "")
+        mkey = ef["date"].strftime("%Y-%m")
+        if (fid, mkey) in actuals_map:
+            ef["amount"] = actuals_map[(fid, mkey)]
     
     # Group by month
     months_data = {}
@@ -730,6 +867,125 @@ async def get_projection(
         months=months
     )
 
+
+@api_router.get("/projection/matrix")
+async def get_projection_matrix(
+    scenario: str = "likely",
+    entity_id: Optional[str] = Query(None),
+    horizon: int = Query(12)
+):
+    """Matrix data derived from the SAME projection engine. No independent computation."""
+    if horizon not in [12, 24, 36]:
+        horizon = 12
+    
+    # Same flow fetching as main projection
+    flow_query = {"entity_id": entity_id} if entity_id else {}
+    flows = await db.cash_flows.find(flow_query, {"_id": 0}).to_list(1000)
+    
+    flows_with_amounts = []
+    for f in flows:
+        flows_with_amounts.append(await get_flow_with_dynamic_amount(f))
+    
+    certainty_levels = get_certainty_levels(scenario)
+    filtered = [f for f in flows_with_amounts if f.get("certainty") in certainty_levels]
+    
+    # Same actuals handling as main projection
+    all_occs = await db.flow_occurrences.find({}, {"_id": 0}).to_list(1000)
+    actuals_map = {}
+    for occ in all_occs:
+        if occ.get("actual_amount") is not None:
+            actuals_map[(occ["flow_id"], occ["month"])] = occ["actual_amount"]
+    
+    today = date.today()
+    start_of_month = today.replace(day=1)
+    end_date = start_of_month + relativedelta(months=horizon)
+    
+    # Same expand function
+    expanded = expand_recurring_flows(filtered, start_of_month, end_date)
+    
+    # Apply actuals overlay
+    for ef in expanded:
+        fid = ef.get("flow_id", "")
+        mkey = ef["date"].strftime("%Y-%m")
+        if (fid, mkey) in actuals_map:
+            ef["amount"] = actuals_map[(fid, mkey)]
+    
+    # Build month keys
+    month_keys = []
+    for i in range(horizon):
+        m = start_of_month + relativedelta(months=i)
+        month_keys.append({
+            "key": m.strftime("%Y-%m"),
+            "label": m.strftime("%b %Y")
+        })
+    
+    # Group expanded flows by flow_id + month
+    # flow_id -> { month_key -> amount }
+    flow_month_map = {}
+    flow_info = {}
+    
+    for ef in expanded:
+        fid = ef.get("flow_id", "")
+        if not fid:
+            continue
+        mkey = ef["date"].strftime("%Y-%m")
+        
+        if fid not in flow_month_map:
+            flow_month_map[fid] = {}
+            flow_info[fid] = {
+                "flow_id": fid,
+                "label": ef["label"],
+                "category": ef["category"],
+                "is_revenue": ef["amount"] > 0,
+                "parent_id": ef.get("parent_id"),
+                "is_percentage": ef.get("is_percentage", False),
+            }
+        
+        # Sum amounts for same flow in same month (shouldn't happen but be safe)
+        flow_month_map[fid][mkey] = flow_month_map[fid].get(mkey, 0) + ef["amount"]
+    
+    # Build rows: separate revenues and expenses, exclude children (show net on parent)
+    revenue_rows = []
+    expense_rows = []
+    
+    for fid, info in flow_info.items():
+        cells = {}
+        for mk in month_keys:
+            amt = flow_month_map[fid].get(mk["key"])
+            if amt is not None:
+                cells[mk["key"]] = round(amt, 2)
+        
+        row = {
+            "flow_id": fid,
+            "label": info["label"],
+            "category": info["category"],
+            "parent_id": info["parent_id"],
+            "is_percentage": info["is_percentage"],
+            "cells": cells,
+        }
+        
+        if info["is_revenue"]:
+            revenue_rows.append(row)
+        else:
+            expense_rows.append(row)
+    
+    # Net per month (from same expanded data — guaranteed match)
+    net_per_month = {}
+    for mk in month_keys:
+        net_per_month[mk["key"]] = 0.0
+    for ef in expanded:
+        mkey = ef["date"].strftime("%Y-%m")
+        if mkey in net_per_month:
+            net_per_month[mkey] += ef["amount"]
+    net_per_month = {k: round(v, 2) for k, v in net_per_month.items()}
+    
+    return {
+        "months": month_keys,
+        "revenue_rows": revenue_rows,
+        "expense_rows": expense_rows,
+        "net_per_month": net_per_month,
+    }
+
 @api_router.get("/month-details/{month}")
 async def get_month_details(
     month: str,
@@ -747,80 +1003,32 @@ async def get_month_details(
     certainty_levels = get_certainty_levels(scenario)
     filtered = [f for f in flows_with_amounts if f.get("certainty") in certainty_levels]
     
-    # Get unpaid occurrences
-    unpaid_occs = await db.flow_occurrences.find({"status": "unpaid"}, {"_id": 0}).to_list(1000)
-    unpaid_set = {(o["flow_id"], o["month"]) for o in unpaid_occs}
-    
-    # Get all occurrence statuses for this month
-    month_occs = await db.flow_occurrences.find({"month": month}, {"_id": 0}).to_list(1000)
-    occ_status_map = {o["flow_id"]: o["status"] for o in month_occs}
+    # Actuals
+    all_occs = await db.flow_occurrences.find({}, {"_id": 0}).to_list(1000)
+    actuals_map = {}
+    occ_detail_map = {}  # (flow_id, month) -> full occurrence record
+    for occ in all_occs:
+        key = (occ["flow_id"], occ["month"])
+        if occ.get("actual_amount") is not None:
+            actuals_map[key] = occ["actual_amount"]
+        occ_detail_map[key] = occ
     
     year, mon = month.split("-")
     start = date(int(year), int(mon), 1)
     end = start + relativedelta(months=1) - relativedelta(days=1)
     
-    # Build a mapping of flow_id from the expanded results
-    # We need to include flow_id in expanded flows for status tracking
-    expanded_with_ids = []
-    for f in filtered:
-        flow_date = date.fromisoformat(f["date"][:10])
-        flow_id = f.get("id", "")
-        recurrence = f.get("recurrence", "none")
-        recurrence_mode = f.get("recurrence_mode", "repeat")
-        
-        if recurrence == "none":
-            if start <= flow_date <= end:
-                month_key = flow_date.strftime("%Y-%m")
-                if (flow_id, month_key) not in unpaid_set:
-                    expanded_with_ids.append({
-                        "flow_id": flow_id,
-                        "date": flow_date,
-                        "amount": f["amount"],
-                        "label": f["label"],
-                        "certainty": f["certainty"],
-                        "category": f["category"],
-                        "entity_id": f.get("entity_id", ""),
-                        "carryover_from": f.get("carryover_from"),
-                    })
-        else:
-            interval_months = 1 if recurrence == "monthly" else 3
-            current = flow_date
-            count = 0
-            max_count = f.get("recurrence_count") or 999
-            end_rec = date.fromisoformat(f["recurrence_end"][:10]) if f.get("recurrence_end") else end
-            
-            total_amount = f["amount"]
-            if recurrence_mode == "distribute" and max_count < 999:
-                per_period = round(total_amount / max_count, 2)
-                last_period = round(total_amount - per_period * (max_count - 1), 2)
-            else:
-                per_period = total_amount
-                last_period = total_amount
-            
-            while current <= min(end, end_rec) and count < max_count:
-                if current >= start:
-                    month_key = current.strftime("%Y-%m")
-                    if (flow_id, month_key) not in unpaid_set:
-                        if recurrence_mode == "distribute" and max_count < 999:
-                            period_amount = last_period if count == max_count - 1 else per_period
-                        else:
-                            period_amount = total_amount
-                        
-                        expanded_with_ids.append({
-                            "flow_id": flow_id,
-                            "date": current,
-                            "amount": period_amount,
-                            "label": f["label"],
-                            "certainty": f["certainty"],
-                            "category": f["category"],
-                            "entity_id": f.get("entity_id", ""),
-                            "carryover_from": f.get("carryover_from"),
-                        })
-                count += 1
-                current = flow_date + relativedelta(months=count * interval_months)
+    # Use the same expand function
+    expanded = expand_recurring_flows(filtered, start, end)
     
-    month_flows = [f for f in expanded_with_ids if f["date"].strftime("%Y-%m") == month]
+    # Apply actuals overlay
+    for ef in expanded:
+        fid = ef.get("flow_id", "")
+        mkey = ef["date"].strftime("%Y-%m")
+        if (fid, mkey) in actuals_map:
+            ef["_planned_amount"] = ef["amount"]
+            ef["amount"] = actuals_map[(fid, mkey)]
     
+    month_flows = [f for f in expanded if f["date"].strftime("%Y-%m") == month]
     outflows = sorted([f for f in month_flows if f["amount"] < 0], key=lambda x: x["amount"])
     
     recurring_labels = {f["label"] for f in filtered if f.get("recurrence") in ["monthly", "quarterly"]}
@@ -832,12 +1040,14 @@ async def get_month_details(
         "recurring_burdens": [{"label": f["label"], "amount": f["amount"], "category": f["category"]} for f in recurring],
         "all_flows": [
             {
-                "flow_id": f["flow_id"],
+                "flow_id": f.get("flow_id", ""),
                 "label": f["label"], 
-                "amount": f["amount"], 
+                "amount": round(f["amount"], 2), 
+                "planned_amount": round(f.get("_planned_amount", f["amount"]), 2),
+                "actual_amount": actuals_map.get((f.get("flow_id", ""), month)),
+                "variance_action": occ_detail_map.get((f.get("flow_id", ""), month), {}).get("variance_action"),
                 "category": f["category"], 
                 "date": f["date"].isoformat(),
-                "status": occ_status_map.get(f["flow_id"], "planned"),
                 "is_carryover": bool(f.get("carryover_from")),
             } 
             for f in month_flows
