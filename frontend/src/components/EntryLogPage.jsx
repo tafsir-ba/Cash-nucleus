@@ -149,6 +149,13 @@ export const EntryLogPage = ({ entities, onDataChange }) => {
                   {linked.length > 0 && (
                     <LinkIcon size={12} className="text-amber-400 flex-shrink-0" />
                   )}
+                  {flow.priority && (
+                    <span className={`text-[10px] px-1 py-0.5 rounded ${
+                      flow.priority === 'critical' ? 'bg-rose-500/20 text-rose-400' :
+                      flow.priority === 'flexible' ? 'bg-amber-500/20 text-amber-400' :
+                      'bg-cyan-500/20 text-cyan-400'
+                    }`} data-testid={`priority-${flow.id}`}>{flow.priority}</span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 mt-0.5">
                   <span className="text-xs text-zinc-500">{flow.category}</span>

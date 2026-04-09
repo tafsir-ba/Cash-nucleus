@@ -47,6 +47,7 @@ export const FlowEditor = ({ flow, open, onOpenChange, entities, onSave, onEntit
   const [linkedFlows, setLinkedFlows] = useState([]);
   const [saving, setSaving] = useState(false);
   const [existingLinked, setExistingLinked] = useState([]);
+  const [priority, setPriority] = useState("");
 
   // Load data when opening for edit
   useEffect(() => {
@@ -63,6 +64,7 @@ export const FlowEditor = ({ flow, open, onOpenChange, entities, onSave, onEntit
       setRecurrence(flow.recurrence || "none");
       setRecurrenceMode(flow.recurrence_mode || "repeat");
       setRecurrenceCount(flow.recurrence_count?.toString() || "");
+      setPriority(flow.priority || "");
       setLinkedFlows([]);
       // Load existing linked flows
       axios.get(`${API}/cash-flows`).then(res => {
@@ -82,6 +84,7 @@ export const FlowEditor = ({ flow, open, onOpenChange, entities, onSave, onEntit
       setRecurrenceCount("");
       setLinkedFlows([]);
       setExistingLinked([]);
+      setPriority("");
     }
   }, [open, flow, isEdit, entities]);
 
@@ -130,6 +133,7 @@ export const FlowEditor = ({ flow, open, onOpenChange, entities, onSave, onEntit
           recurrence_mode: recurrence !== "none" ? recurrenceMode : "repeat",
           recurrence_count: recurrence !== "none" && recurrenceCount ? parseInt(recurrenceCount) : null,
           entity_id: entityId,
+          priority: priority || null,
         });
         toast.success("Updated");
       } else {
@@ -144,6 +148,7 @@ export const FlowEditor = ({ flow, open, onOpenChange, entities, onSave, onEntit
           recurrence_mode: recurrence !== "none" ? recurrenceMode : "repeat",
           recurrence_count: recurrence !== "none" && recurrenceCount ? parseInt(recurrenceCount) : null,
           entity_id: entityId,
+          priority: priority || null,
         };
 
         const validLinked = linkedFlows
@@ -340,6 +345,27 @@ export const FlowEditor = ({ flow, open, onOpenChange, entities, onSave, onEntit
               )}
             </div>
           )}
+
+          {/* Existing Linked Flows (edit mode) */}
+          {/* Priority */}
+          <div>
+            <Label className="text-xs text-zinc-500 mb-1 block">Priority</Label>
+            <div className="flex gap-1" data-testid="editor-priority">
+              {[
+                { value: "", label: "None", cls: "text-zinc-500 bg-zinc-800 border-zinc-700" },
+                { value: "critical", label: "Critical", cls: "text-rose-400 bg-rose-500/10 border-rose-500/30" },
+                { value: "flexible", label: "Flexible", cls: "text-amber-400 bg-amber-500/10 border-amber-500/30" },
+                { value: "strategic", label: "Strategic", cls: "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" },
+              ].map(opt => (
+                <button key={opt.value} type="button" onClick={() => setPriority(opt.value)}
+                  className={`px-2 py-1 text-xs rounded border transition-colors ${
+                    priority === opt.value ? opt.cls : 'text-zinc-600 bg-zinc-950 border-zinc-800 hover:border-zinc-700'
+                  }`}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
           {/* Existing Linked Flows (edit mode) */}
           {isEdit && existingLinked.length > 0 && (

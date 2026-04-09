@@ -319,6 +319,12 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
     );
   };
 
+  const priorityDot = (p) => {
+    if (!p) return null;
+    const cls = p === 'critical' ? 'bg-rose-400' : p === 'flexible' ? 'bg-amber-400' : 'bg-cyan-400';
+    return <span className={`inline-block w-1.5 h-1.5 rounded-full ${cls} ml-1`} title={p} />;
+  };
+
   // ALL totals read from backend — zero frontend math
   const revTotal = total_revenue ?? 0;
   const costTotal = total_cost ?? 0;
@@ -396,6 +402,7 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
                         {row.parent_id && <span className="text-zinc-600 mr-1">└</span>}
                         {row.label}
                         {row.is_percentage && <span className="ml-1 text-amber-500/60 text-[10px]">%</span>}
+                        {priorityDot(row.priority)}
                       </td>
                       {months.map((m, ci) => renderCell(row, m, ci, 'text-emerald-400'))}
                       <td className="text-right px-3 py-1.5 font-mono text-emerald-400/70 font-medium border-l border-zinc-800">
@@ -437,6 +444,7 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
                         {row.parent_id && <span className="text-zinc-600 mr-1">└</span>}
                         {row.label}
                         {row.is_percentage && <span className="ml-1 text-amber-500/60 text-[10px]">%</span>}
+                        {priorityDot(row.priority)}
                       </td>
                       {months.map((m, ci) => renderCell(row, m, ci, 'text-rose-400'))}
                       <td className="text-right px-3 py-1.5 font-mono text-rose-400/70 font-medium border-l border-zinc-800">

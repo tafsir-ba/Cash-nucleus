@@ -48,6 +48,15 @@ class RecurrenceMode(str, Enum):
     REPEAT = "repeat"
     DISTRIBUTE = "distribute"
 
+class SourceType(str, Enum):
+    MANUAL = "manual"
+    DEAL = "deal"
+
+class FlowPriority(str, Enum):
+    CRITICAL = "critical"
+    FLEXIBLE = "flexible"
+    STRATEGIC = "strategic"
+
 # ============== ENTITY MODELS ==============
 class Entity(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -105,6 +114,9 @@ class CashFlow(BaseModel):
     percentage_of_parent: Optional[float] = None
     carryover_from: Optional[str] = None
     carryover_month: Optional[str] = None
+    source_type: SourceType = SourceType.MANUAL
+    source_id: Optional[str] = None
+    priority: Optional[FlowPriority] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -122,6 +134,9 @@ class CashFlowCreate(BaseModel):
     parent_id: Optional[str] = None
     is_percentage: bool = False
     percentage_of_parent: Optional[float] = None
+    source_type: SourceType = SourceType.MANUAL
+    source_id: Optional[str] = None
+    priority: Optional[FlowPriority] = None
 
 class CashFlowUpdate(BaseModel):
     label: Optional[str] = None
@@ -134,6 +149,7 @@ class CashFlowUpdate(BaseModel):
     recurrence_end: Optional[str] = None
     recurrence_count: Optional[int] = None
     entity_id: Optional[str] = None
+    priority: Optional[FlowPriority] = None
 
 class CashFlowBatchCreate(BaseModel):
     parent: CashFlowCreate
@@ -1059,6 +1075,9 @@ async def get_projection_matrix(
     revenue_rows = []
     expense_rows = []
     
+    # Build a priority lookup from raw flows (NOT from engine, pure metadata)
+    flow_priority_map = {f.get("id", ""): f.get("priority") for f in flows}
+    
     for fid, info in flow_info.items():
         cells = {}
         for mk in month_keys:
@@ -1083,6 +1102,7 @@ async def get_projection_matrix(
             "is_percentage": info["is_percentage"],
             "cells": cells,
             "row_total": round(sum(c.get("amount", 0) for c in cells.values()), 2),
+            "priority": flow_priority_map.get(fid),
         }
         
         if info["is_revenue"]:
@@ -1139,6 +1159,176 @@ async def get_projection_matrix(
         "total_cost": total_cost,
         "total_net": total_net,
     }
+
+
+@api_router.get("/projection/drivers")
+async def get_negative_month_drivers(
+    scenario: str = "likely",
+    entity_id: Optional[str] = Query(None),
+    horizon: int = Query(12)
+):
+    """Top drivers of negative months. Uses projection engine values only. Aggregates by flow label."""
+    if horizon not in [12, 24, 36]:
+        horizon = 12
+    
+    flow_query = {"entity_id": entity_id} if entity_id else {}
+    flows = await db.cash_flows.find(flow_query, {"_id": 0}).to_list(1000)
+    flows_with_amounts = []
+    for f in flows:
+        flows_with_amounts.append(await get_flow_with_dynamic_amount(f))
+    
+    certainty_levels = get_certainty_levels(scenario)
+    filtered = [f for f in flows_with_amounts if f.get("certainty") in certainty_levels]
+    
+    all_occs = await db.flow_occurrences.find({}, {"_id": 0}).to_list(1000)
+    actuals_map = {}
+    for occ in all_occs:
+        if occ.get("actual_amount") is not None:
+            actuals_map[(occ["flow_id"], occ["month"])] = occ["actual_amount"]
+    
+    today = date.today()
+    start_of_month = today.replace(day=1)
+    end_date = start_of_month + relativedelta(months=horizon)
+    expanded = expand_recurring_flows(filtered, start_of_month, end_date)
+    
+    for ef in expanded:
+        fid = ef.get("flow_id", "")
+        mkey = ef["date"].strftime("%Y-%m")
+        if (fid, mkey) in actuals_map:
+            ef["amount"] = actuals_map[(fid, mkey)]
+    
+    # Group by month, compute net
+    months_data = {}
+    for i in range(horizon):
+        m = start_of_month + relativedelta(months=i)
+        key = m.strftime("%Y-%m")
+        months_data[key] = {"flows": [], "net": 0.0, "label": m.strftime("%b %Y")}
+    
+    for ef in expanded:
+        mkey = ef["date"].strftime("%Y-%m")
+        if mkey in months_data:
+            months_data[mkey]["flows"].append(ef)
+            months_data[mkey]["net"] += ef["amount"]
+    
+    # For each negative month, aggregate negative contributors by label
+    acc_query = {"entity_id": entity_id} if entity_id else {}
+    accounts = await db.bank_accounts.find(acc_query, {"_id": 0}).to_list(100)
+    cash_now = sum(acc.get("amount", 0) for acc in accounts)
+    
+    running = cash_now
+    result = []
+    for key in sorted(months_data.keys()):
+        md = months_data[key]
+        running += md["net"]
+        
+        if md["net"] >= 0:
+            continue
+        
+        # Aggregate only negative flows by label
+        label_agg = {}
+        for ef in md["flows"]:
+            if ef["amount"] >= 0:
+                continue
+            lbl = ef["label"]
+            if lbl not in label_agg:
+                label_agg[lbl] = {"label": lbl, "total": 0.0, "count": 0, "category": ef["category"]}
+            label_agg[lbl]["total"] += ef["amount"]
+            label_agg[lbl]["count"] += 1
+        
+        # Sort by absolute impact, top 3
+        sorted_drivers = sorted(label_agg.values(), key=lambda x: x["total"])[:3]
+        drivers = [
+            {
+                "label": d["label"],
+                "amount": round(d["total"], 2),
+                "count": d["count"],
+                "category": d["category"],
+            }
+            for d in sorted_drivers
+        ]
+        
+        result.append({
+            "month": key,
+            "month_label": md["label"],
+            "net": round(md["net"], 2),
+            "cash_balance": round(running, 2),
+            "drivers": drivers,
+        })
+    
+    return {"negative_months": result}
+
+
+@api_router.get("/projection/scenario-delta")
+async def get_scenario_delta(
+    entity_id: Optional[str] = Query(None),
+    horizon: int = Query(12)
+):
+    """Gap = Likely cash_balance - Committed cash_balance per month. Uses same projection engine."""
+    if horizon not in [12, 24, 36]:
+        horizon = 12
+    
+    # Fetch both projections from same engine
+    # Committed
+    committed = await get_projection(scenario="committed", entity_id=entity_id, horizon=horizon)
+    likely = await get_projection(scenario="likely", entity_id=entity_id, horizon=horizon)
+    
+    months = []
+    for cm, lm in zip(committed.months, likely.months):
+        gap_net = round(lm.net - cm.net, 2)
+        gap_balance = round(lm.closing_cash - cm.closing_cash, 2)
+        months.append({
+            "month": cm.month,
+            "month_label": cm.month_label,
+            "committed_net": cm.net,
+            "likely_net": lm.net,
+            "gap_net": gap_net,
+            "committed_balance": cm.closing_cash,
+            "likely_balance": lm.closing_cash,
+            "gap_balance": gap_balance,
+        })
+    
+    total_gap = round(sum(m["gap_net"] for m in months), 2)
+    
+    return {
+        "months": months,
+        "total_gap_net": total_gap,
+        "committed_runway": next(
+            (i + 1 for i, m in enumerate(committed.months) if m.closing_cash < 0), None
+        ),
+        "likely_runway": next(
+            (i + 1 for i, m in enumerate(likely.months) if m.closing_cash < 0), None
+        ),
+    }
+
+
+@api_router.get("/projection/runway")
+async def get_cash_runway(
+    entity_id: Optional[str] = Query(None),
+    horizon: int = Query(36)
+):
+    """Cash runway = first month where cash_balance < 0. Returns months from now + breach month."""
+    if horizon not in [12, 24, 36]:
+        horizon = 36
+    
+    result = {}
+    for sc in ["committed", "likely"]:
+        proj = await get_projection(scenario=sc, entity_id=entity_id, horizon=horizon)
+        breach_idx = None
+        breach_month = None
+        for i, m in enumerate(proj.months):
+            if m.closing_cash < 0:
+                breach_idx = i + 1
+                breach_month = m.month_label
+                break
+        result[sc] = {
+            "months_until_breach": breach_idx,
+            "breach_month": breach_month,
+            "runway_months": breach_idx if breach_idx else horizon,
+            "is_safe": breach_idx is None,
+        }
+    
+    return result
+
 
 @api_router.get("/month-details/{month}")
 async def get_month_details(
@@ -1229,6 +1419,8 @@ async def get_variance_summary(entity_id: Optional[str] = None):
             flows_map[f["id"]] = f
     
     total_variance = 0.0
+    total_underperformance = 0.0
+    total_overperformance = 0.0
     total_carried = 0.0
     total_written_off = 0.0
     actuals_count = 0
@@ -1247,18 +1439,31 @@ async def get_variance_summary(entity_id: Optional[str] = None):
             planned = round(planned / rec_count, 2)
         
         variance = planned - occ["actual_amount"]
-        total_variance += abs(variance)
+        abs_var = abs(variance)
+        total_variance += abs_var
+        
+        # Under = actual < planned (for revenue: less came in; for expense: less went out)
+        if abs(variance) > 0.01:
+            if occ["actual_amount"] < abs(planned):
+                total_underperformance += abs_var
+            else:
+                total_overperformance += abs_var
         
         if occ.get("variance_action") == "carry_forward":
-            total_carried += abs(variance)
+            total_carried += abs_var
         elif occ.get("variance_action") == "write_off":
-            total_written_off += abs(variance)
+            total_written_off += abs_var
+    
+    net_variance_impact = round(total_overperformance - total_underperformance, 2)
     
     return {
         "actuals_recorded": actuals_count,
         "total_variance": round(total_variance, 2),
+        "total_underperformance": round(total_underperformance, 2),
+        "total_overperformance": round(total_overperformance, 2),
         "total_carried_forward": round(total_carried, 2),
         "total_written_off": round(total_written_off, 2),
+        "net_variance_impact": net_variance_impact,
     }
 
 

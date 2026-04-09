@@ -12,6 +12,7 @@ import { QuickAddForm } from "./components/QuickAddForm";
 import { MonthlyPLPanel } from "./components/MonthlyPLPanel";
 import { CashFlowTable } from "./components/CashFlowTable";
 import { EntryLogPage } from "./components/EntryLogPage";
+import { DecisionPanel } from "./components/DecisionPanel";
 import { BankAccountsDialog } from "./components/BankAccountsDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { EntryLogDialog } from "./components/EntryLogDialog";
@@ -293,7 +294,7 @@ function App() {
               </div>
             </section>
 
-            {/* Table + P&L Panel */}
+            {/* Table + P&L + Decision Panel */}
             <section className="main-content-grid">
               <div className="lg:col-span-8">
                 <MonthlyTable 
@@ -303,11 +304,17 @@ function App() {
                   hasData={hasData}
                 />
               </div>
-              <div className="lg:col-span-4">
+              <div className="lg:col-span-4 space-y-4">
                 <MonthlyPLPanel 
                   monthDetails={monthDetails}
                   selectedMonth={selectedMonth}
                   onDataChange={handleDataChange}
+                />
+                <DecisionPanel
+                  scenario={scenario}
+                  selectedEntityId={selectedEntityId}
+                  horizon={horizon}
+                  refreshKey={projection?.cash_now}
                 />
               </div>
             </section>
