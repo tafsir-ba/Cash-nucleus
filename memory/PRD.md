@@ -36,12 +36,17 @@ Consolidates bank accounts (state) and cash flows (events) into a deterministic 
 - [x] Matrix UX (frozen column, hover, row click)
 
 ### Phase 3 Audit — Final Control (April 2026)
-- [x] **Matrix-Based Actual Input**: Click any cell → record actual. Cyan 'A' indicator on cells with actuals. Supports carry forward / write off variance.
-- [x] **Full Edit Parity**: Single canonical FlowEditor for both create and edit. All fields: description, entity, amount, date, category, certainty, recurrence, mode, count, linked flows.
-- [x] **Carryover Cleanup**: No legacy paid/unpaid/auto-carryover. Carryover only via explicit variance carry_forward action.
-- [x] **Matrix Row Totals**: "Total NM" column on right side, updates with horizon/filter/scenario.
-- [x] **Matrix → Full Edit**: Row label click opens canonical FlowEditor.
-- [x] **Cross-Validation**: Projection net = Matrix net = P&L net (verified with distributed revenue + linked COGS + actual < planned).
+- [x] **Matrix-Based Actual Input**: Click any cell to record actual. Semantic display: actual (cyan), planned (strikethrough), variance delta.
+- [x] **Full Edit Parity**: Single canonical FlowEditor for both create and edit.
+- [x] **Carryover Cleanup**: No legacy paid/unpaid/auto-carryover.
+- [x] **Matrix Row Totals**: "Total NM" column on right side.
+- [x] **Matrix -> Full Edit**: Row label click opens canonical FlowEditor.
+- [x] **Cross-Validation**: Projection net = Matrix net = P&L net.
+- [x] **Semantic Actuals Visibility**: Cells show planned/actual/variance explicitly, not just color.
+- [x] **Single Scroll Container**: Header/body/totals in one scroll, no desync.
+- [x] **Explicit Carry-Forward/Write-Off Confirmation**: Full descriptions of what each action does, undo hint visible.
+- [x] **Backend-Driven Totals**: revenue_per_month, cost_per_month, cash_balance_per_month, net_per_month returned from backend.
+- [x] **Undo Full Dependency Chain**: Undo restores occurrence + removes carryover flows.
 
 ## Architecture
 - Frontend: React + Tailwind CSS + Shadcn UI + Recharts + @phosphor-icons/react + date-fns
@@ -50,7 +55,7 @@ Consolidates bank accounts (state) and cash flows (events) into a deterministic 
 
 ## Key API Endpoints
 - GET /api/projection?scenario=&horizon=&entity_id=
-- GET /api/projection/matrix?scenario=&horizon=&entity_id= (includes has_actual/actual/planned per cell)
+- GET /api/projection/matrix?scenario=&horizon=&entity_id= (returns revenue_per_month, cost_per_month, cash_balance_per_month, net_per_month)
 - GET /api/month-details/{month} (includes planned_amount, actual_amount, variance_action)
 - POST /api/cash-flows/batch | PUT /api/cash-flows/{id} | DELETE /api/cash-flows/{id}
 - PUT /api/flow-occurrences (record actual + variance action)
@@ -59,10 +64,15 @@ Consolidates bank accounts (state) and cash flows (events) into a deterministic 
 
 ## Prioritized Backlog
 
+### P0
+- [ ] Creed 2 — System Integrity Audit: Projection = Matrix = P&L mathematically identical under all scenarios
+- [ ] Dependency Consistency Audit: Parent <-> children linked flows, orphan carryover detection, undo restores dependency graphs
+
 ### P1
 - [ ] CSV import/export for data backup
 
 ### P2
+- [ ] Edge Case Stress Testing (negative cash + recovery, large variance, linked flows with distributed revenue)
 - [ ] Historical comparison
 - [ ] Custom category management
 
@@ -72,6 +82,7 @@ Consolidates bank accounts (state) and cash flows (events) into a deterministic 
 - [ ] Mobile optimization
 
 ## Testing Status
-- Iteration 7: Backend 24/24 (100%), Frontend 100%
-- Cross-validation: Matrix net = Projection net (exact match verified for 12M and 24M)
-- Legacy audit: No paid/unpaid/auto-carryover remnants found
+- Iteration 8: Backend 13/13 (100%), Frontend 100%
+- All Phase 3 Audit requirements verified: semantic actuals, single scroll, explicit confirmations, backend-driven totals
+- Undo chain: occurrence + carryover flows restored/removed correctly
+- Bug fixed: push_undo() was missing side_effects parameter (critical for undo reliability)
