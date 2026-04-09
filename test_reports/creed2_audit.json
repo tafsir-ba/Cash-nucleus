@@ -1,0 +1,813 @@
+{
+  "audit": "Creed 2 \u2014 Full System Integrity",
+  "pass_count": 134,
+  "fail_count": 0,
+  "total": 134,
+  "status": "PASS",
+  "results": [
+    {
+      "scenario": "Baseline[committed/12M]",
+      "test": "Month count",
+      "status": "PASS",
+      "detail": "proj=12, matrix=12"
+    },
+    {
+      "scenario": "Baseline[committed/12M]",
+      "test": "Net per month (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Baseline[committed/12M]",
+      "test": "Rev - Cost = Net (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Baseline[committed/12M]",
+      "test": "Horizon total net",
+      "status": "PASS",
+      "detail": "proj=-185209.47, matrix=-185209.47"
+    },
+    {
+      "scenario": "Baseline[committed/12M]",
+      "test": "Cash now",
+      "status": "PASS",
+      "detail": "proj=111570.59, matrix=111570.59"
+    },
+    {
+      "scenario": "Baseline[committed/12M]",
+      "test": "Cash balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Baseline[likely/12M]",
+      "test": "Month count",
+      "status": "PASS",
+      "detail": "proj=12, matrix=12"
+    },
+    {
+      "scenario": "Baseline[likely/12M]",
+      "test": "Net per month (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Baseline[likely/12M]",
+      "test": "Rev - Cost = Net (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Baseline[likely/12M]",
+      "test": "Horizon total net",
+      "status": "PASS",
+      "detail": "proj=-235209.47, matrix=-235209.47"
+    },
+    {
+      "scenario": "Baseline[likely/12M]",
+      "test": "Cash now",
+      "status": "PASS",
+      "detail": "proj=111570.59, matrix=111570.59"
+    },
+    {
+      "scenario": "Baseline[likely/12M]",
+      "test": "Cash balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Baseline[extended/12M]",
+      "test": "Month count",
+      "status": "PASS",
+      "detail": "proj=12, matrix=12"
+    },
+    {
+      "scenario": "Baseline[extended/12M]",
+      "test": "Net per month (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Baseline[extended/12M]",
+      "test": "Rev - Cost = Net (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Baseline[extended/12M]",
+      "test": "Horizon total net",
+      "status": "PASS",
+      "detail": "proj=-80919.47, matrix=-80919.47"
+    },
+    {
+      "scenario": "Baseline[extended/12M]",
+      "test": "Cash now",
+      "status": "PASS",
+      "detail": "proj=111570.59, matrix=111570.59"
+    },
+    {
+      "scenario": "Baseline[extended/12M]",
+      "test": "Cash balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Baseline[full/12M]",
+      "test": "Month count",
+      "status": "PASS",
+      "detail": "proj=12, matrix=12"
+    },
+    {
+      "scenario": "Baseline[full/12M]",
+      "test": "Net per month (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Baseline[full/12M]",
+      "test": "Rev - Cost = Net (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Baseline[full/12M]",
+      "test": "Horizon total net",
+      "status": "PASS",
+      "detail": "proj=-80919.47, matrix=-80919.47"
+    },
+    {
+      "scenario": "Baseline[full/12M]",
+      "test": "Cash now",
+      "status": "PASS",
+      "detail": "proj=111570.59, matrix=111570.59"
+    },
+    {
+      "scenario": "Baseline[full/12M]",
+      "test": "Cash balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Baseline[likely/PL-vs-Matrix/2026-04]",
+      "test": "P&L net == Matrix net",
+      "status": "PASS",
+      "detail": "pl_net=-13737.97, matrix_net=-13737.97"
+    },
+    {
+      "scenario": "Baseline[likely/PL-vs-Matrix/2026-04]",
+      "test": "P&L inflows == Matrix revenue",
+      "status": "PASS",
+      "detail": "pl_inflows=7367.41, matrix_rev=7367.41"
+    },
+    {
+      "scenario": "Baseline[likely/PL-vs-Matrix/2026-04]",
+      "test": "P&L outflows == Matrix cost",
+      "status": "PASS",
+      "detail": "pl_outflows=21105.38, matrix_cost=21105.38"
+    },
+    {
+      "scenario": "Distributed+COGS",
+      "test": "Parent row found",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Distributed+COGS",
+      "test": "Child row found",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Distributed+COGS",
+      "test": "Parent per-period = 10000",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Distributed+COGS",
+      "test": "Parent row_total = 60000",
+      "status": "PASS",
+      "detail": "row_total=60000.0"
+    },
+    {
+      "scenario": "Distributed+COGS",
+      "test": "Child per-period = -4000",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Distributed+COGS",
+      "test": "Child row_total = -24000",
+      "status": "PASS",
+      "detail": "row_total=-24000.0"
+    },
+    {
+      "scenario": "Distributed+COGS[likely/12M]",
+      "test": "Month count",
+      "status": "PASS",
+      "detail": "proj=12, matrix=12"
+    },
+    {
+      "scenario": "Distributed+COGS[likely/12M]",
+      "test": "Net per month (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Distributed+COGS[likely/12M]",
+      "test": "Rev - Cost = Net (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Distributed+COGS[likely/12M]",
+      "test": "Horizon total net",
+      "status": "PASS",
+      "detail": "proj=-199209.47, matrix=-199209.47"
+    },
+    {
+      "scenario": "Distributed+COGS[likely/12M]",
+      "test": "Cash now",
+      "status": "PASS",
+      "detail": "proj=111570.59, matrix=111570.59"
+    },
+    {
+      "scenario": "Distributed+COGS[likely/12M]",
+      "test": "Cash balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Distributed+COGS[likely/PL-vs-Matrix/2026-04]",
+      "test": "P&L net == Matrix net",
+      "status": "PASS",
+      "detail": "pl_net=-7737.97, matrix_net=-7737.97"
+    },
+    {
+      "scenario": "Distributed+COGS[likely/PL-vs-Matrix/2026-04]",
+      "test": "P&L inflows == Matrix revenue",
+      "status": "PASS",
+      "detail": "pl_inflows=17367.41, matrix_rev=17367.41"
+    },
+    {
+      "scenario": "Distributed+COGS[likely/PL-vs-Matrix/2026-04]",
+      "test": "P&L outflows == Matrix cost",
+      "status": "PASS",
+      "detail": "pl_outflows=25105.38, matrix_cost=25105.38"
+    },
+    {
+      "scenario": "Under+Carry",
+      "test": "Total net unchanged (actual+carry = planned)",
+      "status": "PASS",
+      "detail": "proj_total=-225209.47, expected=-225209.47"
+    },
+    {
+      "scenario": "Under+Carry",
+      "test": "Matrix shows actual=8000",
+      "status": "PASS",
+      "detail": "actual=8000.0, has_actual=True"
+    },
+    {
+      "scenario": "Under+Carry",
+      "test": "Matrix shows planned=10000",
+      "status": "PASS",
+      "detail": "planned=10000.0"
+    },
+    {
+      "scenario": "Under+Carry",
+      "test": "Carryover flow exists",
+      "status": "PASS",
+      "detail": "count=1"
+    },
+    {
+      "scenario": "Under+Carry",
+      "test": "Carryover amount = +2000",
+      "status": "PASS",
+      "detail": "amount=2000.0"
+    },
+    {
+      "scenario": "Under+Carry[likely/12M]",
+      "test": "Month count",
+      "status": "PASS",
+      "detail": "proj=12, matrix=12"
+    },
+    {
+      "scenario": "Under+Carry[likely/12M]",
+      "test": "Net per month (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Under+Carry[likely/12M]",
+      "test": "Rev - Cost = Net (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Under+Carry[likely/12M]",
+      "test": "Horizon total net",
+      "status": "PASS",
+      "detail": "proj=-225209.47, matrix=-225209.47"
+    },
+    {
+      "scenario": "Under+Carry[likely/12M]",
+      "test": "Cash now",
+      "status": "PASS",
+      "detail": "proj=111570.59, matrix=111570.59"
+    },
+    {
+      "scenario": "Under+Carry[likely/12M]",
+      "test": "Cash balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Under+Carry[likely/PL-vs-Matrix/2026-04]",
+      "test": "P&L net == Matrix net",
+      "status": "PASS",
+      "detail": "pl_net=-5737.97, matrix_net=-5737.97"
+    },
+    {
+      "scenario": "Under+Carry[likely/PL-vs-Matrix/2026-04]",
+      "test": "P&L inflows == Matrix revenue",
+      "status": "PASS",
+      "detail": "pl_inflows=15367.41, matrix_rev=15367.41"
+    },
+    {
+      "scenario": "Under+Carry[likely/PL-vs-Matrix/2026-04]",
+      "test": "P&L outflows == Matrix cost",
+      "status": "PASS",
+      "detail": "pl_outflows=21105.38, matrix_cost=21105.38"
+    },
+    {
+      "scenario": "Under+Carry[likely/PL-vs-Matrix/2026-05]",
+      "test": "P&L net == Matrix net",
+      "status": "PASS",
+      "detail": "pl_net=-8744.97, matrix_net=-8744.97"
+    },
+    {
+      "scenario": "Under+Carry[likely/PL-vs-Matrix/2026-05]",
+      "test": "P&L inflows == Matrix revenue",
+      "status": "PASS",
+      "detail": "pl_inflows=9367.41, matrix_rev=9367.41"
+    },
+    {
+      "scenario": "Under+Carry[likely/PL-vs-Matrix/2026-05]",
+      "test": "P&L outflows == Matrix cost",
+      "status": "PASS",
+      "detail": "pl_outflows=18112.38, matrix_cost=18112.38"
+    },
+    {
+      "scenario": "Over+WriteOff",
+      "test": "No carryover created",
+      "status": "PASS",
+      "detail": "count=0"
+    },
+    {
+      "scenario": "Over+WriteOff",
+      "test": "Matrix total = baseline + actual",
+      "status": "PASS",
+      "detail": "matrix=-228209.47, expected=-228209.47"
+    },
+    {
+      "scenario": "Over+WriteOff[likely/12M]",
+      "test": "Month count",
+      "status": "PASS",
+      "detail": "proj=12, matrix=12"
+    },
+    {
+      "scenario": "Over+WriteOff[likely/12M]",
+      "test": "Net per month (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Over+WriteOff[likely/12M]",
+      "test": "Rev - Cost = Net (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Over+WriteOff[likely/12M]",
+      "test": "Horizon total net",
+      "status": "PASS",
+      "detail": "proj=-228209.47, matrix=-228209.47"
+    },
+    {
+      "scenario": "Over+WriteOff[likely/12M]",
+      "test": "Cash now",
+      "status": "PASS",
+      "detail": "proj=111570.59, matrix=111570.59"
+    },
+    {
+      "scenario": "Over+WriteOff[likely/12M]",
+      "test": "Cash balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Over+WriteOff[likely/PL-vs-Matrix/2026-04]",
+      "test": "P&L net == Matrix net",
+      "status": "PASS",
+      "detail": "pl_net=-6737.97, matrix_net=-6737.97"
+    },
+    {
+      "scenario": "Over+WriteOff[likely/PL-vs-Matrix/2026-04]",
+      "test": "P&L inflows == Matrix revenue",
+      "status": "PASS",
+      "detail": "pl_inflows=14367.41, matrix_rev=14367.41"
+    },
+    {
+      "scenario": "Over+WriteOff[likely/PL-vs-Matrix/2026-04]",
+      "test": "P&L outflows == Matrix cost",
+      "status": "PASS",
+      "detail": "pl_outflows=21105.38, matrix_cost=21105.38"
+    },
+    {
+      "scenario": "UndoChain",
+      "test": "Occurrence removed after undo",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "UndoChain",
+      "test": "Carryover removed after undo",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "UndoChain",
+      "test": "Cell reverted to planned",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "UndoChain",
+      "test": "Total revenue restored",
+      "status": "PASS",
+      "detail": "before=46004.48, after=46004.48"
+    },
+    {
+      "scenario": "UndoChain",
+      "test": "Total cost restored",
+      "status": "PASS",
+      "detail": "before=281213.95, after=281213.95"
+    },
+    {
+      "scenario": "UndoChain",
+      "test": "Total net restored",
+      "status": "PASS",
+      "detail": "before=-235209.47, after=-235209.47"
+    },
+    {
+      "scenario": "UndoChain",
+      "test": "Flow count restored",
+      "status": "PASS",
+      "detail": "before=26, after=26"
+    },
+    {
+      "scenario": "Horizon-24M[likely/24M]",
+      "test": "Month count",
+      "status": "PASS",
+      "detail": "proj=24, matrix=24"
+    },
+    {
+      "scenario": "Horizon-24M[likely/24M]",
+      "test": "Net per month (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Horizon-24M[likely/24M]",
+      "test": "Rev - Cost = Net (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Horizon-24M[likely/24M]",
+      "test": "Horizon total net",
+      "status": "PASS",
+      "detail": "proj=-466165.87, matrix=-466165.87"
+    },
+    {
+      "scenario": "Horizon-24M[likely/24M]",
+      "test": "Cash now",
+      "status": "PASS",
+      "detail": "proj=111570.59, matrix=111570.59"
+    },
+    {
+      "scenario": "Horizon-24M[likely/24M]",
+      "test": "Cash balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Horizon-36M[likely/36M]",
+      "test": "Month count",
+      "status": "PASS",
+      "detail": "proj=36, matrix=36"
+    },
+    {
+      "scenario": "Horizon-36M[likely/36M]",
+      "test": "Net per month (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Horizon-36M[likely/36M]",
+      "test": "Rev - Cost = Net (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Horizon-36M[likely/36M]",
+      "test": "Horizon total net",
+      "status": "PASS",
+      "detail": "proj=-593773.27, matrix=-593773.27"
+    },
+    {
+      "scenario": "Horizon-36M[likely/36M]",
+      "test": "Cash now",
+      "status": "PASS",
+      "detail": "proj=111570.59, matrix=111570.59"
+    },
+    {
+      "scenario": "Horizon-36M[likely/36M]",
+      "test": "Cash balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Horizon",
+      "test": "12M is exact subset of 24M",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Main Com[likely/12M]",
+      "test": "Month count",
+      "status": "PASS",
+      "detail": "proj=12, matrix=12"
+    },
+    {
+      "scenario": "Entity-Main Com[likely/12M]",
+      "test": "Net per month (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Main Com[likely/12M]",
+      "test": "Rev - Cost = Net (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Main Com[likely/12M]",
+      "test": "Horizon total net",
+      "status": "PASS",
+      "detail": "proj=-2000.0, matrix=-2000.0"
+    },
+    {
+      "scenario": "Entity-Main Com[likely/12M]",
+      "test": "Cash now",
+      "status": "PASS",
+      "detail": "proj=0.0, matrix=0"
+    },
+    {
+      "scenario": "Entity-Main Com[likely/12M]",
+      "test": "Cash balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Family[likely/12M]",
+      "test": "Month count",
+      "status": "PASS",
+      "detail": "proj=12, matrix=12"
+    },
+    {
+      "scenario": "Entity-Family[likely/12M]",
+      "test": "Net per month (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Family[likely/12M]",
+      "test": "Rev - Cost = Net (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Family[likely/12M]",
+      "test": "Horizon total net",
+      "status": "PASS",
+      "detail": "proj=-27179.4, matrix=-27179.4"
+    },
+    {
+      "scenario": "Entity-Family[likely/12M]",
+      "test": "Cash now",
+      "status": "PASS",
+      "detail": "proj=-3066.0, matrix=-3066.0"
+    },
+    {
+      "scenario": "Entity-Family[likely/12M]",
+      "test": "Cash balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Evohom S[likely/12M]",
+      "test": "Month count",
+      "status": "PASS",
+      "detail": "proj=12, matrix=12"
+    },
+    {
+      "scenario": "Entity-Evohom S[likely/12M]",
+      "test": "Net per month (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Evohom S[likely/12M]",
+      "test": "Rev - Cost = Net (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Evohom S[likely/12M]",
+      "test": "Horizon total net",
+      "status": "PASS",
+      "detail": "proj=-145630.07, matrix=-145630.07"
+    },
+    {
+      "scenario": "Entity-Evohom S[likely/12M]",
+      "test": "Cash now",
+      "status": "PASS",
+      "detail": "proj=89980.92, matrix=89980.92"
+    },
+    {
+      "scenario": "Entity-Evohom S[likely/12M]",
+      "test": "Cash balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Ba Franc[likely/12M]",
+      "test": "Month count",
+      "status": "PASS",
+      "detail": "proj=12, matrix=12"
+    },
+    {
+      "scenario": "Entity-Ba Franc[likely/12M]",
+      "test": "Net per month (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Ba Franc[likely/12M]",
+      "test": "Rev - Cost = Net (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Ba Franc[likely/12M]",
+      "test": "Horizon total net",
+      "status": "PASS",
+      "detail": "proj=-64000.0, matrix=-64000.0"
+    },
+    {
+      "scenario": "Entity-Ba Franc[likely/12M]",
+      "test": "Cash now",
+      "status": "PASS",
+      "detail": "proj=24599.13, matrix=24599.13"
+    },
+    {
+      "scenario": "Entity-Ba Franc[likely/12M]",
+      "test": "Cash balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Evahomes[likely/12M]",
+      "test": "Month count",
+      "status": "PASS",
+      "detail": "proj=12, matrix=12"
+    },
+    {
+      "scenario": "Entity-Evahomes[likely/12M]",
+      "test": "Net per month (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Evahomes[likely/12M]",
+      "test": "Rev - Cost = Net (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Evahomes[likely/12M]",
+      "test": "Horizon total net",
+      "status": "PASS",
+      "detail": "proj=3600.0, matrix=3600.0"
+    },
+    {
+      "scenario": "Entity-Evahomes[likely/12M]",
+      "test": "Cash now",
+      "status": "PASS",
+      "detail": "proj=56.54, matrix=56.54"
+    },
+    {
+      "scenario": "Entity-Evahomes[likely/12M]",
+      "test": "Cash balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Test Ent[likely/12M]",
+      "test": "Month count",
+      "status": "PASS",
+      "detail": "proj=12, matrix=12"
+    },
+    {
+      "scenario": "Entity-Test Ent[likely/12M]",
+      "test": "Net per month (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Test Ent[likely/12M]",
+      "test": "Rev - Cost = Net (all months)",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity-Test Ent[likely/12M]",
+      "test": "Horizon total net",
+      "status": "PASS",
+      "detail": "proj=0.0, matrix=0.0"
+    },
+    {
+      "scenario": "Entity-Test Ent[likely/12M]",
+      "test": "Cash now",
+      "status": "PASS",
+      "detail": "proj=0.0, matrix=0"
+    },
+    {
+      "scenario": "Entity-Test Ent[likely/12M]",
+      "test": "Cash balance progression",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "Entity",
+      "test": "Sum of entity totals == unfiltered total",
+      "status": "PASS",
+      "detail": "sum=-235209.47, total=-235209.47"
+    },
+    {
+      "scenario": "SSOT",
+      "test": "No .reduce() in CashFlowTable",
+      "status": "PASS",
+      "detail": "Clean"
+    },
+    {
+      "scenario": "SSOT",
+      "test": "No calcRowTotal",
+      "status": "PASS",
+      "detail": "Clean"
+    },
+    {
+      "scenario": "SSOT",
+      "test": "Has total_revenue",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "SSOT",
+      "test": "Has total_cost",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "SSOT",
+      "test": "Has total_net",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "SSOT",
+      "test": "Revenue rows have row_total",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "scenario": "SSOT",
+      "test": "Expense rows have row_total",
+      "status": "PASS",
+      "detail": ""
+    }
+  ]
+}

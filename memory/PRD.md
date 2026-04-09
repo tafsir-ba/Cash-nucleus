@@ -43,12 +43,23 @@ Consolidates bank accounts (state) and cash flows (events) into a deterministic 
 
 ### Final Control & Trust Lock (April 2026)
 - [x] **Undo Full Dependency Graph**: Restores exact prior state including planned_amount, actual_amount, variance decision, carryover flows, linked flow recalculations. Orphaned children parent_id restored on delete undo.
-- [x] **Creed 2 System Audit**: Projection = Matrix = P&L exact match verified under distribute, repeat, linked %, actual overrides, 24/36 horizons. Zero drift.
 - [x] **Matrix = SSOT**: Frontend performs ZERO math. Row totals (row_total), horizon totals (total_revenue, total_cost, total_net) all from backend.
-- [x] **Impact Preview**: Before confirming carry-forward/write-off, shows: cash position delta, target month, financial consequence. Overperformance handled symmetrically.
+- [x] **Impact Preview**: Shows cash position delta, target month, financial consequence for both carry-forward and write-off. Overperformance handled symmetrically.
 - [x] **Matrix Readability**: Stronger visual separation (Revenue/Expense blocks), bolder Total Revenue/Total Cost/Net P/L/Cash Balance rows.
 - [x] **Global Variance Tracking**: Summary bar showing total variance, total carried forward, total written off.
-- [x] **Dependency Consistency**: Parent <-> children always consistent, no orphan carryovers, no double counting.
+
+### Creed 2 — System Integrity Audit (April 2026)
+- [x] **134 tests, 0 failures** — Full scenario-driven audit
+- [x] Projection = Matrix = P&L exact match under ALL scenario toggles (committed/likely/extended/full)
+- [x] Distributed revenue + linked % COGS: correct per-period amounts, row totals, cross-validation across all 3 views
+- [x] Underperformance + carry forward: actual + carryover = planned, all 3 views consistent
+- [x] Overperformance + write-off: matrix uses actual, no spurious carryover, all 3 views consistent
+- [x] Full undo chain: record actual → carry forward → undo → undo creation → exact baseline restored (revenue, cost, net, flow count all match)
+- [x] 24M + 36M horizons: internal consistency verified, 12M is exact subset of 24M
+- [x] Multi-entity filtering: each entity internally consistent, sum of entity totals = unfiltered total
+- [x] SSOT code review: no .reduce(), no calcRowTotal, backend provides all totals
+- [x] Cash balance progression: cash_now + cumulative net = cash_balance per month (verified for all scenarios)
+- [x] Rev - Cost = Net consistency: verified for every month under every scenario
 
 ## Architecture
 - Frontend: React + Tailwind CSS + Shadcn UI + Recharts + @phosphor-icons/react + date-fns
@@ -57,7 +68,7 @@ Consolidates bank accounts (state) and cash flows (events) into a deterministic 
 
 ## Key API Endpoints
 - GET /api/projection?scenario=&horizon=&entity_id=
-- GET /api/projection/matrix (returns row_total, total_revenue, total_cost, total_net, revenue_per_month, cost_per_month, cash_balance_per_month, net_per_month)
+- GET /api/projection/matrix (returns row_total, total_revenue, total_cost, total_net, per-month breakdowns)
 - GET /api/month-details/{month}
 - GET /api/variance-summary?entity_id=
 - POST /api/cash-flows/batch | PUT /api/cash-flows/{id} | DELETE /api/cash-flows/{id}
@@ -68,10 +79,9 @@ Consolidates bank accounts (state) and cash flows (events) into a deterministic 
 
 ### P1
 - [ ] CSV import/export for data backup
-- [ ] Invoice Import: Upload invoice image → extract fields → create draft flow (editable before saving, uses canonical editor)
+- [ ] Invoice Import: Upload invoice image → extract fields → draft flow
 
 ### P2
-- [ ] Edge Case Stress Testing (negative cash + recovery, large variance, linked flows with distributed revenue)
 - [ ] Historical comparison
 - [ ] Custom category management
 
@@ -79,11 +89,3 @@ Consolidates bank accounts (state) and cash flows (events) into a deterministic 
 - [ ] What-If Simulator (sandboxed)
 - [ ] Keyboard shortcuts
 - [ ] Mobile optimization
-
-## Testing Status
-- Iteration 9: Backend 15/15 (100%), Frontend 100%
-- Undo: 5 scenarios verified (carry-forward, write-off, parent edit, orphan delete, multi-step chain) — zero residual
-- Creed 2: Projection = Matrix exact match for 12M and 24M
-- SSOT: Code reviewed — zero .reduce() in frontend
-- Distributed revenue + linked COGS: correct per-period amounts
-- Entity filtering: matrix totals change correctly
