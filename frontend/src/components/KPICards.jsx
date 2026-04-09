@@ -1,4 +1,4 @@
-import { CheckCircle, WarningCircle, Eye, Plus } from "@phosphor-icons/react";
+import { CheckCircle, WarningCircle, Eye, Plus, Warning } from "@phosphor-icons/react";
 
 const formatCurrency = (amount) => {
   return new Intl.NumberFormat('de-CH', {
@@ -24,36 +24,30 @@ const StatusIcon = ({ status }) => {
 
 const getStatusColor = (status) => {
   switch (status) {
-    case 'Good':
-      return 'text-emerald-400';
-    case 'Watch':
-      return 'text-amber-400';
-    case 'Danger':
-      return 'text-rose-400';
-    default:
-      return 'text-zinc-400';
+    case 'Good': return 'text-emerald-400';
+    case 'Watch': return 'text-amber-400';
+    case 'Danger': return 'text-rose-400';
+    default: return 'text-zinc-400';
   }
 };
 
 const getStatusBg = (status) => {
   switch (status) {
-    case 'Good':
-      return 'bg-emerald-500/10 border-emerald-500/20';
-    case 'Watch':
-      return 'bg-amber-500/10 border-amber-500/20';
-    case 'Danger':
-      return 'bg-rose-500/10 border-rose-500/20';
-    default:
-      return 'bg-zinc-800/50 border-zinc-700';
+    case 'Good': return 'bg-emerald-500/10 border-emerald-500/20';
+    case 'Watch': return 'bg-amber-500/10 border-amber-500/20';
+    case 'Danger': return 'bg-rose-500/10 border-rose-500/20';
+    default: return 'bg-zinc-800/50 border-zinc-700';
   }
 };
 
 export const KPICards = ({ projection, hasAccounts, onAddAccount }) => {
   if (!projection) return null;
 
-  const { cash_now, lowest_cash, lowest_cash_month, overall_status, safety_buffer } = projection;
+  const { 
+    cash_now, lowest_cash, lowest_cash_month, overall_status, safety_buffer,
+    first_watch_month, first_danger_month 
+  } = projection;
   
-  // Calculate how much below buffer
   const belowBuffer = safety_buffer - lowest_cash;
   const isNoData = cash_now === 0 && !hasAccounts;
 
@@ -80,7 +74,7 @@ export const KPICards = ({ projection, hasAccounts, onAddAccount }) => {
         )}
       </div>
 
-      {/* Lowest Point - THE KEY METRIC */}
+      {/* Lowest Point */}
       <div className={`kpi-card ${lowest_cash < 0 ? 'border-rose-500/30' : ''}`} data-testid="kpi-lowest-cash">
         <span className="kpi-label">Lowest Point</span>
         {isNoData ? (
@@ -95,20 +89,20 @@ export const KPICards = ({ projection, hasAccounts, onAddAccount }) => {
         )}
       </div>
 
-      {/* Lowest Point Month - Replaced "Pressure Month" */}
+      {/* Lowest Cash Month */}
       <div className="kpi-card" data-testid="kpi-lowest-month">
-        <span className="kpi-label">Critical Month</span>
+        <span className="kpi-label">Lowest Cash Month</span>
         {isNoData ? (
           <span className="text-lg text-zinc-500 mt-1">—</span>
         ) : (
           <>
             <span className="kpi-value text-2xl sm:text-3xl lg:text-4xl">{lowest_cash_month}</span>
-            <span className="kpi-meta">When cash is lowest</span>
+            <span className="kpi-meta">When cash hits bottom</span>
           </>
         )}
       </div>
 
-      {/* Status with EXPLANATION */}
+      {/* Status with first breach info */}
       <div className={`kpi-card border ${getStatusBg(overall_status)}`} data-testid="kpi-status">
         <span className="kpi-label">Status</span>
         {isNoData ? (
@@ -121,21 +115,22 @@ export const KPICards = ({ projection, hasAccounts, onAddAccount }) => {
                 {overall_status}
               </span>
             </div>
-            {/* Explicit explanation */}
-            <div className="mt-1 text-xs text-zinc-400 space-y-0.5">
+            <div className="mt-1 text-xs space-y-0.5">
               {overall_status === 'Good' && (
-                <p>Always above CHF {formatCurrency(safety_buffer).replace('CHF ', '')}</p>
+                <p className="text-zinc-400">Always above buffer</p>
               )}
-              {overall_status === 'Watch' && (
+              {overall_status === 'Watch' && first_watch_month && (
                 <>
-                  <p className="text-amber-400">Below buffer by {formatCurrency(belowBuffer)}</p>
-                  <p>in {lowest_cash_month}</p>
+                  <p className="text-amber-400">First breach: {first_watch_month}</p>
+                  <p className="text-zinc-500">Below buffer by {formatCurrency(belowBuffer)}</p>
                 </>
               )}
               {overall_status === 'Danger' && (
                 <>
-                  <p className="text-rose-400">Negative: {formatCurrency(lowest_cash)}</p>
-                  <p>in {lowest_cash_month}</p>
+                  {first_danger_month && (
+                    <p className="text-rose-400">Goes negative: {first_danger_month}</p>
+                  )}
+                  <p className="text-zinc-500">Lowest: {formatCurrency(lowest_cash)}</p>
                 </>
               )}
             </div>

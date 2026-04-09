@@ -99,6 +99,8 @@ class CashFlow(BaseModel):
     entity_id: str = ""  # Default empty for backward compatibility
     entity: str = ""  # Legacy field
     parent_id: Optional[str] = None  # For linked flows
+    is_percentage: bool = False
+    percentage_of_parent: Optional[float] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -113,6 +115,9 @@ class CashFlowCreate(BaseModel):
     recurrence_count: Optional[int] = None
     entity_id: str
     parent_id: Optional[str] = None
+    # For percentage-based linked flows
+    is_percentage: bool = False
+    percentage_of_parent: Optional[float] = None  # e.g., 40 for 40%
 
 class CashFlowUpdate(BaseModel):
     label: Optional[str] = None
@@ -158,6 +163,8 @@ class ProjectionResponse(BaseModel):
     lowest_cash: float
     lowest_cash_month: str
     highest_pressure_month: str
+    first_watch_month: Optional[str] = None
+    first_danger_month: Optional[str] = None
     overall_status: str
     safety_buffer: float
     months: List[MonthProjection]
@@ -299,7 +306,13 @@ async def create_cash_flow(flow: CashFlowCreate):
 
 @api_router.post("/cash-flows/batch")
 async def create_cash_flow_batch(batch: CashFlowBatchCreate):
-    """Create a parent flow with optional linked flows"""
+    """Create a parent flow with optional linked flows.
+    
+    Rules:
+    - Linked flows inherit recurrence from parent (no independent recurrence)
+    - Linked flows can be percentage-based (auto-calculated from parent amount)
+    - Cannot have both fixed amount and percentage
+    """
     # Verify entity exists
     entity = await db.entities.find_one({"id": batch.parent.entity_id})
     if not entity:
@@ -310,11 +323,24 @@ async def create_cash_flow_batch(batch: CashFlowBatchCreate):
     parent_doc = parent_obj.model_dump()
     await db.cash_flows.insert_one(parent_doc)
     
-    # Create linked flows
+    # Create linked flows - inherit recurrence from parent
     linked_results = []
     for linked in batch.linked:
         linked_data = linked.model_dump()
         linked_data["parent_id"] = parent_obj.id
+        
+        # Enforce recurrence inheritance from parent
+        linked_data["recurrence"] = batch.parent.recurrence
+        linked_data["recurrence_end"] = batch.parent.recurrence_end
+        linked_data["recurrence_count"] = batch.parent.recurrence_count
+        
+        # Calculate amount if percentage-based
+        if linked_data.get("is_percentage") and linked_data.get("percentage_of_parent"):
+            pct = linked_data["percentage_of_parent"]
+            parent_amount = abs(batch.parent.amount)
+            # Percentage flows are typically costs (negative)
+            linked_data["amount"] = -(parent_amount * pct / 100)
+        
         linked_obj = CashFlow(**linked_data)
         linked_doc = linked_obj.model_dump()
         await db.cash_flows.insert_one(linked_doc)
@@ -341,6 +367,39 @@ async def update_cash_flow(flow_id: str, update: CashFlowUpdate):
     )
     if not result:
         raise HTTPException(status_code=404, detail="Cash flow not found")
+    
+    # If this is a parent flow and amount changed, update percentage-based children
+    if "amount" in update_data:
+        children = await db.cash_flows.find(
+            {"parent_id": flow_id, "is_percentage": True},
+            {"_id": 0}
+        ).to_list(100)
+        
+        for child in children:
+            if child.get("percentage_of_parent"):
+                new_amount = -(abs(update_data["amount"]) * child["percentage_of_parent"] / 100)
+                await db.cash_flows.update_one(
+                    {"id": child["id"]},
+                    {"$set": {"amount": new_amount, "updated_at": datetime.now(timezone.utc).isoformat()}}
+                )
+    
+    # If recurrence changed on parent, update all children
+    if any(k in update_data for k in ["recurrence", "recurrence_end", "recurrence_count"]):
+        recurrence_update = {}
+        if "recurrence" in update_data:
+            recurrence_update["recurrence"] = update_data["recurrence"]
+        if "recurrence_end" in update_data:
+            recurrence_update["recurrence_end"] = update_data["recurrence_end"]
+        if "recurrence_count" in update_data:
+            recurrence_update["recurrence_count"] = update_data["recurrence_count"]
+        
+        if recurrence_update:
+            recurrence_update["updated_at"] = datetime.now(timezone.utc).isoformat()
+            await db.cash_flows.update_many(
+                {"parent_id": flow_id},
+                {"$set": recurrence_update}
+            )
+    
     return result
 
 @api_router.delete("/cash-flows/{flow_id}")
@@ -477,6 +536,8 @@ async def get_projection(scenario: str = "likely"):
     lowest_cash_month = start_of_month.strftime("%b %Y")
     highest_pressure_month = start_of_month.strftime("%b %Y")
     highest_pressure = 0.0
+    first_watch_month = None
+    first_danger_month = None
     
     for month_key in sorted(months_data.keys()):
         data = months_data[month_key]
@@ -487,8 +548,12 @@ async def get_projection(scenario: str = "likely"):
             status = "Good"
         elif closing >= 0:
             status = "Watch"
+            if first_watch_month is None:
+                first_watch_month = data["month_label"]
         else:
             status = "Danger"
+            if first_danger_month is None:
+                first_danger_month = data["month_label"]
         
         if closing < lowest_cash:
             lowest_cash = closing
@@ -520,6 +585,8 @@ async def get_projection(scenario: str = "likely"):
         lowest_cash=round(lowest_cash, 2),
         lowest_cash_month=lowest_cash_month,
         highest_pressure_month=highest_pressure_month,
+        first_watch_month=first_watch_month,
+        first_danger_month=first_danger_month,
         overall_status=overall_status,
         safety_buffer=safety_buffer,
         months=months

@@ -219,7 +219,7 @@ const FlowEntry = ({ flow, linkedFlows, entities, onEdit, onDelete, expanded, on
   const entityName = entities.find(e => e.id === flow.entity_id)?.name || "—";
 
   return (
-    <div className="border-b border-zinc-800/50 last:border-0">
+    <div className={`border-b border-zinc-800/50 last:border-0 ${hasLinked ? 'bg-zinc-900/20' : ''}`}>
       {/* Main Flow Row */}
       <div 
         className="flex items-center gap-3 p-3 hover:bg-zinc-800/30 transition-colors cursor-pointer"
@@ -229,21 +229,21 @@ const FlowEntry = ({ flow, linkedFlows, entities, onEdit, onDelete, expanded, on
         <div className="w-5">
           {hasLinked && (
             expanded 
-              ? <CaretDown size={14} className="text-zinc-500" />
-              : <CaretRight size={14} className="text-zinc-500" />
+              ? <CaretDown size={14} className="text-amber-400" />
+              : <CaretRight size={14} className="text-amber-400" />
           )}
         </div>
 
         {/* Info */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-sm text-zinc-200 truncate">{flow.label}</span>
+            <span className="text-sm text-zinc-200 truncate font-medium">{flow.label}</span>
             {flow.recurrence === "monthly" && (
               <ArrowsClockwise size={14} className="text-amber-400 flex-shrink-0" title="Recurring" />
             )}
             {hasLinked && (
-              <span className="flex items-center gap-1 text-xs text-zinc-500">
-                <Link size={12} /> {linkedFlows.length}
+              <span className="flex items-center gap-1 text-xs bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded">
+                <Link size={10} /> {linkedFlows.length} linked
               </span>
             )}
           </div>
@@ -279,18 +279,26 @@ const FlowEntry = ({ flow, linkedFlows, entities, onEdit, onDelete, expanded, on
         </div>
       </div>
 
-      {/* Linked Flows */}
+      {/* Linked Flows - stronger visual grouping */}
       {expanded && hasLinked && (
-        <div className="pl-8 bg-zinc-900/30">
+        <div className="bg-zinc-950/50 border-t border-zinc-800/30">
+          <div className="pl-8 pr-3 py-1 text-xs text-zinc-500 uppercase tracking-wider">
+            Linked to "{flow.label}"
+          </div>
           {linkedFlows.map((linked) => (
             <div 
               key={linked.id}
-              className="flex items-center gap-3 p-2 border-l-2 border-zinc-700 ml-2 hover:bg-zinc-800/20"
+              className="flex items-center gap-3 px-3 py-2 ml-5 border-l-2 border-amber-500/40 hover:bg-zinc-800/20"
             >
-              <Link size={12} className="text-zinc-600 flex-shrink-0" />
+              <Link size={12} className="text-amber-400 flex-shrink-0" />
               <div className="flex-1 min-w-0">
                 <span className="text-sm text-zinc-300">{linked.label}</span>
-                <span className="text-xs text-zinc-500 ml-2">{linked.category}</span>
+                <div className="flex items-center gap-2 text-xs text-zinc-500 mt-0.5">
+                  <span>{linked.category}</span>
+                  {linked.is_percentage && linked.percentage_of_parent && (
+                    <span className="text-amber-400">({linked.percentage_of_parent}% of parent)</span>
+                  )}
+                </div>
               </div>
               <span className={`text-sm font-mono ${linked.amount < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
                 {linked.amount < 0 ? '-' : '+'}{formatCurrency(linked.amount)}
