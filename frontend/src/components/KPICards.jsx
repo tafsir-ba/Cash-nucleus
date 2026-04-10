@@ -36,7 +36,7 @@ const getStatusBg = (status) => {
   }
 };
 
-export const KPICards = ({ projection, hasAccounts, onAddAccount }) => {
+export const KPICards = ({ projection, hasAccounts, onAddAccount, onCashNowClick }) => {
   if (!projection) return null;
 
   const { 
@@ -51,7 +51,7 @@ export const KPICards = ({ projection, hasAccounts, onAddAccount }) => {
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 md:gap-4" data-testid="kpi-cards">
       {/* Cash Now */}
-      <div className="kpi-card" data-testid="kpi-cash-now">
+      <div className="kpi-card cursor-pointer hover:border-zinc-600" onClick={onCashNowClick} data-testid="kpi-cash-now">
         <span className="kpi-label">Cash Now</span>
         {isNoData ? (
           <>

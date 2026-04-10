@@ -14,6 +14,7 @@ import { CashFlowTable } from "./components/CashFlowTable";
 import { EntryLogPage } from "./components/EntryLogPage";
 import { DecisionPanel } from "./components/DecisionPanel";
 import { BankAccountsDialog } from "./components/BankAccountsDialog";
+import { TreasuryDrawer } from "./components/TreasuryDrawer";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { EntryLogDialog } from "./components/EntryLogDialog";
 import { EntityFilter } from "./components/EntityFilter";
@@ -39,6 +40,7 @@ function App() {
   
   // Dialog states
   const [bankAccountsOpen, setBankAccountsOpen] = useState(false);
+  const [treasuryOpen, setTreasuryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [entryLogOpen, setEntryLogOpen] = useState(false);
   
@@ -209,7 +211,7 @@ function App() {
                   <ListBullets size={20} />
                 </button>
                 <button
-                  onClick={() => setBankAccountsOpen(true)}
+                  onClick={() => setTreasuryOpen(true)}
                   className="p-2 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md transition-colors"
                   title="Bank Accounts"
                   data-testid="bank-accounts-btn"
@@ -238,6 +240,7 @@ function App() {
             projection={projection} 
             hasAccounts={hasAccounts}
             onAddAccount={() => setBankAccountsOpen(true)}
+            onCashNowClick={() => setTreasuryOpen(true)}
           />
         </section>
 
@@ -372,6 +375,14 @@ function App() {
       </main>
 
       {/* Dialogs */}
+      <TreasuryDrawer
+        open={treasuryOpen}
+        onOpenChange={setTreasuryOpen}
+        onDataChange={handleDataChange}
+        entities={entities}
+        onEntitiesChange={fetchEntities}
+        cashNow={projection?.cash_now}
+      />
       <BankAccountsDialog 
         open={bankAccountsOpen} 
         onOpenChange={setBankAccountsOpen}
