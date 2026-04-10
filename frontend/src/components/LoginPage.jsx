@@ -40,7 +40,7 @@ export const LoginPage = ({ onLogin }) => {
         {/* Logo */}
         <div className="text-center mb-10">
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-50 font-heading">
-            Cash Pilot
+            Evo Nucleus
           </h1>
           <p className="text-zinc-600 text-sm mt-1">Financial Decision Cockpit</p>
         </div>
