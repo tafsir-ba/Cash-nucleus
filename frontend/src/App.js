@@ -4,6 +4,7 @@ import axios from "axios";
 import { Toaster, toast } from "sonner";
 
 // Components
+import { LoginPage } from "./components/LoginPage";
 import { KPICards } from "./components/KPICards";
 import { ScenarioToggle } from "./components/ScenarioToggle";
 import { ProjectionChart } from "./components/ProjectionChart";
@@ -21,12 +22,48 @@ import { EntityFilter } from "./components/EntityFilter";
 import { HorizonSelector } from "./components/HorizonSelector";
 
 // Icons
-import { Gear, Bank, ListBullets, ArrowCounterClockwise } from "@phosphor-icons/react";
+import { Gear, Bank, ListBullets, ArrowCounterClockwise, SignOut } from "@phosphor-icons/react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
+// Configure axios to send cookies
+axios.defaults.withCredentials = true;
+
 function App() {
+  // Auth state: null = checking, false = not logged in, object = logged in
+  const [user, setUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  useEffect(() => {
+    axios.get(`${API}/auth/me`)
+      .then(res => { setUser(res.data); setAuthChecked(true); })
+      .catch(() => { setUser(false); setAuthChecked(true); });
+  }, []);
+
+  const handleLogout = async () => {
+    try {
+      await axios.post(`${API}/auth/logout`);
+    } catch {}
+    setUser(false);
+  };
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
+        <div className="text-zinc-400 font-body">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginPage onLogin={(u) => setUser(u)} />;
+  }
+
+  return <Dashboard user={user} onLogout={handleLogout} />;
+}
+
+function Dashboard({ user, onLogout }) {
   const [scenario, setScenario] = useState("likely");
   const [horizon, setHorizon] = useState(12);
   const [projection, setProjection] = useState(null);
@@ -225,6 +262,14 @@ function App() {
                   data-testid="settings-btn"
                 >
                   <Gear size={20} />
+                </button>
+                <button
+                  onClick={onLogout}
+                  className="p-2 text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-md transition-colors"
+                  title="Sign out"
+                  data-testid="logout-btn"
+                >
+                  <SignOut size={20} />
                 </button>
               </div>
             </div>
