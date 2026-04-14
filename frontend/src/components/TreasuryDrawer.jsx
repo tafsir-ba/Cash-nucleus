@@ -36,6 +36,7 @@ const COLORS = [
 
 export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onEntitiesChange, cashNow }) => {
   const [accounts, setAccounts] = useState([]);
+  const [debts, setDebts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [sortField, setSortField] = useState(null);
@@ -58,11 +59,21 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
     }
   }, []);
 
+  const fetchDebts = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API}/treasury/debts`);
+      setDebts(response.data);
+    } catch (error) {
+      console.error("Failed to fetch debts:", error);
+    }
+  }, []);
+
   useEffect(() => {
     if (open) {
       fetchAccounts();
+      fetchDebts();
     }
-  }, [open, fetchAccounts]);
+  }, [open, fetchAccounts, fetchDebts]);
 
   useEffect(() => {
     if (entities.length > 0 && !formData.entity_id) {
@@ -147,6 +158,12 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
   };
 
   const totalBalance = cashNow ?? accounts.reduce((sum, acc) => sum + acc.amount, 0);
+  const recurringDebtService = debts
+    .filter(debt => debt.frequency !== "one_time")
+    .reduce((sum, debt) => sum + debt.monthly_payment_chf, 0);
+  const oneTimeDebtTotal = debts
+    .filter(debt => debt.frequency === "one_time")
+    .reduce((sum, debt) => sum + debt.monthly_payment_chf, 0);
 
   const getEntityName = (entityId) => {
     return entities.find(e => e.id === entityId)?.name || "Unknown";
@@ -428,6 +445,53 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
               </button>
             </form>
           )}
+
+          {/* Debt Consolidation */}
+          <div className="border border-zinc-800 rounded-lg p-4 bg-zinc-900/30" data-testid="treasury-debt-consolidation">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs text-zinc-500 uppercase tracking-wider">Debt Consolidation</p>
+              <p className="text-xs text-zinc-400">
+                Monthly debt service: <span className="font-mono text-zinc-200">{formatCurrency(recurringDebtService)}</span>
+              </p>
+            </div>
+            {oneTimeDebtTotal > 0 && (
+              <p className="text-xs text-zinc-500 mb-3">
+                One-time debt entries (excluded from monthly service):{" "}
+                <span className="font-mono text-zinc-300">{formatCurrency(oneTimeDebtTotal)}</span>
+              </p>
+            )}
+
+            {debts.length === 0 ? (
+              <div className="text-zinc-600 text-sm py-3">
+                No debt-tagged cash flows found.
+              </div>
+            ) : (
+              <div className="border border-zinc-800 rounded-lg overflow-hidden">
+                <table className="w-full" data-testid="treasury-debt-table">
+                  <thead>
+                    <tr className="border-b border-zinc-800 bg-zinc-900/50">
+                      <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-left py-3 px-3">Creditor</th>
+                      <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-left py-3 px-3">Entity</th>
+                      <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-left py-3 px-3">Frequency</th>
+                      <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-right py-3 px-3">Monthly Payment</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {debts.map((debt) => (
+                      <tr key={debt.source_flow_id} className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors">
+                        <td className="py-2.5 px-3 text-sm text-zinc-200">{debt.creditor}</td>
+                        <td className="py-2.5 px-3 text-xs text-zinc-500">{debt.entity}</td>
+                        <td className="py-2.5 px-3 text-xs text-zinc-500 capitalize">{debt.frequency.replace("_", " ")}</td>
+                        <td className="py-2.5 px-3 text-sm font-mono text-zinc-100 tabular-nums text-right">
+                          {formatCurrency(debt.monthly_payment_chf)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
 
           {/* Create Entity Overlay */}
           {showEntityCreate && (

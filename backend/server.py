@@ -135,6 +135,14 @@ class BankAccountUpdate(BaseModel):
     label: Optional[str] = None
     amount: Optional[float] = None
 
+# ============== TREASURY DEBT VIEW MODELS ==============
+class DebtConsolidationItem(BaseModel):
+    creditor: str
+    entity: str
+    monthly_payment_chf: float
+    frequency: str
+    source_flow_id: str
+
 # ============== CASH FLOW MODELS ==============
 class CashFlow(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -450,6 +458,49 @@ async def delete_bank_account(account_id: str):
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Bank account not found")
     return {"message": "Bank account deleted"}
+
+@api_router.get("/treasury/debts", response_model=List[DebtConsolidationItem])
+async def get_treasury_debts(entity_id: Optional[str] = None):
+    """Derived debt consolidation view from existing debt-tagged cash flows."""
+    query = {"category": Category.DEBT.value}
+    if entity_id:
+        query["entity_id"] = entity_id
+
+    flows = await db.cash_flows.find(query, {"_id": 0}).to_list(5000)
+    if not flows:
+        return []
+
+    entity_ids = list({f.get("entity_id") for f in flows if f.get("entity_id")})
+    entity_map = {}
+    if entity_ids:
+        entities = await db.entities.find({"id": {"$in": entity_ids}}, {"_id": 0, "id": 1, "name": 1}).to_list(5000)
+        entity_map = {e["id"]: e["name"] for e in entities}
+
+    debts = []
+    for flow in flows:
+        recurrence = flow.get("recurrence", Recurrence.NONE.value)
+        amount = abs(float(flow.get("amount", 0)))
+
+        if recurrence == Recurrence.QUARTERLY.value:
+            monthly_payment = amount / 3
+            frequency = "quarterly"
+        elif recurrence == Recurrence.MONTHLY.value:
+            monthly_payment = amount
+            frequency = "monthly"
+        else:
+            monthly_payment = amount
+            frequency = "one_time"
+
+        debts.append({
+            "creditor": flow.get("label", "Unnamed debt"),
+            "entity": flow.get("entity") or entity_map.get(flow.get("entity_id", ""), "Unknown"),
+            "monthly_payment_chf": round(monthly_payment, 2),
+            "frequency": frequency,
+            "source_flow_id": flow.get("id", ""),
+        })
+
+    debts.sort(key=lambda d: d["monthly_payment_chf"], reverse=True)
+    return debts
 
 # ============== CASH FLOW ROUTES ==============
 @api_router.get("/cash-flows")
