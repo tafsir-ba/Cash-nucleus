@@ -38,6 +38,8 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
   const [accounts, setAccounts] = useState([]);
   const [debts, setDebts] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [debtEditingId, setDebtEditingId] = useState(null);
+  const [debtForm, setDebtForm] = useState({ creditor: "", total_debt_chf: "" });
   const [editingId, setEditingId] = useState(null);
   const [sortField, setSortField] = useState(null);
   const [sortDir, setSortDir] = useState('desc');
@@ -158,12 +160,7 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
   };
 
   const totalBalance = cashNow ?? accounts.reduce((sum, acc) => sum + acc.amount, 0);
-  const recurringDebtService = debts
-    .filter(debt => debt.frequency !== "one_time")
-    .reduce((sum, debt) => sum + debt.monthly_payment_chf, 0);
-  const oneTimeDebtTotal = debts
-    .filter(debt => debt.frequency === "one_time")
-    .reduce((sum, debt) => sum + debt.monthly_payment_chf, 0);
+  const totalDebt = debts.reduce((sum, debt) => sum + debt.total_debt_chf, 0);
 
   const getEntityName = (entityId) => {
     return entities.find(e => e.id === entityId)?.name || "Unknown";
@@ -208,6 +205,50 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
       </span>
     </th>
   );
+
+  const startDebtEdit = (debt) => {
+    setDebtEditingId(debt.source_flow_id);
+    setDebtForm({
+      creditor: debt.creditor || "",
+      total_debt_chf: debt.total_debt_chf?.toString() || "",
+    });
+  };
+
+  const cancelDebtEdit = () => {
+    setDebtEditingId(null);
+    setDebtForm({ creditor: "", total_debt_chf: "" });
+  };
+
+  const handleDebtSave = async () => {
+    if (!debtEditingId || !debtForm.creditor.trim() || !debtForm.total_debt_chf) return;
+    setLoading(true);
+    try {
+      await axios.put(`${API}/treasury/debts/${debtEditingId}`, {
+        creditor: debtForm.creditor.trim(),
+        total_debt_chf: parseFloat(debtForm.total_debt_chf),
+      });
+      toast.success("Debt updated");
+      cancelDebtEdit();
+      fetchDebts();
+      onDataChange?.();
+    } catch (error) {
+      toast.error("Failed to update debt");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDebtDelete = async (debt) => {
+    if (!window.confirm(`Delete debt "${debt.creditor}"?`)) return;
+    try {
+      await axios.delete(`${API}/cash-flows/${debt.source_flow_id}`);
+      toast.success("Debt deleted");
+      fetchDebts();
+      onDataChange?.();
+    } catch (error) {
+      toast.error("Failed to delete debt");
+    }
+  };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -451,15 +492,9 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
             <div className="flex items-center justify-between mb-3">
               <p className="text-xs text-zinc-500 uppercase tracking-wider">Debt Consolidation</p>
               <p className="text-xs text-zinc-400">
-                Monthly debt service: <span className="font-mono text-zinc-200">{formatCurrency(recurringDebtService)}</span>
+                Total debt: <span className="font-mono text-zinc-200">{formatCurrency(totalDebt)}</span>
               </p>
             </div>
-            {oneTimeDebtTotal > 0 && (
-              <p className="text-xs text-zinc-500 mb-3">
-                One-time debt entries (excluded from monthly service):{" "}
-                <span className="font-mono text-zinc-300">{formatCurrency(oneTimeDebtTotal)}</span>
-              </p>
-            )}
 
             {debts.length === 0 ? (
               <div className="text-zinc-600 text-sm py-3">
@@ -472,8 +507,8 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                     <tr className="border-b border-zinc-800 bg-zinc-900/50">
                       <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-left py-3 px-3">Creditor</th>
                       <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-left py-3 px-3">Entity</th>
-                      <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-left py-3 px-3">Frequency</th>
-                      <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-right py-3 px-3">Monthly Payment</th>
+                      <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-right py-3 px-3">Total Debt</th>
+                      <th className="py-3 px-2 w-16"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -481,14 +516,81 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                       <tr key={debt.source_flow_id} className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors">
                         <td className="py-2.5 px-3 text-sm text-zinc-200">{debt.creditor}</td>
                         <td className="py-2.5 px-3 text-xs text-zinc-500">{debt.entity}</td>
-                        <td className="py-2.5 px-3 text-xs text-zinc-500 capitalize">{debt.frequency.replace("_", " ")}</td>
                         <td className="py-2.5 px-3 text-sm font-mono text-zinc-100 tabular-nums text-right">
-                          {formatCurrency(debt.monthly_payment_chf)}
+                          <div>{formatCurrency(debt.total_debt_chf)}</div>
+                          <div className="mt-1 text-[10px] text-zinc-500 font-sans">
+                            {debt.calculation_basis}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-2">
+                          <div className="flex items-center gap-1 justify-end">
+                            <button
+                              onClick={() => startDebtEdit(debt)}
+                              className="p-1 text-zinc-600 hover:text-zinc-300 rounded transition-colors"
+                              data-testid={`edit-debt-${debt.source_flow_id}`}
+                            >
+                              <PencilSimple size={14} />
+                            </button>
+                            <button
+                              onClick={() => handleDebtDelete(debt)}
+                              className="p-1 text-zinc-600 hover:text-rose-400 rounded transition-colors"
+                              data-testid={`delete-debt-${debt.source_flow_id}`}
+                            >
+                              <Trash size={14} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {debtEditingId && (
+              <div className="mt-3 border border-zinc-800 rounded-lg p-3 bg-zinc-950/50 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-zinc-500 uppercase tracking-wider">Edit Debt</p>
+                  <button
+                    type="button"
+                    onClick={cancelDebtEdit}
+                    className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs text-zinc-500 mb-1.5 block">Creditor</Label>
+                    <input
+                      type="text"
+                      value={debtForm.creditor}
+                      onChange={(e) => setDebtForm({ ...debtForm, creditor: e.target.value })}
+                      className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100"
+                      data-testid="debt-creditor-input"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-zinc-500 mb-1.5 block">Total Debt (CHF)</Label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={debtForm.total_debt_chf}
+                      onChange={(e) => setDebtForm({ ...debtForm, total_debt_chf: e.target.value })}
+                      className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 font-mono"
+                      data-testid="debt-total-input"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={loading || !debtForm.creditor.trim() || !debtForm.total_debt_chf}
+                  onClick={handleDebtSave}
+                  className="btn-primary w-full text-sm py-2"
+                  data-testid="save-debt-btn"
+                >
+                  Update Debt
+                </button>
               </div>
             )}
           </div>

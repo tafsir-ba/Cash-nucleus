@@ -139,9 +139,16 @@ class BankAccountUpdate(BaseModel):
 class DebtConsolidationItem(BaseModel):
     creditor: str
     entity: str
+    entity_id: str
+    total_debt_chf: float
     monthly_payment_chf: float
     frequency: str
+    calculation_basis: str
     source_flow_id: str
+
+class TreasuryDebtUpdate(BaseModel):
+    creditor: Optional[str] = None
+    total_debt_chf: Optional[float] = None
 
 # ============== CASH FLOW MODELS ==============
 class CashFlow(BaseModel):
@@ -479,6 +486,8 @@ async def get_treasury_debts(entity_id: Optional[str] = None):
     debts = []
     for flow in flows:
         recurrence = flow.get("recurrence", Recurrence.NONE.value)
+        recurrence_mode = flow.get("recurrence_mode", RecurrenceMode.REPEAT.value)
+        recurrence_count = flow.get("recurrence_count")
         amount = abs(float(flow.get("amount", 0)))
 
         if recurrence == Recurrence.QUARTERLY.value:
@@ -491,16 +500,69 @@ async def get_treasury_debts(entity_id: Optional[str] = None):
             monthly_payment = amount
             frequency = "one_time"
 
+        if recurrence == Recurrence.NONE.value:
+            total_debt = amount
+            basis = "One-time amount"
+        elif recurrence_mode == RecurrenceMode.DISTRIBUTE.value:
+            total_debt = amount
+            basis = "Distributed total amount"
+        elif recurrence_count and recurrence_count > 0:
+            total_debt = amount * recurrence_count
+            basis = f"Per-period x {recurrence_count}"
+        else:
+            total_debt = amount
+            basis = "Recurring (no count)"
+
         debts.append({
             "creditor": flow.get("label", "Unnamed debt"),
             "entity": flow.get("entity") or entity_map.get(flow.get("entity_id", ""), "Unknown"),
+            "entity_id": flow.get("entity_id", ""),
+            "total_debt_chf": round(total_debt, 2),
             "monthly_payment_chf": round(monthly_payment, 2),
             "frequency": frequency,
+            "calculation_basis": basis,
             "source_flow_id": flow.get("id", ""),
         })
 
-    debts.sort(key=lambda d: d["monthly_payment_chf"], reverse=True)
+    debts.sort(key=lambda d: d["total_debt_chf"], reverse=True)
     return debts
+
+@api_router.put("/treasury/debts/{flow_id}", response_model=CashFlow)
+async def update_treasury_debt(flow_id: str, update: TreasuryDebtUpdate):
+    """Update debt from treasury context while preserving underlying cash flow behavior."""
+    flow = await db.cash_flows.find_one({"id": flow_id}, {"_id": 0})
+    if not flow:
+        raise HTTPException(status_code=404, detail="Debt flow not found")
+    if flow.get("category") != Category.DEBT.value:
+        raise HTTPException(status_code=400, detail="Flow is not categorized as debt")
+
+    patch = {}
+    if update.creditor is not None:
+        creditor = update.creditor.strip()
+        if not creditor:
+            raise HTTPException(status_code=400, detail="Creditor cannot be empty")
+        patch["label"] = creditor
+
+    if update.total_debt_chf is not None:
+        total_abs = abs(float(update.total_debt_chf))
+        recurrence = flow.get("recurrence", Recurrence.NONE.value)
+        recurrence_mode = flow.get("recurrence_mode", RecurrenceMode.REPEAT.value)
+        recurrence_count = flow.get("recurrence_count")
+
+        if recurrence == Recurrence.NONE.value:
+            signed_amount = -total_abs
+        elif recurrence_mode == RecurrenceMode.DISTRIBUTE.value:
+            signed_amount = -total_abs
+        elif recurrence_count and recurrence_count > 0:
+            signed_amount = -(total_abs / recurrence_count)
+        else:
+            signed_amount = -total_abs
+        patch["amount"] = signed_amount
+
+    if not patch:
+        raise HTTPException(status_code=400, detail="No valid debt update data")
+
+    return await update_cash_flow(flow_id, CashFlowUpdate(**patch))
 
 # ============== CASH FLOW ROUTES ==============
 @api_router.get("/cash-flows")
