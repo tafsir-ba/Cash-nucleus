@@ -7,6 +7,7 @@ import {
 } from "../components/ui/dialog";
 import { Label } from "../components/ui/label";
 import { FlowEditor } from "./FlowEditor";
+import { inspectAmountInput, formatAmountInput } from "./amountExpression";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -40,16 +41,36 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
   const planned = cellInfo.cell?.has_actual ? cellInfo.cell.planned : cellInfo.cell?.amount;
   const isRevenue = (planned || 0) > 0;
   const plannedAbs = Math.abs(planned || 0);
-  const actualAbs = actualVal ? parseFloat(actualVal) : null;
+  const inspectedActual = inspectAmountInput(actualVal);
+  const actualAbs = inspectedActual.isValid ? inspectedActual.value : null;
   const hasVariance = actualAbs !== null && Math.abs(actualAbs - plannedAbs) > 0.01;
   const varianceAmount = hasVariance ? plannedAbs - actualAbs : 0;
   const isUnder = varianceAmount > 0;
 
+  const applyActualExpression = (rawValue) => {
+    const inspected = inspectAmountInput(rawValue);
+    if (!inspected.text) return true;
+    if (!inspected.isValid) {
+      toast.error("Invalid amount expression");
+      return false;
+    }
+    if (inspected.hasExpression) {
+      setActualVal(formatAmountInput(inspected.value));
+    }
+    return true;
+  };
+
   const handleSave = async (action) => {
+    const parsedActual = inspectAmountInput(actualVal);
+    if (!parsedActual.isValid) {
+      toast.error("Invalid amount expression");
+      return;
+    }
+
     setSaving(true);
     try {
       const sign = isRevenue ? 1 : -1;
-      const actualAmount = parseFloat(actualVal) * sign;
+      const actualAmount = parsedActual.value * sign;
       const res = await axios.put(`${API}/flow-occurrences`, {
         flow_id: cellInfo.flowId,
         month: cellInfo.month,
@@ -108,10 +129,17 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
           </div>
           <div>
             <Label className="text-xs text-zinc-500 mb-1 block">Actual (CHF)</Label>
-            <input type="number" step="0.01" value={actualVal}
+            <input type="text" inputMode="decimal" value={actualVal}
               onChange={(e) => setActualVal(e.target.value)}
+              onBlur={(e) => applyActualExpression(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") applyActualExpression(e.currentTarget.value);
+              }}
               className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 font-mono"
               autoFocus data-testid="actual-input" />
+            {actualVal && !inspectedActual.isValid && (
+              <p className="text-[10px] text-rose-400 mt-1">Invalid expression</p>
+            )}
           </div>
           
           {hasVariance && (
@@ -186,7 +214,7 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
                 </button>
               </>
             ) : (
-              <button onClick={() => handleSave(null)} disabled={saving || !actualVal}
+              <button onClick={() => handleSave(null)} disabled={saving || !inspectedActual.isValid}
                 className="btn-primary text-xs flex items-center justify-center gap-1 py-2" data-testid="actual-confirm">
                 <Check size={12} /> Confirm actual matches planned
               </button>

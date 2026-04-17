@@ -2,6 +2,7 @@ import { useState } from "react";
 import axios from "axios";
 import { toast } from "sonner";
 import { TrendUp, TrendDown, Equals, ArrowBendDownRight, Check, X } from "@phosphor-icons/react";
+import { inspectAmountInput, formatAmountInput } from "./amountExpression";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -29,10 +30,16 @@ const ActualInput = ({ flow, month, onUpdate }) => {
   };
 
   const saveActual = async (action) => {
+    const parsedActual = inspectAmountInput(actualVal);
+    if (!parsedActual.isValid) {
+      toast.error("Invalid amount expression");
+      return;
+    }
+
     setSaving(true);
     try {
       const sign = planned >= 0 ? 1 : -1;
-      const actualAmount = parseFloat(actualVal) * sign;
+      const actualAmount = parsedActual.value * sign;
       await axios.put(`${API}/flow-occurrences`, {
         flow_id: flow.flow_id,
         month: month,
@@ -61,8 +68,22 @@ const ActualInput = ({ flow, month, onUpdate }) => {
     }
   };
 
+  const applyActualExpression = (rawValue) => {
+    const inspected = inspectAmountInput(rawValue);
+    if (!inspected.text) return true;
+    if (!inspected.isValid) {
+      toast.error("Invalid amount expression");
+      return false;
+    }
+    if (inspected.hasExpression) {
+      setActualVal(formatAmountInput(inspected.value));
+    }
+    return true;
+  };
+
   if (editing) {
-    const inputAbs = actualVal ? parseFloat(actualVal) : null;
+    const inspectedActual = inspectAmountInput(actualVal);
+    const inputAbs = inspectedActual.isValid ? inspectedActual.value : null;
     const plannedAbs = Math.abs(planned);
     const hasInputVariance = inputAbs !== null && Math.abs(inputAbs - plannedAbs) > 0.01;
     const inputUnder = hasInputVariance && inputAbs < plannedAbs;
@@ -76,14 +97,21 @@ const ActualInput = ({ flow, month, onUpdate }) => {
       <div className="mt-1.5 space-y-1.5 bg-zinc-900/50 border border-zinc-700/50 rounded-md p-2" data-testid={`actual-edit-${flow.flow_id}`}>
         <div className="flex gap-1 items-center">
           <input
-            type="number"
-            step="0.01"
+            type="text"
+            inputMode="decimal"
             value={actualVal}
             onChange={(e) => setActualVal(e.target.value)}
+            onBlur={(e) => applyActualExpression(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") applyActualExpression(e.currentTarget.value);
+            }}
             className="w-20 bg-zinc-950 border border-zinc-700 text-xs rounded px-1.5 py-1 text-zinc-100 font-mono"
             autoFocus
             data-testid={`actual-input-${flow.flow_id}`}
           />
+          {actualVal && !inspectedActual.isValid && (
+            <span className="text-[10px] text-rose-400">Invalid expression</span>
+          )}
           <span className="text-[10px] text-zinc-600">vs planned {formatCurrency(planned)}</span>
           <button
             onClick={() => setEditing(false)}
@@ -121,7 +149,7 @@ const ActualInput = ({ flow, month, onUpdate }) => {
         {!hasInputVariance && actualVal && (
           <button
             onClick={() => saveActual(null)}
-            disabled={saving}
+            disabled={saving || !inspectedActual.isValid}
             className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30"
           >
             Confirm match
