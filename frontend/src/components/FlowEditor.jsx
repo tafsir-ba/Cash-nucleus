@@ -12,6 +12,7 @@ import { Label } from "../components/ui/label";
 import { Calendar } from "../components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { format, parse } from "date-fns";
+import { inspectAmountInput, formatAmountInput } from "./amountExpression";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -112,13 +113,31 @@ export const FlowEditor = ({ flow, open, onOpenChange, entities, onSave, onEntit
     }));
   };
 
+  const applyAmountExpression = (rawValue, setter) => {
+    const inspected = inspectAmountInput(rawValue);
+    if (!inspected.text) return true;
+    if (!inspected.isValid) {
+      toast.error("Invalid amount expression");
+      return false;
+    }
+    if (inspected.hasExpression) {
+      setter(formatAmountInput(inspected.value));
+    }
+    return true;
+  };
+
   const handleSave = async () => {
     if (!label.trim() || !amount || !entityId) return;
     setSaving(true);
 
     try {
       const dateStr = format(selectedDate, "yyyy-MM") + "-01";
-      const numAmount = parseFloat(amount);
+      const parsedMainAmount = inspectAmountInput(amount);
+      if (!parsedMainAmount.isValid) {
+        toast.error("Invalid amount expression");
+        return;
+      }
+      const numAmount = parsedMainAmount.value;
       const signedAmount = category === "Revenue" ? Math.abs(numAmount) : -Math.abs(numAmount);
 
       if (isEdit) {
@@ -151,11 +170,25 @@ export const FlowEditor = ({ flow, open, onOpenChange, entities, onSave, onEntit
           priority: priority || null,
         };
 
-        const validLinked = linkedFlows
-          .filter(f => (f.amount || (f.isPercentage && f.percentage)))
-          .map(f => ({
+        const validLinked = [];
+        for (const f of linkedFlows) {
+          if (!(f.amount || (f.isPercentage && f.percentage))) continue;
+
+          let linkedAmount = 0;
+          if (!f.isPercentage) {
+            const parsedLinkedAmount = inspectAmountInput(f.amount);
+            if (!parsedLinkedAmount.isValid) {
+              toast.error("Invalid linked flow amount");
+              return;
+            }
+            linkedAmount = f.category === "Revenue"
+              ? Math.abs(parsedLinkedAmount.value)
+              : -Math.abs(parsedLinkedAmount.value);
+          }
+
+          validLinked.push({
             label: f.label.trim() || (f.isPercentage ? `COGS (${f.percentage}%)` : 'Cost'),
-            amount: f.isPercentage ? 0 : parseFloat(f.amount),
+            amount: linkedAmount,
             date: dateStr,
             certainty,
             category: f.category,
@@ -163,7 +196,8 @@ export const FlowEditor = ({ flow, open, onOpenChange, entities, onSave, onEntit
             entity_id: entityId,
             is_percentage: f.isPercentage,
             percentage_of_parent: f.isPercentage ? parseFloat(f.percentage) : null,
-          }));
+          });
+        }
 
         if (validLinked.length > 0) {
           await axios.post(`${API}/cash-flows/batch`, { parent: payload, linked: validLinked });
@@ -185,7 +219,9 @@ export const FlowEditor = ({ flow, open, onOpenChange, entities, onSave, onEntit
 
   const isRecurring = recurrence !== "none";
   const isDistribute = recurrenceMode === "distribute";
-  const hasDistributePreview = isDistribute && amount && recurrenceCount && parseInt(recurrenceCount) > 0;
+  const parsedAmountForPreview = inspectAmountInput(amount);
+  const amountForPreview = parsedAmountForPreview.isValid ? parsedAmountForPreview.value : null;
+  const hasDistributePreview = isDistribute && amountForPreview !== null && recurrenceCount && parseInt(recurrenceCount) > 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -221,10 +257,14 @@ export const FlowEditor = ({ flow, open, onOpenChange, entities, onSave, onEntit
                 {isDistribute ? "Total Amount" : "Amount (CHF)"}
               </Label>
               <input
-                type="number"
-                step="0.01"
+                type="text"
+                inputMode="decimal"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
+                onBlur={(e) => applyAmountExpression(e.target.value, setAmount)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") applyAmountExpression(e.currentTarget.value, setAmount);
+                }}
                 placeholder="5000"
                 className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 font-mono"
                 data-testid="editor-amount"
@@ -339,7 +379,7 @@ export const FlowEditor = ({ flow, open, onOpenChange, entities, onSave, onEntit
               {hasDistributePreview && (
                 <div className="bg-amber-500/10 border border-amber-500/20 rounded-md p-2">
                   <p className="text-sm font-mono text-amber-300">
-                    ≈ CHF {Math.abs(Math.round(parseFloat(amount) / parseInt(recurrenceCount) * 100) / 100).toLocaleString('de-CH', { minimumFractionDigits: 2 })} / {recurrence === "monthly" ? "month" : "quarter"}
+                    ≈ CHF {Math.abs(Math.round(amountForPreview / parseInt(recurrenceCount) * 100) / 100).toLocaleString('de-CH', { minimumFractionDigits: 2 })} / {recurrence === "monthly" ? "month" : "quarter"}
                   </p>
                 </div>
               )}
@@ -420,8 +460,14 @@ export const FlowEditor = ({ flow, open, onOpenChange, entities, onSave, onEntit
                         onChange={(e) => updateLinkedFlow(linked.id, "percentage", e.target.value)}
                         className="w-16 bg-zinc-950 border border-zinc-800 text-xs rounded px-2 py-1.5 text-zinc-100 font-mono" />
                     ) : (
-                      <input type="number" placeholder="-2000" value={linked.amount}
+                      <input type="text" inputMode="decimal" placeholder="2000" value={linked.amount}
                         onChange={(e) => updateLinkedFlow(linked.id, "amount", e.target.value)}
+                        onBlur={(e) => applyAmountExpression(e.target.value, (v) => updateLinkedFlow(linked.id, "amount", v))}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            applyAmountExpression(e.currentTarget.value, (v) => updateLinkedFlow(linked.id, "amount", v));
+                          }
+                        }}
                         className="flex-1 bg-zinc-950 border border-zinc-800 text-xs rounded px-2 py-1.5 text-zinc-100 font-mono" />
                     )}
                     <Select value={linked.category} onValueChange={(v) => updateLinkedFlow(linked.id, "category", v)}>
@@ -433,9 +479,11 @@ export const FlowEditor = ({ flow, open, onOpenChange, entities, onSave, onEntit
                   </div>
                   {linked.isPercentage && linked.percentage && amount && (
                     <p className="text-xs text-amber-400 mt-1.5">
-                      {isDistribute && recurrenceCount && parseInt(recurrenceCount) > 0
-                        ? `≈ CHF ${Math.round(Math.abs(parseFloat(amount) / parseInt(recurrenceCount)) * parseFloat(linked.percentage) / 100).toLocaleString()}/period`
-                        : `= CHF ${Math.round(Math.abs(parseFloat(amount)) * parseFloat(linked.percentage) / 100).toLocaleString()}`}
+                      {amountForPreview !== null && isDistribute && recurrenceCount && parseInt(recurrenceCount) > 0
+                        ? `≈ CHF ${Math.round(Math.abs(amountForPreview / parseInt(recurrenceCount)) * parseFloat(linked.percentage) / 100).toLocaleString()}/period`
+                        : amountForPreview !== null
+                          ? `= CHF ${Math.round(Math.abs(amountForPreview) * parseFloat(linked.percentage) / 100).toLocaleString()}`
+                          : "Invalid amount"}
                     </p>
                   )}
                 </div>

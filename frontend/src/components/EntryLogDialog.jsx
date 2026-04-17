@@ -21,6 +21,7 @@ import {
 } from "../components/ui/select";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Label } from "../components/ui/label";
+import { inspectAmountInput, formatAmountInput } from "./amountExpression";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -89,11 +90,29 @@ const EditFlowDialog = ({ flow, open, onOpenChange, entities, onSave }) => {
     }
   }, [flow]);
 
+  const applyAmountExpression = (rawValue) => {
+    const inspected = inspectAmountInput(rawValue);
+    if (!inspected.text) return true;
+    if (!inspected.isValid) {
+      toast.error("Invalid amount expression");
+      return false;
+    }
+    if (inspected.hasExpression) {
+      setFormData((prev) => ({ ...prev, amount: formatAmountInput(inspected.value) }));
+    }
+    return true;
+  };
+
   const handleSave = async () => {
     if (!formData.label || !formData.amount) return;
     setSaving(true);
     try {
-      const rawAmount = parseFloat(formData.amount);
+      const parsedAmount = inspectAmountInput(formData.amount);
+      if (!parsedAmount.isValid) {
+        toast.error("Invalid amount expression");
+        return;
+      }
+      const rawAmount = parsedAmount.value;
       const signedAmount = formData.category === "Revenue" ? Math.abs(rawAmount) : -Math.abs(rawAmount);
       await axios.put(`${API}/cash-flows/${flow.id}`, {
         label: formData.label,
@@ -142,10 +161,14 @@ const EditFlowDialog = ({ flow, open, onOpenChange, entities, onSave }) => {
             <div>
               <Label className="text-xs text-zinc-500 mb-1.5 block">Amount (CHF)</Label>
               <input
-                type="number"
-                step="0.01"
+                type="text"
+                inputMode="decimal"
                 value={formData.amount || ""}
                 onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                onBlur={(e) => applyAmountExpression(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") applyAmountExpression(e.currentTarget.value);
+                }}
                 className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2.5 text-zinc-100 font-mono"
               />
             </div>
@@ -253,7 +276,11 @@ const EditFlowDialog = ({ flow, open, onOpenChange, entities, onSave }) => {
               />
               {formData.recurrence_mode === "distribute" && formData.amount && formData.recurrence_count && parseInt(formData.recurrence_count) > 0 && (
                 <p className="text-xs text-amber-400 mt-1">
-                  = CHF {Math.abs(Math.round(parseFloat(formData.amount) / parseInt(formData.recurrence_count) * 100) / 100).toLocaleString('de-CH', { minimumFractionDigits: 2 })} / {formData.recurrence === "monthly" ? "month" : "quarter"}
+                  = CHF {(() => {
+                    const parsed = inspectAmountInput(formData.amount);
+                    if (!parsed.isValid) return "Invalid amount";
+                    return Math.abs(Math.round(parsed.value / parseInt(formData.recurrence_count) * 100) / 100).toLocaleString('de-CH', { minimumFractionDigits: 2 });
+                  })()} / {formData.recurrence === "monthly" ? "month" : "quarter"}
                 </p>
               )}
             </div>

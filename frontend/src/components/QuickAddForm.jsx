@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
+import { toast } from "sonner";
 import { Plus, CaretDown, Link, X, CalendarBlank } from "@phosphor-icons/react";
 import { 
   Select, 
@@ -13,6 +14,7 @@ import { Calendar } from "../components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { EntitySelector } from "./EntitySelector";
 import { format } from "date-fns";
+import { inspectAmountInput, formatAmountInput } from "./amountExpression";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -93,6 +95,19 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
     }));
   };
 
+  const applyAmountExpression = (rawValue, setter) => {
+    const inspected = inspectAmountInput(rawValue);
+    if (!inspected.text) return true;
+    if (!inspected.isValid) {
+      toast.error("Invalid amount expression");
+      return false;
+    }
+    if (inspected.hasExpression) {
+      setter(formatAmountInput(inspected.value));
+    }
+    return true;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!label.trim() || !amount || !entityId) return;
@@ -100,16 +115,33 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
     setLoading(true);
     try {
       const dateStr = format(selectedDate, "yyyy-MM") + "-01";
-      const numAmount = parseFloat(amount);
+      const parsedMainAmount = inspectAmountInput(amount);
+      if (!parsedMainAmount.isValid) {
+        toast.error("Invalid amount expression");
+        return;
+      }
+      const numAmount = parsedMainAmount.value;
       const signedAmount = category === "Revenue" ? Math.abs(numAmount) : -Math.abs(numAmount);
       
-      const validLinked = linkedFlows
-        .filter(f => (f.amount || (f.isPercentage && f.percentage)))
-        .map(f => ({
+      const validLinked = [];
+      for (const f of linkedFlows) {
+        if (!(f.amount || (f.isPercentage && f.percentage))) continue;
+
+        let linkedAmount = 0;
+        if (!f.isPercentage) {
+          const parsedLinkedAmount = inspectAmountInput(f.amount);
+          if (!parsedLinkedAmount.isValid) {
+            toast.error("Invalid linked flow amount");
+            return;
+          }
+          linkedAmount = f.category === "Revenue"
+            ? Math.abs(parsedLinkedAmount.value)
+            : -Math.abs(parsedLinkedAmount.value);
+        }
+
+        validLinked.push({
           label: f.label.trim() || (f.isPercentage ? `COGS (${f.percentage}%)` : 'Related cost'),
-          amount: f.isPercentage
-            ? 0
-            : (f.category === "Revenue" ? Math.abs(parseFloat(f.amount)) : -Math.abs(parseFloat(f.amount))),
+          amount: linkedAmount,
           date: dateStr,
           certainty,
           category: f.category,
@@ -117,7 +149,8 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
           entity_id: entityId,
           is_percentage: f.isPercentage,
           percentage_of_parent: f.isPercentage ? parseFloat(f.percentage) : null,
-        }));
+        });
+      }
 
       const payload = {
         label: label.trim(),
@@ -159,7 +192,9 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
   const canSubmit = label.trim() && amount && entityId;
   const isRecurring = recurrence !== "none";
   const isDistribute = recurrenceMode === "distribute";
-  const hasDistributePreview = isDistribute && amount && recurrenceCount && parseInt(recurrenceCount) > 0;
+  const parsedAmountForPreview = inspectAmountInput(amount);
+  const amountForPreview = parsedAmountForPreview.isValid ? parsedAmountForPreview.value : null;
+  const hasDistributePreview = isDistribute && amountForPreview !== null && recurrenceCount && parseInt(recurrenceCount) > 0;
 
   return (
     <div className="surface-card h-full" data-testid="quick-add-form">
@@ -199,12 +234,22 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
               {isDistribute ? "Total Amount" : "Amount"}
             </Label>
             <input
-              type="number"
+              type="text"
+              inputMode="decimal"
               autoComplete="off"
-              placeholder="-5000"
-              step="0.01"
+              placeholder="5000"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
+              onBlur={(e) => {
+                if (!applyAmountExpression(e.target.value, setAmount)) {
+                  // Keep current text so user can fix expression manually.
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  applyAmountExpression(e.currentTarget.value, setAmount);
+                }
+              }}
               className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-600 font-mono"
               data-testid="quick-add-amount"
             />
@@ -307,10 +352,10 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
             {hasDistributePreview && (
               <div className="bg-amber-500/10 border border-amber-500/20 rounded-md p-2.5" data-testid="distribute-preview">
                 <p className="text-sm font-mono text-amber-300 font-medium">
-                  ≈ CHF {Math.abs(Math.round(parseFloat(amount) / parseInt(recurrenceCount) * 100) / 100).toLocaleString('de-CH', { minimumFractionDigits: 2 })} / {recurrence === "monthly" ? "month" : "quarter"}
+                  ≈ CHF {Math.abs(Math.round(amountForPreview / parseInt(recurrenceCount) * 100) / 100).toLocaleString('de-CH', { minimumFractionDigits: 2 })} / {recurrence === "monthly" ? "month" : "quarter"}
                 </p>
                 <p className="text-xs text-amber-400/70 mt-0.5">
-                  CHF {Math.abs(parseFloat(amount)).toLocaleString('de-CH')} total ÷ {recurrenceCount} periods
+                  CHF {Math.abs(amountForPreview).toLocaleString('de-CH')} total ÷ {recurrenceCount} periods
                 </p>
               </div>
             )}
@@ -391,10 +436,17 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
                       />
                     ) : (
                       <input
-                        type="number"
+                        type="text"
+                        inputMode="decimal"
                         placeholder="2000"
                         value={linked.amount}
                         onChange={(e) => updateLinkedFlow(linked.id, "amount", e.target.value)}
+                        onBlur={(e) => applyAmountExpression(e.target.value, (v) => updateLinkedFlow(linked.id, "amount", v))}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            applyAmountExpression(e.currentTarget.value, (v) => updateLinkedFlow(linked.id, "amount", v));
+                          }
+                        }}
                         className="flex-1 bg-zinc-950 border border-zinc-800 text-xs rounded px-2 py-1.5 text-zinc-100 font-mono"
                       />
                     )}
@@ -411,9 +463,11 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
                   
                   {linked.isPercentage && linked.percentage && amount && (
                     <p className="text-xs text-amber-400 mt-1.5">
-                      {isDistribute && recurrenceCount && parseInt(recurrenceCount) > 0
-                        ? `≈ CHF ${Math.round(Math.abs(parseFloat(amount) / parseInt(recurrenceCount)) * parseFloat(linked.percentage) / 100).toLocaleString()}/period`
-                        : `= CHF ${Math.round(Math.abs(parseFloat(amount)) * parseFloat(linked.percentage) / 100).toLocaleString()}`
+                      {amountForPreview !== null && isDistribute && recurrenceCount && parseInt(recurrenceCount) > 0
+                        ? `≈ CHF ${Math.round(Math.abs(amountForPreview / parseInt(recurrenceCount)) * parseFloat(linked.percentage) / 100).toLocaleString()}/period`
+                        : amountForPreview !== null
+                          ? `= CHF ${Math.round(Math.abs(amountForPreview) * parseFloat(linked.percentage) / 100).toLocaleString()}`
+                          : "Invalid amount"
                       }
                     </p>
                   )}
