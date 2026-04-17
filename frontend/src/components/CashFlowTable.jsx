@@ -244,7 +244,6 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
   };
 
   const handleCellClick = (row, month, cell) => {
-    if (row.is_percentage) return;
     setActualCell({
       flowId: row.flow_id, label: row.label,
       month: month.key, monthLabel: month.label, cell,
