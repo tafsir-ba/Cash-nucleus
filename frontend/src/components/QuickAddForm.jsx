@@ -36,7 +36,7 @@ const recurrenceOptions = [
 const getLastEntity = () => localStorage.getItem('lastUsedEntityId') || '';
 const setLastEntity = (id) => localStorage.setItem('lastUsedEntityId', id);
 
-export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
+export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange, onOpenBulkActualUpload }) => {
   const [loading, setLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   
@@ -198,10 +198,18 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
 
   return (
     <div className="surface-card h-full" data-testid="quick-add-form">
-      <div className="p-4 border-b border-zinc-800">
-        <h2 className="text-sm font-medium tracking-[0.15em] uppercase text-zinc-400 font-heading">
-          Quick Add
-        </h2>
+      <div className="p-4 border-b border-zinc-800 flex items-center justify-between gap-2">
+        <h2 className="text-sm font-medium tracking-[0.15em] uppercase text-zinc-400 font-heading">Quick Add</h2>
+        {onOpenBulkActualUpload && (
+          <button
+            type="button"
+            onClick={onOpenBulkActualUpload}
+            className="text-[11px] px-2 py-1 rounded border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 transition-colors"
+            data-testid="open-bulk-actuals-btn"
+          >
+            Bulk Actuals
+          </button>
+        )}
       </div>
       
       <form onSubmit={handleSubmit} className="p-4 space-y-3">

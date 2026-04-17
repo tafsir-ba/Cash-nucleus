@@ -20,12 +20,14 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { EntryLogDialog } from "./components/EntryLogDialog";
 import { EntityFilter } from "./components/EntityFilter";
 import { HorizonSelector } from "./components/HorizonSelector";
+import { BulkActualUploadPage } from "./components/BulkActualUploadPage";
 
 // Icons
 import { Gear, Bank, ListBullets, ArrowCounterClockwise, SignOut } from "@phosphor-icons/react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
+const ENABLE_BULK_ACTUALS = String(process.env.REACT_APP_ENABLE_BULK_ACTUALS ?? "true").toLowerCase() !== "false";
 
 // Configure axios to send cookies
 axios.defaults.withCredentials = true;
@@ -82,7 +84,7 @@ function Dashboard({ user, onLogout }) {
   const [entryLogOpen, setEntryLogOpen] = useState(false);
   
   // Tab state + flows for table
-  const [activeTab, setActiveTab] = useState("chart"); // "chart" | "table" | "entries"
+  const [activeTab, setActiveTab] = useState("chart"); // "chart" | "table" | "entries" | "bulk_actuals"
   const [allFlows, setAllFlows] = useState([]);
   
   // Undo state
@@ -318,6 +320,17 @@ function Dashboard({ user, onLogout }) {
           >
             Entries
           </button>
+          {ENABLE_BULK_ACTUALS && (
+            <button
+              onClick={() => setActiveTab("bulk_actuals")}
+              className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                activeTab === "bulk_actuals" ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+              data-testid="tab-bulk-actuals"
+            >
+              Bulk Actuals
+            </button>
+          )}
         </div>
 
         {activeTab === "chart" ? (
@@ -338,6 +351,7 @@ function Dashboard({ user, onLogout }) {
                   onSuccess={handleCashFlowAdded} 
                   entities={entities}
                   onEntitiesChange={fetchEntities}
+                  onOpenBulkActualUpload={ENABLE_BULK_ACTUALS ? () => setActiveTab("bulk_actuals") : null}
                 />
               </div>
             </section>
@@ -396,6 +410,7 @@ function Dashboard({ user, onLogout }) {
                   onSuccess={handleCashFlowAdded} 
                   entities={entities}
                   onEntitiesChange={fetchEntities}
+                  onOpenBulkActualUpload={ENABLE_BULK_ACTUALS ? () => setActiveTab("bulk_actuals") : null}
                 />
               </div>
             </section>
@@ -409,8 +424,23 @@ function Dashboard({ user, onLogout }) {
               />
             </section>
           </>
-        ) : (
+        ) : activeTab === "entries" ? (
           /* Full Page Entry Log */
+          <section>
+            <EntryLogPage
+              entities={entities}
+              onDataChange={handleDataChange}
+            />
+          </section>
+        ) : ENABLE_BULK_ACTUALS ? (
+          <section>
+            <BulkActualUploadPage
+              entities={entities}
+              onDataChange={handleDataChange}
+              onBack={() => setActiveTab("chart")}
+            />
+          </section>
+        ) : (
           <section>
             <EntryLogPage
               entities={entities}

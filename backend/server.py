@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Query, Request, Response, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Query, Request, Response, Depends, UploadFile, File, Form
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6,13 +6,20 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone, date, timedelta
 from dateutil.relativedelta import relativedelta
 from enum import Enum
 import bcrypt
 import jwt
+import io
+import re
+import csv
+import math
+import json
+import hashlib
+from dateutil import parser as date_parser
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -20,9 +27,14 @@ load_dotenv(ROOT_DIR / '.env')
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
+ENABLE_BULK_ACTUALS = os.environ.get("ENABLE_BULK_ACTUALS", "true").lower() in {"1", "true", "yes", "on"}
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
+
+def ensure_bulk_actuals_enabled():
+    if not ENABLE_BULK_ACTUALS:
+        raise HTTPException(status_code=404, detail="Bulk actual imports are disabled")
 
 # ============== AUTH HELPERS ==============
 JWT_SECRET = os.environ.get("JWT_SECRET", "changeme")
@@ -227,11 +239,71 @@ class FlowOccurrenceUpdate(BaseModel):
     actual_amount: Optional[float] = None
     variance_action: Optional[str] = None  # "carry_forward" | "write_off"
 
+class ActualImportRow(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    batch_id: str
+    row_index: int
+    include: bool = True
+    status: str = "ready"  # ready | warning | discarded | applied | failed | skipped
+    raw_date: str = ""
+    raw_description: str = ""
+    raw_amount: str = ""
+    transaction_date: str  # YYYY-MM-DD
+    month: str  # YYYY-MM
+    description: str
+    amount: float
+    category: Category
+    entity_id: Optional[str] = None
+    suggested_flow_id: Optional[str] = None
+    selected_flow_id: Optional[str] = None
+    match_score: float = 0.0
+    match_reason: str = ""
+    variance_action: str = "actual_only"  # actual_only | carry_forward | write_off
+    error: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class ActualImportBatch(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    filename: str
+    file_type: str
+    status: str = "draft"  # draft | applied | discarded | partial
+    entity_id: Optional[str] = None
+    total_rows: int = 0
+    ready_rows: int = 0
+    warning_rows: int = 0
+    discarded_rows: int = 0
+    applied_rows: int = 0
+    failed_rows: int = 0
+    skipped_rows: int = 0
+    last_apply_fingerprint: Optional[str] = None
+    last_applied_at: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class ActualImportRowUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    include: Optional[bool] = None
+    transaction_date: Optional[str] = None
+    month: Optional[str] = None
+    description: Optional[str] = None
+    amount: Optional[float] = None
+    category: Optional[Category] = None
+    entity_id: Optional[str] = None
+    selected_flow_id: Optional[str] = None
+    variance_action: Optional[str] = None
+
+class ActualImportApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    idempotency_key: Optional[str] = None
+
 
 # ============== UNDO SYSTEM ==============
 class UndoAction(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    action_type: str  # "create" | "update" | "delete" | "batch_create" | "record_actual"
+    action_type: str  # "create" | "update" | "delete" | "batch_create" | "record_actual" | "record_actual_batch"
     collection: str  # "cash_flows" | "bank_accounts" | "entities" | "flow_occurrences"
     target_ids: List[str] = []  # IDs affected
     previous_data: Optional[List[dict]] = None  # Snapshots before change
@@ -278,6 +350,175 @@ def normalize_amount_for_category(category: str, amount: float) -> float:
         return 0.0
     return abs(amount) if category == Category.REVENUE.value else -abs(amount)
 
+def parse_import_amount(raw_value: Any) -> Optional[float]:
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, (int, float)):
+        if isinstance(raw_value, float) and math.isnan(raw_value):
+            return None
+        return float(raw_value)
+
+    text = str(raw_value).strip()
+    if not text:
+        return None
+    text = text.replace("CHF", "").replace(" ", "")
+
+    if "," in text and "." in text:
+        # Keep decimal separator nearest to end.
+        if text.rfind(",") > text.rfind("."):
+            text = text.replace(".", "").replace(",", ".")
+        else:
+            text = text.replace(",", "")
+    elif "," in text:
+        text = text.replace(",", ".")
+
+    text = re.sub(r"[^0-9.\-]", "", text)
+    if text in {"", "-", ".", "-."}:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+def best_flow_match(
+    flows: List[dict],
+    description: str,
+    amount: float,
+    entity_id: Optional[str] = None
+) -> Dict[str, Any]:
+    def tokens(text: str) -> set:
+        return {t for t in re.split(r"\W+", (text or "").lower()) if len(t) > 2}
+
+    desc_lower = (description or "").lower().strip()
+    desc_tokens = tokens(desc_lower)
+    amount_abs = abs(amount)
+    amount_sign = 1 if amount > 0 else -1
+    best: Dict[str, Any] = {"flow_id": None, "score": 0.0, "reason": "No close match"}
+
+    for flow in flows:
+        if entity_id and flow.get("entity_id") != entity_id:
+            continue
+        score = 0.0
+        reasons = []
+
+        flow_amount = float(flow.get("amount", 0))
+        flow_sign = 1 if flow_amount > 0 else -1
+        if flow_sign == amount_sign:
+            score += 0.4
+            reasons.append("direction")
+
+        flow_abs = abs(flow_amount)
+        if amount_abs > 0:
+            diff_ratio = abs(flow_abs - amount_abs) / amount_abs
+            if diff_ratio <= 0.05:
+                score += 0.35
+                reasons.append("amount-close")
+            elif diff_ratio <= 0.15:
+                score += 0.2
+                reasons.append("amount-near")
+
+        flow_label = (flow.get("label", "") or "").lower().strip()
+        flow_tokens = tokens(flow_label)
+        if flow_tokens and desc_tokens:
+            overlap = len(flow_tokens.intersection(desc_tokens))
+            union = len(flow_tokens.union(desc_tokens))
+            jaccard = (overlap / union) if union > 0 else 0
+            if jaccard >= 0.6:
+                score += 0.35
+                reasons.append("label-strong")
+            elif jaccard >= 0.35:
+                score += 0.22
+                reasons.append("label-medium")
+            elif overlap > 0:
+                score += 0.1
+                reasons.append("label-weak")
+        elif flow_label and flow_label in desc_lower:
+            score += 0.2
+            reasons.append("label-substring")
+
+        if score > best["score"]:
+            best = {
+                "flow_id": flow.get("id"),
+                "score": round(min(score, 0.99), 3),
+                "reason": ", ".join(reasons) if reasons else "weak",
+            }
+
+    return best
+
+def build_apply_fingerprint(rows: List[dict], idempotency_key: Optional[str] = None) -> str:
+    items = []
+    for row in rows:
+        if not row.get("include", True):
+            continue
+        items.append({
+            "row_id": row.get("id"),
+            "flow_id": row.get("selected_flow_id"),
+            "month": row.get("month"),
+            "amount": round(float(row.get("amount", 0)), 2),
+            "variance_action": row.get("variance_action", "actual_only"),
+        })
+    payload = {"rows": sorted(items, key=lambda x: x["row_id"]), "idempotency_key": idempotency_key or ""}
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+def detect_import_columns(columns: List[str]) -> Dict[str, str]:
+    cols = {str(c).strip().lower(): c for c in columns}
+
+    date_candidates = ["date", "transaction date", "booking date", "value date"]
+    desc_candidates = ["description", "label", "details", "memo", "narrative", "name"]
+    amount_candidates = ["amount", "value", "chf"]
+
+    detected: Dict[str, str] = {}
+    for c in date_candidates:
+        if c in cols:
+            detected["date"] = cols[c]
+            break
+    for c in desc_candidates:
+        if c in cols:
+            detected["description"] = cols[c]
+            break
+    for c in amount_candidates:
+        if c in cols:
+            detected["amount"] = cols[c]
+            break
+
+    if "amount" not in detected and "debit" in cols and "credit" in cols:
+        detected["debit"] = cols["debit"]
+        detected["credit"] = cols["credit"]
+
+    return detected
+
+def is_valid_month_key(month: str) -> bool:
+    if not isinstance(month, str) or not re.match(r"^\d{4}-\d{2}$", month):
+        return False
+    year = int(month[:4])
+    mon = int(month[5:7])
+    return 1 <= mon <= 12 and 1900 <= year <= 3000
+
+def normalize_import_transaction_date(raw_date: Optional[str]) -> Optional[str]:
+    if raw_date is None:
+        return None
+    text = str(raw_date).strip()
+    if not text:
+        return None
+    try:
+        parsed = date_parser.parse(text)
+        return parsed.strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+async def validate_selected_flow_for_row(selected_flow_id: Optional[str], row_entity_id: Optional[str], batch_entity_id: Optional[str]) -> Optional[dict]:
+    if not selected_flow_id:
+        return None
+    flow = await db.cash_flows.find_one({"id": selected_flow_id}, {"_id": 0, "id": 1, "entity_id": 1})
+    if not flow:
+        raise HTTPException(status_code=400, detail="Selected flow does not exist")
+
+    enforced_entity_id = batch_entity_id or row_entity_id
+    if enforced_entity_id and flow.get("entity_id") != enforced_entity_id:
+        raise HTTPException(status_code=400, detail="Selected flow does not belong to the import entity scope")
+    return flow
+
 # ============== HELPER: Calculate percentage-based amount dynamically ==============
 async def get_flow_with_dynamic_amount(flow: dict) -> dict:
     """For percentage-based linked flows, calculate amount from parent dynamically."""
@@ -316,6 +557,30 @@ async def push_undo(action_type: str, collection: str, target_ids: List[str],
         oldest = await db.undo_stack.find({}, {"_id": 0, "id": 1}).sort("timestamp", 1).limit(count - MAX_UNDO_STACK).to_list(100)
         if oldest:
             await db.undo_stack.delete_many({"id": {"$in": [o["id"] for o in oldest]}})
+
+async def restore_record_actual_side_effects(side_effects: dict):
+    prev_occurrence = side_effects.get("previous_occurrence")
+    flow_id = side_effects.get("flow_id", "")
+    month = side_effects.get("month", "")
+
+    if prev_occurrence:
+        prev_occurrence.pop("_id", None)
+        await db.flow_occurrences.replace_one(
+            {"flow_id": flow_id, "month": month},
+            prev_occurrence,
+            upsert=True,
+        )
+    else:
+        await db.flow_occurrences.delete_one({"flow_id": flow_id, "month": month})
+
+    created_carryovers = side_effects.get("created_carryover_ids", [])
+    for cid in created_carryovers:
+        await db.cash_flows.delete_one({"id": cid})
+
+    deleted_carryovers = side_effects.get("deleted_carryovers", [])
+    for dc in deleted_carryovers:
+        dc.pop("_id", None)
+        await db.cash_flows.insert_one(dc)
 
 @api_router.post("/undo")
 async def undo_last_action():
@@ -365,32 +630,12 @@ async def undo_last_action():
                         await coll.replace_one({"id": child_id}, child_clean, upsert=True)
     
     elif action_type == "record_actual":
-        # Restore previous occurrence state
-        prev_occurrence = side_effects.get("previous_occurrence")
-        flow_id = side_effects.get("flow_id", "")
-        month = side_effects.get("month", "")
-        
-        if prev_occurrence:
-            # Restore the previous occurrence
-            prev_occurrence.pop("_id", None)
-            await db.flow_occurrences.replace_one(
-                {"flow_id": flow_id, "month": month},
-                prev_occurrence, upsert=True
-            )
-        else:
-            # No previous occurrence — delete the one we created
-            await db.flow_occurrences.delete_one({"flow_id": flow_id, "month": month})
-        
-        # Remove any carryover flows that were created by this action
-        created_carryovers = side_effects.get("created_carryover_ids", [])
-        for cid in created_carryovers:
-            await db.cash_flows.delete_one({"id": cid})
-        
-        # Restore any carryover flows that were deleted by this action
-        deleted_carryovers = side_effects.get("deleted_carryovers", [])
-        for dc in deleted_carryovers:
-            dc.pop("_id", None)
-            await db.cash_flows.insert_one(dc)
+        await restore_record_actual_side_effects(side_effects)
+
+    elif action_type == "record_actual_batch":
+        # Undo in reverse apply order to restore nested carryover dependencies correctly.
+        for row_side_effects in reversed(side_effects.get("rows", [])):
+            await restore_record_actual_side_effects(row_side_effects)
     
     # Remove the action from stack
     await db.undo_stack.delete_one({"id": last["id"]})
@@ -801,8 +1046,7 @@ async def get_flow_occurrences(month: Optional[str] = None, flow_id: Optional[st
     occurrences = await db.flow_occurrences.find(query, {"_id": 0}).to_list(1000)
     return occurrences
 
-@api_router.put("/flow-occurrences")
-async def set_flow_occurrence(update: FlowOccurrenceUpdate):
+async def upsert_flow_occurrence(update: FlowOccurrenceUpdate, suppress_undo: bool = False):
     """Record an actual amount for a flow occurrence.
     
     Variance = planned - actual.
@@ -882,19 +1126,20 @@ async def set_flow_occurrence(update: FlowOccurrenceUpdate):
                 await db.cash_flows.insert_one(carryover.model_dump())
                 created_carryover_ids.append(carryover.id)
     
-    # Push undo with full dependency chain
-    await push_undo(
-        "record_actual", "flow_occurrences",
-        [update.flow_id],
-        description=f"Actual: {update.flow_id[:8]}... {update.month}",
-        side_effects={
-            "flow_id": update.flow_id,
-            "month": update.month,
-            "previous_occurrence": prev_occurrence,
-            "deleted_carryovers": existing_carryovers,
-            "created_carryover_ids": created_carryover_ids,
-        }
-    )
+    if not suppress_undo:
+        # Push undo with full dependency chain
+        await push_undo(
+            "record_actual", "flow_occurrences",
+            [update.flow_id],
+            description=f"Actual: {update.flow_id[:8]}... {update.month}",
+            side_effects={
+                "flow_id": update.flow_id,
+                "month": update.month,
+                "previous_occurrence": prev_occurrence,
+                "deleted_carryovers": existing_carryovers,
+                "created_carryover_ids": created_carryover_ids,
+            }
+        )
     
     # Build response with useful info
     response = {"status": "ok"}
@@ -913,8 +1158,13 @@ async def set_flow_occurrence(update: FlowOccurrenceUpdate):
                 "target_month": next_date.strftime("%b %Y"),
                 "amount": round(resp_variance, 2),
             }
+    response["created_carryover_ids"] = created_carryover_ids
     
     return response
+
+@api_router.put("/flow-occurrences")
+async def set_flow_occurrence(update: FlowOccurrenceUpdate):
+    return await upsert_flow_occurrence(update, suppress_undo=False)
 
 @api_router.delete("/flow-occurrences")
 async def clear_flow_occurrence(flow_id: str, month: str):
@@ -951,6 +1201,459 @@ async def clear_flow_occurrence(flow_id: str, month: str):
     
     return {"status": "ok"}
 
+async def recalculate_import_batch_counts(batch_id: str):
+    rows = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0, "status": 1, "include": 1}).to_list(100000)
+    total_rows = len(rows)
+    ready_rows = sum(1 for r in rows if r.get("status") == "ready" and r.get("include", True))
+    warning_rows = sum(1 for r in rows if r.get("status") == "warning" and r.get("include", True))
+    discarded_rows = sum(1 for r in rows if not r.get("include", True) or r.get("status") == "discarded")
+    applied_rows = sum(1 for r in rows if r.get("status") == "applied")
+    failed_rows = sum(1 for r in rows if r.get("status") == "failed")
+    skipped_rows = sum(1 for r in rows if r.get("status") == "skipped")
+
+    await db.actual_import_batches.update_one(
+        {"id": batch_id},
+        {"$set": {
+            "total_rows": total_rows,
+            "ready_rows": ready_rows,
+            "warning_rows": warning_rows,
+            "discarded_rows": discarded_rows,
+            "applied_rows": applied_rows,
+            "failed_rows": failed_rows,
+            "skipped_rows": skipped_rows,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+
+@api_router.post("/actual-imports/parse")
+async def parse_actual_import(
+    file: UploadFile = File(...),
+    entity_id: Optional[str] = Form(None),
+    user: dict = Depends(get_current_user),
+):
+    ensure_bulk_actuals_enabled()
+    filename = file.filename or "upload"
+    ext = Path(filename).suffix.lower()
+    if ext not in [".csv", ".xlsx"]:
+        raise HTTPException(status_code=400, detail="Only CSV/XLSX files are supported in v1")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    try:
+        if ext == ".csv":
+            decoded = content.decode("utf-8-sig", errors="replace")
+            reader = csv.DictReader(io.StringIO(decoded))
+            parsed_rows = list(reader)
+            parsed_columns = reader.fieldnames or []
+        else:
+            try:
+                from openpyxl import load_workbook
+            except Exception:
+                raise HTTPException(status_code=400, detail="XLSX parsing requires openpyxl in backend environment")
+
+            workbook = load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+            sheet = workbook.active
+            rows_iter = sheet.iter_rows(values_only=True)
+            header_row = next(rows_iter, None)
+            if not header_row:
+                raise HTTPException(status_code=400, detail="No header row found in XLSX")
+
+            parsed_columns = [str(h).strip() if h is not None else "" for h in header_row]
+            parsed_rows = []
+            for values in rows_iter:
+                row_dict = {}
+                for i, col in enumerate(parsed_columns):
+                    key = col or f"column_{i+1}"
+                    row_dict[key] = values[i] if i < len(values) else None
+                parsed_rows.append(row_dict)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not parse file: {exc}")
+
+    if not parsed_rows:
+        raise HTTPException(status_code=400, detail="No rows found in file")
+    if len(parsed_rows) > 10000:
+        raise HTTPException(status_code=400, detail="File too large for v1 import (max 10,000 rows)")
+
+    detected = detect_import_columns(parsed_columns)
+    if "date" not in detected or "description" not in detected:
+        raise HTTPException(status_code=400, detail="Could not detect required date/description columns")
+    if "amount" not in detected and not ("debit" in detected and "credit" in detected):
+        raise HTTPException(status_code=400, detail="Could not detect amount column")
+
+    if entity_id:
+        entity_exists = await db.entities.find_one({"id": entity_id}, {"_id": 0, "id": 1})
+        if not entity_exists:
+            raise HTTPException(status_code=400, detail="entity_id does not exist")
+
+    flow_query = {"entity_id": entity_id} if entity_id else {}
+    flows = await db.cash_flows.find(flow_query, {"_id": 0}).to_list(5000)
+
+    batch = ActualImportBatch(
+        filename=filename,
+        file_type=ext.lstrip("."),
+        entity_id=entity_id,
+    )
+    await db.actual_import_batches.insert_one(batch.model_dump())
+
+    created_rows = []
+    for idx, row in enumerate(parsed_rows):
+        raw_date = row.get(detected["date"])
+        if raw_date in (None, ""):
+            continue
+        try:
+            parsed_date = date_parser.parse(str(raw_date))
+        except Exception:
+            continue
+        transaction_date = parsed_date.strftime("%Y-%m-%d")
+        month = parsed_date.strftime("%Y-%m")
+
+        description = str(row.get(detected["description"], "") or "").strip()
+        if not description:
+            description = f"Imported row {idx + 1}"
+
+        if "amount" in detected:
+            parsed_amount = parse_import_amount(row.get(detected["amount"]))
+        else:
+            debit = parse_import_amount(row.get(detected["debit"])) or 0
+            credit = parse_import_amount(row.get(detected["credit"])) or 0
+            parsed_amount = credit - debit
+
+        if parsed_amount is None or parsed_amount == 0:
+            continue
+
+        category = Category.REVENUE if parsed_amount > 0 else Category.EXPENSE
+        match = best_flow_match(flows, description, parsed_amount, entity_id)
+        selected_flow_id = match["flow_id"] if match["score"] >= 0.7 else None
+        matched_entity_id = entity_id
+        if not matched_entity_id and selected_flow_id:
+            matched = next((f for f in flows if f.get("id") == selected_flow_id), None)
+            matched_entity_id = matched.get("entity_id") if matched else None
+        include = selected_flow_id is not None
+        status = "ready" if include else "warning"
+
+        import_row = ActualImportRow(
+            batch_id=batch.id,
+            row_index=int(idx),
+            include=include,
+            status=status,
+            raw_date=str(raw_date),
+            raw_description=description,
+            raw_amount=str(row.get(detected.get("amount", ""), "")),
+            transaction_date=transaction_date,
+            month=month,
+            description=description,
+            amount=float(parsed_amount),
+            category=category,
+            entity_id=matched_entity_id,
+            suggested_flow_id=match["flow_id"],
+            selected_flow_id=selected_flow_id,
+            match_score=match["score"],
+            match_reason=match["reason"],
+        )
+        created_rows.append(import_row.model_dump())
+
+    if not created_rows:
+        await db.actual_import_batches.delete_one({"id": batch.id})
+        raise HTTPException(status_code=400, detail="No valid transaction rows detected")
+
+    await db.actual_import_rows.insert_many(created_rows)
+    await recalculate_import_batch_counts(batch.id)
+    batch_doc = await db.actual_import_batches.find_one({"id": batch.id}, {"_id": 0})
+    rows_doc = await db.actual_import_rows.find({"batch_id": batch.id}, {"_id": 0}).sort("row_index", 1).to_list(5000)
+    return {"batch": batch_doc, "rows": rows_doc, "detected_columns": detected}
+
+@api_router.get("/actual-imports/{batch_id}")
+async def get_actual_import_batch(batch_id: str, user: dict = Depends(get_current_user)):
+    ensure_bulk_actuals_enabled()
+    batch = await db.actual_import_batches.find_one({"id": batch_id}, {"_id": 0})
+    if not batch:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+    return batch
+
+@api_router.get("/actual-imports")
+async def list_actual_import_batches(
+    entity_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=30, ge=1, le=200),
+    user: dict = Depends(get_current_user),
+):
+    ensure_bulk_actuals_enabled()
+    query: Dict[str, Any] = {}
+    if entity_id:
+        query["entity_id"] = entity_id
+    if status:
+        query["status"] = status
+    batches = await db.actual_import_batches.find(query, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+    return batches
+
+@api_router.get("/actual-imports/{batch_id}/rows")
+async def get_actual_import_rows(batch_id: str, user: dict = Depends(get_current_user)):
+    ensure_bulk_actuals_enabled()
+    rows = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0}).sort("row_index", 1).to_list(100000)
+    return rows
+
+@api_router.put("/actual-imports/{batch_id}/rows/{row_id}")
+async def update_actual_import_row(batch_id: str, row_id: str, update: ActualImportRowUpdate, user: dict = Depends(get_current_user)):
+    ensure_bulk_actuals_enabled()
+    batch = await db.actual_import_batches.find_one({"id": batch_id}, {"_id": 0})
+    if not batch:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+    row = await db.actual_import_rows.find_one({"id": row_id, "batch_id": batch_id}, {"_id": 0})
+    if not row:
+        raise HTTPException(status_code=404, detail="Import row not found")
+
+    patch = {k: v for k, v in update.model_dump().items() if v is not None}
+    if "transaction_date" in patch:
+        normalized_date = normalize_import_transaction_date(patch["transaction_date"])
+        if not normalized_date:
+            raise HTTPException(status_code=400, detail="Invalid transaction_date format")
+        patch["transaction_date"] = normalized_date
+        patch.setdefault("month", normalized_date[:7])
+    if "month" in patch and not is_valid_month_key(str(patch["month"])):
+        raise HTTPException(status_code=400, detail="Invalid month format, expected YYYY-MM")
+    if "amount" in patch:
+        try:
+            amount_value = float(patch["amount"])
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid amount")
+        if not math.isfinite(amount_value):
+            raise HTTPException(status_code=400, detail="Invalid amount")
+        patch["amount"] = amount_value
+    if "description" in patch:
+        patch["description"] = str(patch["description"]).strip()
+        if not patch["description"]:
+            raise HTTPException(status_code=400, detail="Description cannot be empty")
+    if "entity_id" in patch and patch["entity_id"]:
+        entity_exists = await db.entities.find_one({"id": patch["entity_id"]}, {"_id": 0, "id": 1})
+        if not entity_exists:
+            raise HTTPException(status_code=400, detail="entity_id does not exist")
+
+    if "variance_action" in patch and patch["variance_action"] not in {"actual_only", "carry_forward", "write_off"}:
+        raise HTTPException(status_code=400, detail="Invalid variance_action")
+    selected_flow_id = patch.get("selected_flow_id", row.get("selected_flow_id"))
+    row_entity_id = patch.get("entity_id", row.get("entity_id"))
+    await validate_selected_flow_for_row(selected_flow_id, row_entity_id, batch.get("entity_id"))
+
+    if "include" in patch and patch["include"] is False:
+        patch["status"] = "discarded"
+    elif "include" in patch and patch["include"] is True and row.get("selected_flow_id"):
+        patch["status"] = "ready"
+    elif "include" in patch and patch["include"] is True and not (patch.get("selected_flow_id") or row.get("selected_flow_id")):
+        patch["status"] = "warning"
+    if "selected_flow_id" in patch and patch.get("include", row.get("include", True)):
+        patch["status"] = "ready" if patch["selected_flow_id"] else "warning"
+
+    patch["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    updated = await db.actual_import_rows.find_one_and_update(
+        {"id": row_id, "batch_id": batch_id},
+        {"$set": patch},
+        return_document=True,
+        projection={"_id": 0},
+    )
+    await recalculate_import_batch_counts(batch_id)
+    return updated
+
+@api_router.post("/actual-imports/{batch_id}/apply")
+async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, user: dict = Depends(get_current_user)):
+    ensure_bulk_actuals_enabled()
+    batch = await db.actual_import_batches.find_one({"id": batch_id}, {"_id": 0})
+    if not batch:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+    if batch.get("status") == "discarded":
+        raise HTTPException(status_code=400, detail="Import batch was discarded")
+
+    rows = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0}).sort("row_index", 1).to_list(100000)
+    fingerprint = build_apply_fingerprint(rows, payload.idempotency_key)
+
+    if batch.get("last_apply_fingerprint") == fingerprint and batch.get("status") in {"applied", "partial"}:
+        return {
+            "batch_id": batch_id,
+            "status": "idempotent",
+            "applied_rows": batch.get("applied_rows", 0),
+            "failed_rows": batch.get("failed_rows", 0),
+            "skipped_rows": batch.get("skipped_rows", 0),
+            "discarded_rows": batch.get("discarded_rows", 0),
+            "errors": [],
+        }
+    if batch.get("status") == "applied" and batch.get("last_apply_fingerprint") and batch.get("last_apply_fingerprint") != fingerprint:
+        raise HTTPException(status_code=409, detail="Batch already applied. Create a new import batch to apply different rows.")
+
+    to_apply = [r for r in rows if r.get("include", True)]
+    if not to_apply:
+        raise HTTPException(status_code=400, detail="No included rows to apply")
+    if len(to_apply) > 5000:
+        raise HTTPException(status_code=400, detail="Too many included rows to apply at once (max 5,000)")
+
+    applied = 0
+    failed = 0
+    skipped = 0
+    discarded = len([r for r in rows if not r.get("include", True)])
+    errors = []
+    duplicate_conflicts = 0
+    batch_side_effects = []
+
+    seen_flow_month = {}
+    for row in to_apply:
+        key = (row.get("selected_flow_id"), row.get("month"))
+        if not key[0] or not key[1]:
+            continue
+        seen_flow_month.setdefault(key, []).append(row["id"])
+
+    duplicate_row_ids = set()
+    for key, row_ids in seen_flow_month.items():
+        if len(row_ids) > 1:
+            duplicate_conflicts += len(row_ids) - 1
+            for rid in row_ids[1:]:
+                duplicate_row_ids.add(rid)
+
+    for row in to_apply:
+        row_id = row["id"]
+        flow_id = row.get("selected_flow_id")
+        month = row.get("month")
+        amount = row.get("amount")
+        variance_action = row.get("variance_action", "actual_only")
+
+        if row_id in duplicate_row_ids:
+            failed += 1
+            msg = "Duplicate flow+month row in this batch; keep only one mapping per flow/month"
+            errors.append({"row_id": row_id, "error": msg})
+            await db.actual_import_rows.update_one(
+                {"id": row_id},
+                {"$set": {"status": "failed", "error": msg, "updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
+            continue
+
+        if not flow_id or not month or amount is None:
+            failed += 1
+            msg = "Row missing selected_flow_id, month, or amount"
+            errors.append({"row_id": row_id, "error": msg})
+            await db.actual_import_rows.update_one(
+                {"id": row_id},
+                {"$set": {"status": "failed", "error": msg, "updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
+            continue
+        if not is_valid_month_key(str(month)):
+            failed += 1
+            msg = "Row has invalid month format (expected YYYY-MM)"
+            errors.append({"row_id": row_id, "error": msg})
+            await db.actual_import_rows.update_one(
+                {"id": row_id},
+                {"$set": {"status": "failed", "error": msg, "updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
+            continue
+        try:
+            amount_value = float(amount)
+        except Exception:
+            amount_value = float("nan")
+        if not math.isfinite(amount_value):
+            failed += 1
+            msg = "Row has invalid amount"
+            errors.append({"row_id": row_id, "error": msg})
+            await db.actual_import_rows.update_one(
+                {"id": row_id},
+                {"$set": {"status": "failed", "error": msg, "updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
+            continue
+
+        try:
+            await validate_selected_flow_for_row(flow_id, row.get("entity_id"), batch.get("entity_id"))
+
+            desired_variance_action = None if variance_action == "actual_only" else variance_action
+            prev_occurrence = await db.flow_occurrences.find_one(
+                {"flow_id": flow_id, "month": month},
+                {"_id": 0},
+            )
+            existing_amount = prev_occurrence.get("actual_amount") if prev_occurrence else None
+            existing_variance_action = prev_occurrence.get("variance_action") if prev_occurrence else None
+            if prev_occurrence and existing_amount is not None and round(float(existing_amount), 2) == round(float(amount_value), 2) and existing_variance_action == desired_variance_action:
+                skipped += 1
+                await db.actual_import_rows.update_one(
+                    {"id": row_id},
+                    {"$set": {"status": "skipped", "error": None, "updated_at": datetime.now(timezone.utc).isoformat()}},
+                )
+                continue
+
+            existing_carryovers = await db.cash_flows.find({
+                "carryover_from": flow_id,
+                "carryover_month": month
+            }, {"_id": 0}).to_list(100)
+
+            occ_update = FlowOccurrenceUpdate(
+                flow_id=flow_id,
+                month=month,
+                actual_amount=float(amount_value),
+                variance_action=desired_variance_action,
+            )
+            occ_result = await upsert_flow_occurrence(occ_update, suppress_undo=True)
+            applied += 1
+            batch_side_effects.append({
+                "flow_id": flow_id,
+                "month": month,
+                "previous_occurrence": prev_occurrence,
+                "deleted_carryovers": existing_carryovers,
+                "created_carryover_ids": occ_result.get("created_carryover_ids", []),
+            })
+            await db.actual_import_rows.update_one(
+                {"id": row_id},
+                {"$set": {"status": "applied", "error": None, "updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
+        except Exception as exc:
+            failed += 1
+            msg = str(exc)
+            errors.append({"row_id": row_id, "error": msg})
+            await db.actual_import_rows.update_one(
+                {"id": row_id},
+                {"$set": {"status": "failed", "error": msg, "updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
+
+    if applied > 0:
+        await push_undo(
+            "record_actual_batch",
+            "flow_occurrences",
+            list({s["flow_id"] for s in batch_side_effects}),
+            description=f"Bulk actual import ({applied} rows)",
+            side_effects={"batch_id": batch_id, "rows": batch_side_effects},
+        )
+
+    final_status = "applied" if failed == 0 else ("partial" if (applied > 0 or skipped > 0) else "failed")
+    await db.actual_import_batches.update_one(
+        {"id": batch_id},
+        {"$set": {
+            "status": final_status,
+            "last_apply_fingerprint": fingerprint,
+            "last_applied_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    await recalculate_import_batch_counts(batch_id)
+
+    return {
+        "batch_id": batch_id,
+        "status": final_status,
+        "applied_rows": applied,
+        "failed_rows": failed,
+        "skipped_rows": skipped,
+        "discarded_rows": discarded,
+        "duplicate_conflicts": duplicate_conflicts,
+        "errors": errors[:50],
+    }
+
+@api_router.post("/actual-imports/{batch_id}/discard")
+async def discard_actual_import(batch_id: str, user: dict = Depends(get_current_user)):
+    ensure_bulk_actuals_enabled()
+    result = await db.actual_import_batches.update_one(
+        {"id": batch_id},
+        {"$set": {"status": "discarded", "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+    return {"status": "discarded"}
+
 # ============== SETTINGS ROUTES ==============
 @api_router.get("/settings", response_model=Settings)
 async def get_settings():
@@ -969,6 +1672,17 @@ async def update_settings(update: SettingsUpdate):
         upsert=True, return_document=True, projection={"_id": 0}
     )
     return result
+
+@api_router.get("/meta/cash-flow")
+async def get_cash_flow_meta():
+    return {
+        "categories": [c.value for c in Category],
+        "variance_actions": [
+            {"value": "actual_only", "label": "Actual only"},
+            {"value": "carry_forward", "label": "Carry delta forward"},
+            {"value": "write_off", "label": "Write off delta"},
+        ],
+    }
 
 # ============== PROJECTION ENGINE ==============
 def expand_recurring_flows(flows: List[dict], start_date: date, end_date: date) -> List[dict]:
@@ -1733,6 +2447,12 @@ async def seed_admin():
         )
         logging.info(f"Admin password updated: {admin_email}")
     await db.users.create_index("email", unique=True)
+    await db.actual_import_batches.create_index([("id", 1)], unique=True)
+    await db.actual_import_batches.create_index([("entity_id", 1), ("created_at", -1)])
+    await db.actual_import_batches.create_index([("status", 1), ("created_at", -1)])
+    await db.actual_import_rows.create_index([("id", 1)], unique=True)
+    await db.actual_import_rows.create_index([("batch_id", 1), ("row_index", 1)], unique=True)
+    await db.actual_import_rows.create_index([("batch_id", 1), ("status", 1)])
 
 app.include_router(api_router)
 
