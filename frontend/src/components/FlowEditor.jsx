@@ -125,7 +125,7 @@ export const FlowEditor = ({ flow, open, onOpenChange, entities, onSave, onEntit
         // Update existing flow
         await axios.put(`${API}/cash-flows/${flow.id}`, {
           label: label.trim(),
-          amount: flow.amount > 0 ? Math.abs(numAmount) : -Math.abs(numAmount),
+          amount: signedAmount,
           date: dateStr,
           certainty,
           category,

@@ -77,7 +77,7 @@ const EditFlowDialog = ({ flow, open, onOpenChange, entities, onSave }) => {
     if (flow) {
       setFormData({
         label: flow.label || "",
-        amount: flow.amount?.toString() || "",
+        amount: Math.abs(flow.amount || 0).toString(),
         date: flow.date?.substring(0, 7) || "",
         category: flow.category || "Expense",
         certainty: flow.certainty || "Materialized",
@@ -93,9 +93,11 @@ const EditFlowDialog = ({ flow, open, onOpenChange, entities, onSave }) => {
     if (!formData.label || !formData.amount) return;
     setSaving(true);
     try {
+      const rawAmount = parseFloat(formData.amount);
+      const signedAmount = formData.category === "Revenue" ? Math.abs(rawAmount) : -Math.abs(rawAmount);
       await axios.put(`${API}/cash-flows/${flow.id}`, {
         label: formData.label,
-        amount: parseFloat(formData.amount),
+        amount: signedAmount,
         date: `${formData.date}-01`,
         category: formData.category,
         certainty: formData.certainty,

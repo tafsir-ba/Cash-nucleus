@@ -269,6 +269,15 @@ class ProjectionResponse(BaseModel):
     safety_buffer: float
     months: List[MonthProjection]
 
+# ============== AMOUNT SIGN NORMALIZATION ==============
+def normalize_amount_for_category(category: str, amount: float) -> float:
+    """Canonical sign rule: Revenue is positive; all other categories are negative."""
+    if isinstance(category, Enum):
+        category = category.value
+    if amount == 0:
+        return 0.0
+    return abs(amount) if category == Category.REVENUE.value else -abs(amount)
+
 # ============== HELPER: Calculate percentage-based amount dynamically ==============
 async def get_flow_with_dynamic_amount(flow: dict) -> dict:
     """For percentage-based linked flows, calculate amount from parent dynamically."""
@@ -277,8 +286,11 @@ async def get_flow_with_dynamic_amount(flow: dict) -> dict:
         if parent:
             pct = flow["percentage_of_parent"]
             parent_abs = abs(parent.get("amount", 0))
-            # Percentage flows are costs (negative) based on parent's absolute value
-            flow["amount"] = -(parent_abs * pct / 100)
+            computed = parent_abs * pct / 100
+            flow["amount"] = normalize_amount_for_category(
+                flow.get("category", Category.EXPENSE.value),
+                computed
+            )
     return flow
 
 
@@ -610,7 +622,9 @@ async def create_cash_flow(flow: CashFlowCreate):
     entity = await db.entities.find_one({"id": flow.entity_id})
     if not entity:
         raise HTTPException(status_code=400, detail="Entity not found")
-    flow_obj = CashFlow(**flow.model_dump())
+    flow_data = flow.model_dump()
+    flow_data["amount"] = normalize_amount_for_category(flow_data["category"], flow_data["amount"])
+    flow_obj = CashFlow(**flow_data)
     await db.cash_flows.insert_one(flow_obj.model_dump())
     await push_undo("create", "cash_flows", [flow_obj.id], description=f"Create: {flow_obj.label}")
     return flow_obj
@@ -623,7 +637,9 @@ async def create_cash_flow_batch(batch: CashFlowBatchCreate):
         raise HTTPException(status_code=400, detail="Entity not found")
     
     # Create parent
-    parent_obj = CashFlow(**batch.parent.model_dump())
+    parent_data = batch.parent.model_dump()
+    parent_data["amount"] = normalize_amount_for_category(parent_data["category"], parent_data["amount"])
+    parent_obj = CashFlow(**parent_data)
     await db.cash_flows.insert_one(parent_obj.model_dump())
     
     # Create linked flows with inherited recurrence
@@ -641,7 +657,15 @@ async def create_cash_flow_batch(batch: CashFlowBatchCreate):
         if data.get("is_percentage") and data.get("percentage_of_parent"):
             pct = data["percentage_of_parent"]
             parent_abs = abs(batch.parent.amount)
-            data["amount"] = -(parent_abs * pct / 100)
+            data["amount"] = normalize_amount_for_category(
+                data.get("category", Category.EXPENSE.value),
+                parent_abs * pct / 100
+            )
+        else:
+            data["amount"] = normalize_amount_for_category(
+                data.get("category", Category.EXPENSE.value),
+                data.get("amount", 0)
+            )
         
         linked_obj = CashFlow(**data)
         await db.cash_flows.insert_one(linked_obj.model_dump())
@@ -666,6 +690,15 @@ async def update_cash_flow(flow_id: str, update: CashFlowUpdate):
     current = await db.cash_flows.find_one({"id": flow_id}, {"_id": 0})
     if not current:
         raise HTTPException(status_code=404, detail="Cash flow not found")
+
+    # Enforce canonical sign behavior on edit:
+    # - if amount provided: normalize against effective category
+    # - if only category changes: re-normalize existing amount
+    effective_category = update_data.get("category", current.get("category", Category.EXPENSE.value))
+    if "amount" in update_data:
+        update_data["amount"] = normalize_amount_for_category(effective_category, update_data["amount"])
+    elif "category" in update_data and current.get("amount") is not None:
+        update_data["amount"] = normalize_amount_for_category(update_data["category"], current["amount"])
     
     # Snapshot children too for undo
     children_snapshot = await db.cash_flows.find({"parent_id": flow_id}, {"_id": 0}).to_list(100)
@@ -713,7 +746,11 @@ async def update_cash_flow(flow_id: str, update: CashFlowUpdate):
             new_parent_amount = abs(update_data["amount"])
             for child in children:
                 if child.get("is_percentage") and child.get("percentage_of_parent"):
-                    new_child_amount = -(new_parent_amount * child["percentage_of_parent"] / 100)
+                    computed = new_parent_amount * child["percentage_of_parent"] / 100
+                    new_child_amount = normalize_amount_for_category(
+                        child.get("category", Category.EXPENSE.value),
+                        computed
+                    )
                     await db.cash_flows.update_one(
                         {"id": child["id"]},
                         {"$set": {"amount": new_child_amount, "updated_at": datetime.now(timezone.utc).isoformat()}}

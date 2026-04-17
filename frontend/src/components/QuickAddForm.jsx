@@ -101,12 +101,15 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
     try {
       const dateStr = format(selectedDate, "yyyy-MM") + "-01";
       const numAmount = parseFloat(amount);
+      const signedAmount = category === "Revenue" ? Math.abs(numAmount) : -Math.abs(numAmount);
       
       const validLinked = linkedFlows
         .filter(f => (f.amount || (f.isPercentage && f.percentage)))
         .map(f => ({
           label: f.label.trim() || (f.isPercentage ? `COGS (${f.percentage}%)` : 'Related cost'),
-          amount: f.isPercentage ? 0 : parseFloat(f.amount),
+          amount: f.isPercentage
+            ? 0
+            : (f.category === "Revenue" ? Math.abs(parseFloat(f.amount)) : -Math.abs(parseFloat(f.amount))),
           date: dateStr,
           certainty,
           category: f.category,
@@ -118,7 +121,7 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
 
       const payload = {
         label: label.trim(),
-        amount: numAmount,
+        amount: signedAmount,
         date: dateStr,
         certainty,
         category,
@@ -389,7 +392,7 @@ export const QuickAddForm = ({ onSuccess, entities, onEntitiesChange }) => {
                     ) : (
                       <input
                         type="number"
-                        placeholder="-2000"
+                        placeholder="2000"
                         value={linked.amount}
                         onChange={(e) => updateLinkedFlow(linked.id, "amount", e.target.value)}
                         className="flex-1 bg-zinc-950 border border-zinc-800 text-xs rounded px-2 py-1.5 text-zinc-100 font-mono"
