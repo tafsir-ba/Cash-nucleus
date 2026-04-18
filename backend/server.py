@@ -662,7 +662,8 @@ async def validate_selected_flow_for_row(selected_flow_id: Optional[str], row_en
     if not flow:
         raise HTTPException(status_code=400, detail="Selected flow does not exist")
 
-    enforced_entity_id = batch_entity_id or row_entity_id
+    # Row-level entity wins so bulk imports can mix entities in one batch.
+    enforced_entity_id = row_entity_id or batch_entity_id
     if enforced_entity_id and flow.get("entity_id") != enforced_entity_id:
         raise HTTPException(status_code=400, detail="Selected flow does not belong to the import entity scope")
     return flow

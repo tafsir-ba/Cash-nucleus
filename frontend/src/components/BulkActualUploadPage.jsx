@@ -25,7 +25,8 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
   const [file, setFile] = useState(null);
   const [batch, setBatch] = useState(null);
   const [rows, setRows] = useState([]);
-  const [flows, setFlows] = useState([]);
+  /** All flows (no entity filter) so each row can match flows for its chosen entity. */
+  const [allFlows, setAllFlows] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [applying, setApplying] = useState(false);
   const [discarding, setDiscarding] = useState(false);
@@ -48,12 +49,11 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
   }, [entities, entityId]);
 
   useEffect(() => {
-    if (!entityId) return;
     axios
-      .get(`${API}/cash-flows`, { params: { entity_id: entityId } })
-      .then((res) => setFlows(res.data))
-      .catch(() => setFlows([]));
-  }, [entityId]);
+      .get(`${API}/cash-flows`)
+      .then((res) => setAllFlows(Array.isArray(res.data) ? res.data : []))
+      .catch(() => setAllFlows([]));
+  }, []);
 
   useEffect(() => {
     axios
@@ -267,7 +267,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
 
       <div className="p-4 border-b border-zinc-800 grid grid-cols-1 md:grid-cols-[220px_1fr_auto] gap-3 items-end">
         <div>
-          <label className="text-xs text-zinc-500 mb-1 block">Entity Scope</label>
+          <label className="text-xs text-zinc-500 mb-1 block">Default entity</label>
           <Select value={entityId} onValueChange={setEntityId}>
             <SelectTrigger className="bg-zinc-950 border-zinc-800 h-[38px]">
               <SelectValue placeholder="Select entity" />
@@ -280,6 +280,9 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
               ))}
             </SelectContent>
           </Select>
+          <p className="text-[10px] text-zinc-600 mt-1 max-w-[220px]">
+            Used when parsing and as the row default; each line can override entity in the table.
+          </p>
         </div>
 
         <div>
@@ -359,6 +362,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
               <thead className="bg-zinc-900 sticky top-0 z-10">
                 <tr className="border-b border-zinc-800">
                   <th className="text-left px-2 py-2 text-zinc-500">Use</th>
+                  <th className="text-left px-2 py-2 text-zinc-500">Entity</th>
                   <th className="text-left px-2 py-2 text-zinc-500">Month</th>
                   <th className="text-left px-2 py-2 text-zinc-500">Description</th>
                   <th className="text-right px-2 py-2 text-zinc-500">Amount</th>
@@ -371,7 +375,13 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
               </thead>
               <tbody>
                 {visibleRows.map((row) => {
-                  const flowOptions = flows.filter((f) => (row.amount >= 0 ? f.amount > 0 : f.amount < 0));
+                  const rowEntityEffective =
+                    row.entity_id || entityId || batch?.entity_id || entities[0]?.id || "";
+                  const flowOptions = allFlows.filter(
+                    (f) =>
+                      f.entity_id === rowEntityEffective &&
+                      (row.amount >= 0 ? f.amount > 0 : f.amount < 0),
+                  );
                   const inspected = inspectAmountInput(row.amount);
                   const isSaving = !!persistingRows[row.id];
                   const classification = row.classification || "existing_flow";
@@ -387,6 +397,26 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
                             persistRowPatch(row.id, { include: e.target.checked });
                           }}
                         />
+                      </td>
+                      <td className="px-2 py-2 align-top">
+                        <Select
+                          value={rowEntityEffective}
+                          onValueChange={(v) => {
+                            updateRowLocal(row.id, { entity_id: v, selected_flow_id: null });
+                            persistRowPatch(row.id, { entity_id: v, selected_flow_id: null });
+                          }}
+                        >
+                          <SelectTrigger className="w-[140px] bg-zinc-950 border-zinc-800 h-[30px]" data-testid={`bulk-row-entity-${row.id}`}>
+                            <SelectValue placeholder="Entity" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {entities.map((e) => (
+                              <SelectItem key={e.id} value={e.id}>
+                                {e.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </td>
                       <td className="px-2 py-2 align-top">
                         <input
