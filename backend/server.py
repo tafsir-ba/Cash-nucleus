@@ -483,6 +483,7 @@ def detect_import_columns(columns: List[str]) -> Dict[str, str]:
         "description", "label", "details", "memo", "narrative", "name", "text", "beschreibung",
         "buchungstext", "verwendungszweck", "zweck", "payee", "empfänger", "empfaenger",
         "begünstigter", "beguenstigter", "merchant", "note", "bemerkung",
+        "posting text", "buchungstext en", "booking text",
     ]
     amount_exact = [
         "amount", "value", "chf", "betrag", "amount chf", "transaction amount", "booked amount",
@@ -507,7 +508,11 @@ def detect_import_columns(columns: List[str]) -> Dict[str, str]:
 
     detected: Dict[str, str] = {}
     detected["date"] = pick_exact(date_exact) or pick_contains(
-        ("buchung", "valuta", "datum", "date", "booking", "posting"), ("betrag", "amount", "belastung", "gutschrift")
+        (
+            "buchungsdatum", "buchungstag", "valutadatum", "valuta", "transaktionsdatum",
+            "booking date", "value date", "trade date", "posting date",
+        ),
+        ("betrag", "amount", "belastung", "gutschrift", "text", "beschreibung", "posting text"),
     )
     detected["description"] = pick_exact(desc_exact) or pick_contains(
         ("beschreibung", "text", "zweck", "verwendung", "detail", "memo", "narrative", "payee", "merchant"), ()
