@@ -232,3 +232,55 @@ def test_bulk_import_apply_addition_merges_with_existing_actual(auth_session, te
     )
     assert occ_final.status_code == 200
     assert round(float(occ_final.json()[0]["actual_amount"]), 2) == -700.0
+
+
+def test_bulk_import_new_flow_creates_cash_flow_and_actual(auth_session, test_entity):
+    desc = f"UNIQUE_NEW_FLOW_{uuid.uuid4().hex[:10]}"
+    csv_bytes = f"date,description,amount\n2026-07-15,{desc},-333.50\n".encode("utf-8")
+    files = {"file": ("newflow.csv", io.BytesIO(csv_bytes), "text/csv")}
+    parse_resp = auth_session.post(
+        f"{BASE_URL}/api/actual-imports/parse",
+        data={"entity_id": test_entity["id"]},
+        files=files,
+        timeout=20,
+    )
+    assert parse_resp.status_code == 200, parse_resp.text
+    batch_id = parse_resp.json()["batch"]["id"]
+    row = parse_resp.json()["rows"][0]
+
+    upd = auth_session.put(
+        f"{BASE_URL}/api/actual-imports/{batch_id}/rows/{row['id']}",
+        json={"classification": "new_flow", "include": True, "month": "2026-07"},
+        timeout=20,
+    )
+    assert upd.status_code == 200, upd.text
+
+    apply_resp = auth_session.post(
+        f"{BASE_URL}/api/actual-imports/{batch_id}/apply",
+        json={"actual_merge_mode": "override"},
+        timeout=30,
+    )
+    assert apply_resp.status_code == 200, apply_resp.text
+    assert apply_resp.json().get("applied_rows", 0) >= 1
+
+    flows_resp = auth_session.get(
+        f"{BASE_URL}/api/cash-flows",
+        params={"entity_id": test_entity["id"]},
+        timeout=20,
+    )
+    assert flows_resp.status_code == 200
+    flows = flows_resp.json()
+    match = next((f for f in flows if f.get("label") == desc), None)
+    assert match is not None, "New cash flow line should be created with import description as label"
+
+    occ_resp = auth_session.get(
+        f"{BASE_URL}/api/flow-occurrences",
+        params={"flow_id": match["id"], "month": "2026-07"},
+        timeout=20,
+    )
+    assert occ_resp.status_code == 200
+    occs = occ_resp.json()
+    assert len(occs) >= 1
+    assert round(float(occs[0]["actual_amount"]), 2) == -333.5
+
+    auth_session.delete(f"{BASE_URL}/api/cash-flows/{match['id']}?delete_linked=true", timeout=20)

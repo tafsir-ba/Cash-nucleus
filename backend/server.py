@@ -263,6 +263,8 @@ class ActualImportRow(BaseModel):
     match_reason: str = ""
     variance_action: str = "actual_only"  # actual_only | carry_forward | write_off
     error: Optional[str] = None
+    # existing_flow: map to selected_flow_id. new_flow: apply creates a new cash flow line from this row, then records the actual.
+    classification: str = "existing_flow"
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -296,6 +298,7 @@ class ActualImportRowUpdate(BaseModel):
     entity_id: Optional[str] = None
     selected_flow_id: Optional[str] = None
     variance_action: Optional[str] = None
+    classification: Optional[Literal["existing_flow", "new_flow"]] = None
 
 class ActualImportApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -459,12 +462,16 @@ def build_apply_fingerprint(
     for row in rows:
         if not row.get("include", True):
             continue
+        cls = row.get("classification") or "existing_flow"
+        # new_flow: fingerprint must stay stable after apply stores selected_flow_id on the row.
+        flow_fp = None if cls == "new_flow" else row.get("selected_flow_id")
         items.append({
             "row_id": row.get("id"),
-            "flow_id": row.get("selected_flow_id"),
+            "flow_id": flow_fp,
             "month": row.get("month"),
             "amount": round(float(row.get("amount", 0)), 2),
             "variance_action": row.get("variance_action", "actual_only"),
+            "classification": cls,
         })
     payload = {
         "rows": sorted(items, key=lambda x: x["row_id"]),
@@ -473,6 +480,40 @@ def build_apply_fingerprint(
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def build_cash_flow_from_import_row(row: dict, entity_id: str, amount_value: float) -> CashFlow:
+    """Create a non-recurring planned line from an import row (used when classification is new_flow)."""
+    label = (row.get("description") or "Imported").strip()[:200] or "Imported"
+    raw_cat = row.get("category", Category.EXPENSE.value)
+    cat_str = raw_cat.value if isinstance(raw_cat, Category) else str(raw_cat)
+    try:
+        cat_enum = Category(cat_str)
+    except ValueError:
+        cat_enum = Category.EXPENSE
+
+    td = str(row.get("transaction_date") or "").strip()
+    month = str(row.get("month") or "").strip()
+    start_date: str
+    if len(td) >= 10 and td[4] == "-" and td[7] == "-":
+        start_date = td[:10]
+    elif is_valid_month_key(month):
+        start_date = f"{month}-01"
+    else:
+        start_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    norm_amt = normalize_amount_for_category(cat_enum.value, float(amount_value))
+    return CashFlow(
+        label=label,
+        amount=norm_amt,
+        date=start_date,
+        category=cat_enum,
+        certainty=Certainty.MATERIALIZED,
+        recurrence=Recurrence.NONE,
+        recurrence_mode=RecurrenceMode.REPEAT,
+        entity_id=entity_id,
+    )
+
 
 def detect_import_columns(columns: List[str]) -> Dict[str, str]:
     cols: Dict[str, str] = {}
@@ -688,6 +729,11 @@ async def restore_record_actual_side_effects(side_effects: dict):
     for dc in deleted_carryovers:
         dc.pop("_id", None)
         await db.cash_flows.insert_one(dc)
+
+    created_flow_id = side_effects.get("created_flow_id")
+    if created_flow_id:
+        await db.cash_flows.delete_many({"parent_id": created_flow_id})
+        await db.cash_flows.delete_one({"id": created_flow_id})
 
 @api_router.post("/undo")
 async def undo_last_action():
@@ -1453,8 +1499,8 @@ async def parse_actual_import(
         if not matched_entity_id and selected_flow_id:
             matched = next((f for f in flows if f.get("id") == selected_flow_id), None)
             matched_entity_id = matched.get("entity_id") if matched else None
-        include = selected_flow_id is not None
-        status = "ready" if include else "warning"
+        include = True
+        status = "ready" if selected_flow_id else "warning"
 
         import_row = ActualImportRow(
             batch_id=batch.id,
@@ -1474,6 +1520,7 @@ async def parse_actual_import(
             selected_flow_id=selected_flow_id,
             match_score=match["score"],
             match_reason=match["reason"],
+            classification="existing_flow",
         )
         created_rows.append(import_row.model_dump())
 
@@ -1555,18 +1602,31 @@ async def update_actual_import_row(batch_id: str, row_id: str, update: ActualImp
 
     if "variance_action" in patch and patch["variance_action"] not in {"actual_only", "carry_forward", "write_off"}:
         raise HTTPException(status_code=400, detail="Invalid variance_action")
-    selected_flow_id = patch.get("selected_flow_id", row.get("selected_flow_id"))
-    row_entity_id = patch.get("entity_id", row.get("entity_id"))
-    await validate_selected_flow_for_row(selected_flow_id, row_entity_id, batch.get("entity_id"))
+    if "classification" in patch and patch["classification"] not in {"existing_flow", "new_flow"}:
+        raise HTTPException(status_code=400, detail="Invalid classification")
 
-    if "include" in patch and patch["include"] is False:
+    if patch.get("classification") == "new_flow":
+        patch["selected_flow_id"] = None
+
+    merged_class = patch["classification"] if "classification" in patch else row.get("classification", "existing_flow")
+    row_entity_id = patch.get("entity_id", row.get("entity_id"))
+    batch_entity_id = batch.get("entity_id")
+    sel_for_validate = None if merged_class == "new_flow" else (
+        patch["selected_flow_id"] if "selected_flow_id" in patch else row.get("selected_flow_id")
+    )
+    if sel_for_validate:
+        await validate_selected_flow_for_row(sel_for_validate, row_entity_id, batch_entity_id)
+
+    merged_include = patch["include"] if "include" in patch else row.get("include", True)
+    ent_ok = bool(row_entity_id or batch_entity_id)
+    if not merged_include:
         patch["status"] = "discarded"
-    elif "include" in patch and patch["include"] is True and row.get("selected_flow_id"):
+    elif merged_class == "new_flow":
+        patch["status"] = "ready" if ent_ok else "warning"
+    elif sel_for_validate:
         patch["status"] = "ready"
-    elif "include" in patch and patch["include"] is True and not (patch.get("selected_flow_id") or row.get("selected_flow_id")):
+    else:
         patch["status"] = "warning"
-    if "selected_flow_id" in patch and patch.get("include", row.get("include", True)):
-        patch["status"] = "ready" if patch["selected_flow_id"] else "warning"
 
     patch["updated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -1618,8 +1678,10 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
     duplicate_conflicts = 0
     batch_side_effects = []
 
-    seen_flow_month = {}
+    seen_flow_month: Dict[tuple, List[str]] = {}
     for row in to_apply:
+        if row.get("classification", "existing_flow") == "new_flow":
+            continue
         key = (row.get("selected_flow_id"), row.get("month"))
         if not key[0] or not key[1]:
             continue
@@ -1634,10 +1696,11 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
 
     for row in to_apply:
         row_id = row["id"]
-        flow_id = row.get("selected_flow_id")
+        classification = row.get("classification", "existing_flow")
         month = row.get("month")
         amount = row.get("amount")
         variance_action = row.get("variance_action", "actual_only")
+        entity_for_row = row.get("entity_id") or batch.get("entity_id")
 
         if row_id in duplicate_row_ids:
             failed += 1
@@ -1649,9 +1712,9 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
             )
             continue
 
-        if not flow_id or not month or amount is None:
+        if not month or amount is None:
             failed += 1
-            msg = "Row missing selected_flow_id, month, or amount"
+            msg = "Row missing month or amount"
             errors.append({"row_id": row_id, "error": msg})
             await db.actual_import_rows.update_one(
                 {"id": row_id},
@@ -1681,8 +1744,38 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
             )
             continue
 
+        flow_id: Optional[str] = row.get("selected_flow_id")
+        if classification == "new_flow":
+            if not entity_for_row:
+                failed += 1
+                msg = "New line rows require entity scope (set entity on batch or row)"
+                errors.append({"row_id": row_id, "error": msg})
+                await db.actual_import_rows.update_one(
+                    {"id": row_id},
+                    {"$set": {"status": "failed", "error": msg, "updated_at": datetime.now(timezone.utc).isoformat()}},
+                )
+                continue
+            flow_id = None
+        elif not flow_id:
+            failed += 1
+            msg = "Row missing selected_flow_id (pick a flow or switch target to New line)"
+            errors.append({"row_id": row_id, "error": msg})
+            await db.actual_import_rows.update_one(
+                {"id": row_id},
+                {"$set": {"status": "failed", "error": msg, "updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
+            continue
+
+        created_flow_id: Optional[str] = None
         try:
-            await validate_selected_flow_for_row(flow_id, row.get("entity_id"), batch.get("entity_id"))
+            if classification == "new_flow":
+                flow_obj = build_cash_flow_from_import_row(row, entity_for_row, amount_value)
+                await db.cash_flows.insert_one(flow_obj.model_dump())
+                flow_id = flow_obj.id
+                created_flow_id = flow_id
+                await validate_selected_flow_for_row(flow_id, entity_for_row, batch.get("entity_id"))
+            else:
+                await validate_selected_flow_for_row(flow_id, row.get("entity_id"), batch.get("entity_id"))
 
             desired_variance_action = None if variance_action == "actual_only" else variance_action
             prev_occurrence = await db.flow_occurrences.find_one(
@@ -1705,6 +1798,9 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
                 and existing_variance_action == desired_variance_action
             ):
                 skipped += 1
+                if created_flow_id:
+                    await db.cash_flows.delete_many({"parent_id": created_flow_id})
+                    await db.cash_flows.delete_one({"id": created_flow_id})
                 await db.actual_import_rows.update_one(
                     {"id": row_id},
                     {"$set": {"status": "skipped", "error": None, "updated_at": datetime.now(timezone.utc).isoformat()}},
@@ -1724,18 +1820,28 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
             )
             occ_result = await upsert_flow_occurrence(occ_update, suppress_undo=True)
             applied += 1
-            batch_side_effects.append({
+            row_effects: Dict[str, Any] = {
                 "flow_id": flow_id,
                 "month": month,
                 "previous_occurrence": prev_occurrence,
                 "deleted_carryovers": existing_carryovers,
                 "created_carryover_ids": occ_result.get("created_carryover_ids", []),
-            })
-            await db.actual_import_rows.update_one(
-                {"id": row_id},
-                {"$set": {"status": "applied", "error": None, "updated_at": datetime.now(timezone.utc).isoformat()}},
-            )
+            }
+            if created_flow_id:
+                row_effects["created_flow_id"] = created_flow_id
+            batch_side_effects.append(row_effects)
+            row_set: Dict[str, Any] = {
+                "status": "applied",
+                "error": None,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if classification == "new_flow":
+                row_set["selected_flow_id"] = flow_id
+            await db.actual_import_rows.update_one({"id": row_id}, {"$set": row_set})
         except Exception as exc:
+            if created_flow_id:
+                await db.cash_flows.delete_many({"parent_id": created_flow_id})
+                await db.cash_flows.delete_one({"id": created_flow_id})
             failed += 1
             msg = str(exc)
             errors.append({"row_id": row_id, "error": msg})

@@ -221,22 +221,35 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
   const summary = useMemo(() => {
     const included = rows.filter((r) => r.include);
     const discardedRows = rows.length - included.length;
-    const unmatched = included.filter((r) => !r.selected_flow_id).length;
+    const scope = entityId || batch?.entity_id;
+    const unmatched = included.filter((r) => {
+      const cls = r.classification || "existing_flow";
+      if (cls === "new_flow") return !(r.entity_id || scope);
+      return !r.selected_flow_id;
+    }).length;
     return {
       total: rows.length,
       included: included.length,
       discarded: discardedRows,
       unmatched,
     };
-  }, [rows]);
+  }, [rows, entityId, batch?.entity_id]);
 
   const visibleRows = useMemo(() => {
+    const scope = entityId || batch?.entity_id;
     if (rowFilter === "included") return rows.filter((r) => r.include);
-    if (rowFilter === "unmatched") return rows.filter((r) => r.include && !r.selected_flow_id);
+    if (rowFilter === "unmatched") {
+      return rows.filter((r) => {
+        if (!r.include) return false;
+        const cls = r.classification || "existing_flow";
+        if (cls === "new_flow") return !(r.entity_id || scope);
+        return !r.selected_flow_id;
+      });
+    }
     if (rowFilter === "failed") return rows.filter((r) => r.status === "failed");
     if (rowFilter === "warnings") return rows.filter((r) => r.status === "warning");
     return rows;
-  }, [rows, rowFilter]);
+  }, [rows, rowFilter, entityId, batch?.entity_id]);
 
   return (
     <div className="surface-card" data-testid="bulk-actual-page">
@@ -350,6 +363,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
                   <th className="text-left px-2 py-2 text-zinc-500">Description</th>
                   <th className="text-right px-2 py-2 text-zinc-500">Amount</th>
                   <th className="text-left px-2 py-2 text-zinc-500">Category</th>
+                  <th className="text-left px-2 py-2 text-zinc-500">Actual target</th>
                   <th className="text-left px-2 py-2 text-zinc-500">Flow Match</th>
                   <th className="text-left px-2 py-2 text-zinc-500">Confidence</th>
                   <th className="text-left px-2 py-2 text-zinc-500">Variance Mode</th>
@@ -360,6 +374,8 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
                   const flowOptions = flows.filter((f) => (row.amount >= 0 ? f.amount > 0 : f.amount < 0));
                   const inspected = inspectAmountInput(row.amount);
                   const isSaving = !!persistingRows[row.id];
+                  const classification = row.classification || "existing_flow";
+                  const isNewLine = classification === "new_flow";
                   return (
                     <tr key={row.id} className="border-b border-zinc-800/50">
                       <td className="px-2 py-2 align-top">
@@ -428,15 +444,37 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
                       </td>
                       <td className="px-2 py-2 align-top">
                         <Select
+                          value={classification}
+                          onValueChange={(v) => {
+                            const payload =
+                              v === "new_flow"
+                                ? { classification: "new_flow", selected_flow_id: null }
+                                : { classification: "existing_flow" };
+                            updateRowLocal(row.id, payload);
+                            persistRowPatch(row.id, payload);
+                          }}
+                        >
+                          <SelectTrigger className="w-[160px] bg-zinc-950 border-zinc-800 h-[30px]" data-testid={`bulk-classify-${row.id}`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="existing_flow">Existing line</SelectItem>
+                            <SelectItem value="new_flow">New line</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </td>
+                      <td className="px-2 py-2 align-top">
+                        <Select
                           value={row.selected_flow_id || "none"}
+                          disabled={isNewLine}
                           onValueChange={(v) => {
                             const next = v === "none" ? null : v;
-                            updateRowLocal(row.id, { selected_flow_id: next });
-                            persistRowPatch(row.id, { selected_flow_id: next });
+                            updateRowLocal(row.id, { selected_flow_id: next, classification: "existing_flow" });
+                            persistRowPatch(row.id, { selected_flow_id: next, classification: "existing_flow" });
                           }}
                         >
                           <SelectTrigger className="w-[220px] bg-zinc-950 border-zinc-800 h-[30px]">
-                            <SelectValue placeholder="Select flow" />
+                            <SelectValue placeholder={isNewLine ? "Creates new cash line" : "Select flow"} />
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="none">Unmatched</SelectItem>
