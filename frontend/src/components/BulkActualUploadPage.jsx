@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import { toast } from "sonner";
-import { UploadSimple, CheckCircle, XCircle, ArrowClockwise, FolderOpen } from "@phosphor-icons/react";
+import { UploadSimple, CheckCircle, XCircle, ArrowClockwise, FolderOpen, CaretUp, CaretDown, ArrowsDownUp } from "@phosphor-icons/react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { inspectAmountInput, formatAmountInput } from "./amountExpression";
 
@@ -25,6 +25,26 @@ const scoreLabel = (score) => {
   return "Low";
 };
 
+const SortHeader = ({ label, sortKey, activeKey, dir, onToggle, align = "left", testId }) => {
+  const active = activeKey === sortKey;
+  const Indicator = !active ? ArrowsDownUp : dir === "asc" ? CaretUp : CaretDown;
+  return (
+    <th className={`px-2 py-2 text-zinc-500 ${align === "right" ? "text-right" : "text-left"}`}>
+      <button
+        type="button"
+        onClick={() => onToggle(sortKey)}
+        data-testid={testId}
+        className={`inline-flex items-center gap-1 font-medium tracking-wide hover:text-zinc-200 ${
+          active ? "text-zinc-200" : "text-zinc-500"
+        } ${align === "right" ? "flex-row-reverse w-full justify-start" : ""}`}
+      >
+        <span>{label}</span>
+        <Indicator size={10} className={active ? "text-zinc-300" : "text-zinc-600"} />
+      </button>
+    </th>
+  );
+};
+
 export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
   const [entityId, setEntityId] = useState("");
   const [file, setFile] = useState(null);
@@ -44,6 +64,12 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
   const [categories, setCategories] = useState(fallbackCategories);
   const [varianceActions, setVarianceActions] = useState(fallbackVarianceActions);
   const [selectedHistoryBatchId, setSelectedHistoryBatchId] = useState("none");
+  // Review-table sort. `sortKey === null` means "file order" (same as row_index,
+  // which is the order the backend applies rows in). Sort is view-only: apply
+  // still runs in row_index order so within-batch Replace-then-Add semantics
+  // stay deterministic regardless of how the user arranges the table.
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("asc");
 
   useEffect(() => {
     if (!entityId && entities.length > 0) {
@@ -236,21 +262,94 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
     };
   }, [rows, entityId, batch?.entity_id]);
 
+  const entityNameById = useMemo(() => {
+    const map = {};
+    entities.forEach((e) => { map[e.id] = e.name; });
+    return map;
+  }, [entities]);
+
+  const flowLabelById = useMemo(() => {
+    const map = {};
+    allFlows.forEach((f) => { map[f.id] = f.label; });
+    return map;
+  }, [allFlows]);
+
+  const toggleSort = (key) => {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDir("asc");
+      return;
+    }
+    if (sortDir === "asc") {
+      setSortDir("desc");
+      return;
+    }
+    setSortKey(null);
+    setSortDir("asc");
+  };
+
+  const sortValueFor = (row, key) => {
+    switch (key) {
+      case "entity": {
+        const id = row.entity_id || entityId || batch?.entity_id || "";
+        return (entityNameById[id] || "").toLowerCase();
+      }
+      case "month":
+        return row.month || "";
+      case "description":
+        return (row.description || "").toLowerCase();
+      case "amount": {
+        const n = parseFloat(row.amount);
+        return Number.isFinite(n) ? n : Number.NEGATIVE_INFINITY;
+      }
+      case "category":
+        return (row.category || "").toLowerCase();
+      case "classification":
+        return row.classification || "existing_flow";
+      case "flow":
+        return (flowLabelById[row.selected_flow_id] || "").toLowerCase();
+      case "confidence":
+        return typeof row.match_score === "number" ? row.match_score : -1;
+      case "merge":
+        return row.actual_merge_mode || "override";
+      case "variance":
+        return row.variance_action || "actual_only";
+      default:
+        return "";
+    }
+  };
+
   const visibleRows = useMemo(() => {
     const scope = entityId || batch?.entity_id;
-    if (rowFilter === "included") return rows.filter((r) => r.include);
-    if (rowFilter === "unmatched") {
-      return rows.filter((r) => {
+    let filtered;
+    if (rowFilter === "included") filtered = rows.filter((r) => r.include);
+    else if (rowFilter === "unmatched") {
+      filtered = rows.filter((r) => {
         if (!r.include) return false;
         const cls = r.classification || "existing_flow";
         if (cls === "new_flow") return !(r.entity_id || scope);
         return !r.selected_flow_id;
       });
+    } else if (rowFilter === "failed") filtered = rows.filter((r) => r.status === "failed");
+    else if (rowFilter === "warnings") filtered = rows.filter((r) => r.status === "warning");
+    else filtered = rows;
+
+    const fileOrder = (a, b) => (a.row_index ?? 0) - (b.row_index ?? 0);
+    if (!sortKey) {
+      return [...filtered].sort(fileOrder);
     }
-    if (rowFilter === "failed") return rows.filter((r) => r.status === "failed");
-    if (rowFilter === "warnings") return rows.filter((r) => r.status === "warning");
-    return rows;
-  }, [rows, rowFilter, entityId, batch?.entity_id]);
+    const dir = sortDir === "asc" ? 1 : -1;
+    return [...filtered].sort((a, b) => {
+      const va = sortValueFor(a, sortKey);
+      const vb = sortValueFor(b, sortKey);
+      if (va < vb) return -1 * dir;
+      if (va > vb) return 1 * dir;
+      // Stable tiebreak on original file order so rows staying "equal" (e.g. two
+      // rows with the same description) keep their intra-group order predictable.
+      return fileOrder(a, b);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, rowFilter, entityId, batch?.entity_id, sortKey, sortDir, entityNameById, flowLabelById]);
 
   return (
     <div className="surface-card" data-testid="bulk-actual-page">
@@ -349,6 +448,20 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
             <div className="text-zinc-500 flex items-center gap-2">
               <FolderOpen size={12} />
               Review filter
+              {sortKey && (
+                <span className="ml-3 inline-flex items-center gap-1 rounded bg-zinc-800/70 px-2 py-[2px] text-[10px] text-zinc-300">
+                  Sort: {sortKey} ({sortDir})
+                  <button
+                    type="button"
+                    onClick={() => { setSortKey(null); setSortDir("asc"); }}
+                    className="ml-1 text-zinc-400 hover:text-zinc-100"
+                    data-testid="bulk-sort-clear"
+                    aria-label="Clear sort"
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
             </div>
             <Select value={rowFilter} onValueChange={setRowFilter}>
               <SelectTrigger className="w-[180px] bg-zinc-950 border-zinc-800 h-[30px]">
@@ -369,16 +482,16 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
               <thead className="bg-zinc-900 sticky top-0 z-10">
                 <tr className="border-b border-zinc-800">
                   <th className="text-left px-2 py-2 text-zinc-500">Use</th>
-                  <th className="text-left px-2 py-2 text-zinc-500">Entity</th>
-                  <th className="text-left px-2 py-2 text-zinc-500">Month</th>
-                  <th className="text-left px-2 py-2 text-zinc-500">Description</th>
-                  <th className="text-right px-2 py-2 text-zinc-500">Amount</th>
-                  <th className="text-left px-2 py-2 text-zinc-500">Category</th>
-                  <th className="text-left px-2 py-2 text-zinc-500">Actual target</th>
-                  <th className="text-left px-2 py-2 text-zinc-500">Flow Match</th>
-                  <th className="text-left px-2 py-2 text-zinc-500">Confidence</th>
-                  <th className="text-left px-2 py-2 text-zinc-500">Amount vs actual</th>
-                  <th className="text-left px-2 py-2 text-zinc-500">Variance Mode</th>
+                  <SortHeader label="Entity"           sortKey="entity"        activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-entity" />
+                  <SortHeader label="Month"            sortKey="month"         activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-month" />
+                  <SortHeader label="Description"      sortKey="description"   activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-description" />
+                  <SortHeader label="Amount"           sortKey="amount"        activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" testId="bulk-sort-amount" />
+                  <SortHeader label="Category"         sortKey="category"      activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-category" />
+                  <SortHeader label="Actual target"    sortKey="classification" activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-classification" />
+                  <SortHeader label="Flow Match"       sortKey="flow"          activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-flow" />
+                  <SortHeader label="Confidence"       sortKey="confidence"    activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-confidence" />
+                  <SortHeader label="Amount vs actual" sortKey="merge"         activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-merge" />
+                  <SortHeader label="Variance Mode"    sortKey="variance"      activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-variance" />
                 </tr>
               </thead>
               <tbody>
