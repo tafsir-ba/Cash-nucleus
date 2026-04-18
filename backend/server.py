@@ -1676,24 +1676,11 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
     skipped = 0
     discarded = len([r for r in rows if not r.get("include", True)])
     errors = []
-    duplicate_conflicts = 0
     batch_side_effects = []
 
-    seen_flow_month: Dict[tuple, List[str]] = {}
-    for row in to_apply:
-        if row.get("classification", "existing_flow") == "new_flow":
-            continue
-        key = (row.get("selected_flow_id"), row.get("month"))
-        if not key[0] or not key[1]:
-            continue
-        seen_flow_month.setdefault(key, []).append(row["id"])
-
-    duplicate_row_ids = set()
-    for key, row_ids in seen_flow_month.items():
-        if len(row_ids) > 1:
-            duplicate_conflicts += len(row_ids) - 1
-            for rid in row_ids[1:]:
-                duplicate_row_ids.add(rid)
+    # Several bank lines may legitimately map to the same flow + month (e.g. two Swisscom debits).
+    # Rows are applied in file order: use "addition" merge mode to accumulate, or "override" if each
+    # row should replace the previous value for that flow/month.
 
     for row in to_apply:
         row_id = row["id"]
@@ -1702,16 +1689,6 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
         amount = row.get("amount")
         variance_action = row.get("variance_action", "actual_only")
         entity_for_row = row.get("entity_id") or batch.get("entity_id")
-
-        if row_id in duplicate_row_ids:
-            failed += 1
-            msg = "Duplicate flow+month row in this batch; keep only one mapping per flow/month"
-            errors.append({"row_id": row_id, "error": msg})
-            await db.actual_import_rows.update_one(
-                {"id": row_id},
-                {"$set": {"status": "failed", "error": msg, "updated_at": datetime.now(timezone.utc).isoformat()}},
-            )
-            continue
 
         if not month or amount is None:
             failed += 1
@@ -1879,7 +1856,7 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
         "failed_rows": failed,
         "skipped_rows": skipped,
         "discarded_rows": discarded,
-        "duplicate_conflicts": duplicate_conflicts,
+        "duplicate_conflicts": 0,
         "errors": errors[:50],
     }
 

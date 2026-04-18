@@ -558,6 +558,11 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
 
           <div className="px-4 py-3 border-t border-zinc-800 bg-zinc-950/40">
             <p className="text-[11px] text-zinc-500 uppercase tracking-wide mb-2">Bulk apply mode</p>
+            <p className="text-[11px] text-zinc-600 mb-2 max-w-3xl">
+              Several statement lines can map to the same flow and month (e.g. two Swisscom payments). Use{" "}
+              <span className="text-zinc-400">Add to current</span> so each line adds to the running actual. With{" "}
+              <span className="text-zinc-400">Replace</span>, later rows overwrite earlier ones for the same flow/month.
+            </p>
             <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 text-xs text-zinc-300">
               <label className="flex items-start gap-2 cursor-pointer max-w-md">
                 <input
