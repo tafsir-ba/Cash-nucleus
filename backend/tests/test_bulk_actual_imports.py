@@ -188,7 +188,7 @@ def test_bulk_import_apply_addition_merges_with_existing_actual(auth_session, te
     )
     apply1 = auth_session.post(
         f"{BASE_URL}/api/actual-imports/{batch1}/apply",
-        json={"actual_merge_mode": "override"},
+        json={},
         timeout=30,
     )
     assert apply1.status_code == 200, apply1.text
@@ -214,12 +214,17 @@ def test_bulk_import_apply_addition_merges_with_existing_actual(auth_session, te
     row2 = parse2.json()["rows"][0]
     auth_session.put(
         f"{BASE_URL}/api/actual-imports/{batch2}/rows/{row2['id']}",
-        json={"selected_flow_id": flow["id"], "include": True, "month": "2026-06"},
+        json={
+            "selected_flow_id": flow["id"],
+            "include": True,
+            "month": "2026-06",
+            "actual_merge_mode": "addition",
+        },
         timeout=20,
     )
     apply2 = auth_session.post(
         f"{BASE_URL}/api/actual-imports/{batch2}/apply",
-        json={"actual_merge_mode": "addition"},
+        json={},
         timeout=30,
     )
     assert apply2.status_code == 200, apply2.text
@@ -257,7 +262,7 @@ def test_bulk_import_new_flow_creates_cash_flow_and_actual(auth_session, test_en
 
     apply_resp = auth_session.post(
         f"{BASE_URL}/api/actual-imports/{batch_id}/apply",
-        json={"actual_merge_mode": "override"},
+        json={},
         timeout=30,
     )
     assert apply_resp.status_code == 200, apply_resp.text

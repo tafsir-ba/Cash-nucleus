@@ -265,6 +265,8 @@ class ActualImportRow(BaseModel):
     error: Optional[str] = None
     # existing_flow: map to selected_flow_id. new_flow: apply creates a new cash flow line from this row, then records the actual.
     classification: str = "existing_flow"
+    # Per row: override replaces actual for that flow/month; addition adds this row's amount onto current actual.
+    actual_merge_mode: Literal["override", "addition"] = "override"
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -299,11 +301,12 @@ class ActualImportRowUpdate(BaseModel):
     selected_flow_id: Optional[str] = None
     variance_action: Optional[str] = None
     classification: Optional[Literal["existing_flow", "new_flow"]] = None
+    actual_merge_mode: Optional[Literal["override", "addition"]] = None
 
 class ActualImportApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     idempotency_key: Optional[str] = None
-    # override: row amount becomes the new actual. addition: row amount is summed onto existing actual (missing actual treated as 0).
+    # Fallback when a row has no actual_merge_mode (legacy rows); prefer per-row on ActualImportRow.
     actual_merge_mode: Literal["override", "addition"] = "override"
 
 
@@ -456,7 +459,6 @@ def best_flow_match(
 def build_apply_fingerprint(
     rows: List[dict],
     idempotency_key: Optional[str] = None,
-    actual_merge_mode: str = "override",
 ) -> str:
     items = []
     for row in rows:
@@ -465,6 +467,7 @@ def build_apply_fingerprint(
         cls = row.get("classification") or "existing_flow"
         # new_flow: fingerprint must stay stable after apply stores selected_flow_id on the row.
         flow_fp = None if cls == "new_flow" else row.get("selected_flow_id")
+        row_merge = row.get("actual_merge_mode") or "override"
         items.append({
             "row_id": row.get("id"),
             "flow_id": flow_fp,
@@ -472,11 +475,11 @@ def build_apply_fingerprint(
             "amount": round(float(row.get("amount", 0)), 2),
             "variance_action": row.get("variance_action", "actual_only"),
             "classification": cls,
+            "actual_merge_mode": row_merge,
         })
     payload = {
         "rows": sorted(items, key=lambda x: x["row_id"]),
         "idempotency_key": idempotency_key or "",
-        "actual_merge_mode": actual_merge_mode,
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -1522,6 +1525,7 @@ async def parse_actual_import(
             match_score=match["score"],
             match_reason=match["reason"],
             classification="existing_flow",
+            actual_merge_mode="override",
         )
         created_rows.append(import_row.model_dump())
 
@@ -1605,6 +1609,8 @@ async def update_actual_import_row(batch_id: str, row_id: str, update: ActualImp
         raise HTTPException(status_code=400, detail="Invalid variance_action")
     if "classification" in patch and patch["classification"] not in {"existing_flow", "new_flow"}:
         raise HTTPException(status_code=400, detail="Invalid classification")
+    if "actual_merge_mode" in patch and patch["actual_merge_mode"] not in {"override", "addition"}:
+        raise HTTPException(status_code=400, detail="Invalid actual_merge_mode")
 
     if patch.get("classification") == "new_flow":
         patch["selected_flow_id"] = None
@@ -1650,7 +1656,7 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
         raise HTTPException(status_code=400, detail="Import batch was discarded")
 
     rows = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0}).sort("row_index", 1).to_list(100000)
-    fingerprint = build_apply_fingerprint(rows, payload.idempotency_key, payload.actual_merge_mode)
+    fingerprint = build_apply_fingerprint(rows, payload.idempotency_key)
 
     if batch.get("last_apply_fingerprint") == fingerprint and batch.get("status") in {"applied", "partial"}:
         return {
@@ -1678,9 +1684,8 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
     errors = []
     batch_side_effects = []
 
-    # Several bank lines may legitimately map to the same flow + month (e.g. two Swisscom debits).
-    # Rows are applied in file order: use "addition" merge mode to accumulate, or "override" if each
-    # row should replace the previous value for that flow/month.
+    # Several bank lines may map to the same flow + month; each row has its own actual_merge_mode
+    # (Replace vs Add to current). Rows are applied in file order.
 
     for row in to_apply:
         row_id = row["id"]
@@ -1764,7 +1769,8 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
             existing_variance_action = prev_occurrence.get("variance_action") if prev_occurrence else None
 
             base_existing = float(existing_amount) if existing_amount is not None else 0.0
-            if payload.actual_merge_mode == "addition":
+            row_merge = row.get("actual_merge_mode") or payload.actual_merge_mode
+            if row_merge == "addition":
                 final_amount = base_existing + amount_value
             else:
                 final_amount = amount_value

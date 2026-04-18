@@ -14,6 +14,11 @@ const fallbackVarianceActions = [
   { value: "write_off", label: "Write off delta" },
 ];
 
+const mergeModeOptions = [
+  { value: "override", label: "Replace" },
+  { value: "addition", label: "Add to current" },
+];
+
 const scoreLabel = (score) => {
   if (score >= 0.8) return "High";
   if (score >= 0.6) return "Medium";
@@ -35,8 +40,6 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
   const [batchHistory, setBatchHistory] = useState([]);
   const [persistingRows, setPersistingRows] = useState({});
   const [applyResult, setApplyResult] = useState(null);
-  /** "override" replaces the cell actual; "addition" sums the row amount onto the current actual. */
-  const [actualMergeMode, setActualMergeMode] = useState("override");
   const [rowFilter, setRowFilter] = useState("all");
   const [categories, setCategories] = useState(fallbackCategories);
   const [varianceActions, setVarianceActions] = useState(fallbackVarianceActions);
@@ -180,9 +183,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
 
     setApplying(true);
     try {
-      const res = await axios.post(`${API}/actual-imports/${batch.id}/apply`, {
-        actual_merge_mode: actualMergeMode,
-      });
+      const res = await axios.post(`${API}/actual-imports/${batch.id}/apply`, {});
       setBatch((prev) => ({ ...prev, status: res.data.status || prev?.status }));
       setApplyResult(res.data);
       if (res.data.status === "idempotent") {
@@ -338,6 +339,12 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
             )}
           </div>
 
+          <div className="px-4 py-2 border-b border-zinc-800 text-[11px] text-zinc-600">
+            <span className="text-zinc-500">Amount vs actual (per row):</span>{" "}
+            <span className="text-zinc-400">Replace</span> sets this line’s amount as the new actual for that flow/month.{" "}
+            <span className="text-zinc-400">Add to current</span> adds this line on top of what is already stored (and on top of earlier lines in this batch for the same flow/month).
+          </div>
+
           <div className="px-4 py-2 border-b border-zinc-800 flex items-center justify-between text-xs">
             <div className="text-zinc-500 flex items-center gap-2">
               <FolderOpen size={12} />
@@ -370,6 +377,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
                   <th className="text-left px-2 py-2 text-zinc-500">Actual target</th>
                   <th className="text-left px-2 py-2 text-zinc-500">Flow Match</th>
                   <th className="text-left px-2 py-2 text-zinc-500">Confidence</th>
+                  <th className="text-left px-2 py-2 text-zinc-500">Amount vs actual</th>
                   <th className="text-left px-2 py-2 text-zinc-500">Variance Mode</th>
                 </tr>
               </thead>
@@ -528,6 +536,26 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
                       </td>
                       <td className="px-2 py-2 align-top">
                         <Select
+                          value={row.actual_merge_mode || "override"}
+                          onValueChange={(v) => {
+                            updateRowLocal(row.id, { actual_merge_mode: v });
+                            persistRowPatch(row.id, { actual_merge_mode: v });
+                          }}
+                        >
+                          <SelectTrigger className="w-[140px] bg-zinc-950 border-zinc-800 h-[30px]" data-testid={`bulk-row-merge-${row.id}`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {mergeModeOptions.map((m) => (
+                              <SelectItem key={m.value} value={m.value}>
+                                {m.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </td>
+                      <td className="px-2 py-2 align-top">
+                        <Select
                           value={row.variance_action || "actual_only"}
                           onValueChange={(v) => {
                             updateRowLocal(row.id, { variance_action: v });
@@ -554,45 +582,6 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
             {visibleRows.length === 0 && (
               <div className="px-3 py-8 text-center text-xs text-zinc-600">No rows for current filter.</div>
             )}
-          </div>
-
-          <div className="px-4 py-3 border-t border-zinc-800 bg-zinc-950/40">
-            <p className="text-[11px] text-zinc-500 uppercase tracking-wide mb-2">Bulk apply mode</p>
-            <p className="text-[11px] text-zinc-600 mb-2 max-w-3xl">
-              Several statement lines can map to the same flow and month (e.g. two Swisscom payments). Use{" "}
-              <span className="text-zinc-400">Add to current</span> so each line adds to the running actual. With{" "}
-              <span className="text-zinc-400">Replace</span>, later rows overwrite earlier ones for the same flow/month.
-            </p>
-            <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 text-xs text-zinc-300">
-              <label className="flex items-start gap-2 cursor-pointer max-w-md">
-                <input
-                  type="radio"
-                  name="actual-merge-mode"
-                  className="mt-0.5"
-                  checked={actualMergeMode === "override"}
-                  onChange={() => setActualMergeMode("override")}
-                  data-testid="bulk-merge-override"
-                />
-                <span>
-                  <span className="text-zinc-200 font-medium">Replace</span>
-                  <span className="text-zinc-500"> — each row amount becomes the new actual for that flow and month (default).</span>
-                </span>
-              </label>
-              <label className="flex items-start gap-2 cursor-pointer max-w-md">
-                <input
-                  type="radio"
-                  name="actual-merge-mode"
-                  className="mt-0.5"
-                  checked={actualMergeMode === "addition"}
-                  onChange={() => setActualMergeMode("addition")}
-                  data-testid="bulk-merge-addition"
-                />
-                <span>
-                  <span className="text-zinc-200 font-medium">Add to current</span>
-                  <span className="text-zinc-500"> — row amount is added to whatever actual is already stored; empty actual counts as zero.</span>
-                </span>
-              </label>
-            </div>
           </div>
 
           <div className="p-4 border-t border-zinc-800 flex items-center justify-between">
