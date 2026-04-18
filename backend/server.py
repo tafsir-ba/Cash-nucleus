@@ -21,6 +21,8 @@ import json
 import hashlib
 from dateutil import parser as date_parser
 
+from xlsx_simple import read_first_sheet_as_dict_rows
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -362,6 +364,7 @@ def parse_import_amount(raw_value: Any) -> Optional[float]:
     if not text:
         return None
     text = text.replace("CHF", "").replace(" ", "")
+    text = text.replace("'", "").replace("\u2019", "")
 
     if "," in text and "." in text:
         # Keep decimal separator nearest to end.
@@ -462,31 +465,120 @@ def build_apply_fingerprint(rows: List[dict], idempotency_key: Optional[str] = N
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 def detect_import_columns(columns: List[str]) -> Dict[str, str]:
-    cols = {str(c).strip().lower(): c for c in columns}
+    cols: Dict[str, str] = {}
+    for c in columns:
+        if c is None:
+            continue
+        raw = str(c).strip()
+        if not raw:
+            continue
+        key = raw.lower().replace("\ufeff", "").replace("\xa0", " ")
+        cols[key] = raw
 
-    date_candidates = ["date", "transaction date", "booking date", "value date"]
-    desc_candidates = ["description", "label", "details", "memo", "narrative", "name"]
-    amount_candidates = ["amount", "value", "chf"]
+    date_exact = [
+        "date", "transaction date", "booking date", "value date", "buchungsdatum", "buchungstag",
+        "valuta", "valutadatum", "transaktionsdatum", "posting date", "trade date", "datum",
+    ]
+    desc_exact = [
+        "description", "label", "details", "memo", "narrative", "name", "text", "beschreibung",
+        "buchungstext", "verwendungszweck", "zweck", "payee", "empfänger", "empfaenger",
+        "begünstigter", "beguenstigter", "merchant", "note", "bemerkung",
+    ]
+    amount_exact = [
+        "amount", "value", "chf", "betrag", "amount chf", "transaction amount", "booked amount",
+    ]
+    debit_exact = ["debit", "soll", "belastung", "lastschrift", "abgang", "withdrawal"]
+    credit_exact = ["credit", "haben", "gutschrift", "guthaben", "eingang", "deposit"]
+
+    def pick_exact(keys: List[str]) -> Optional[str]:
+        for k in keys:
+            if k in cols:
+                return cols[k]
+        return None
+
+    def pick_contains(subs: tuple, exclude: tuple = ()) -> Optional[str]:
+        for col_lower, orig in cols.items():
+            if any(ex in col_lower for ex in exclude):
+                continue
+            for sub in subs:
+                if sub in col_lower:
+                    return orig
+        return None
 
     detected: Dict[str, str] = {}
-    for c in date_candidates:
-        if c in cols:
-            detected["date"] = cols[c]
-            break
-    for c in desc_candidates:
-        if c in cols:
-            detected["description"] = cols[c]
-            break
-    for c in amount_candidates:
-        if c in cols:
-            detected["amount"] = cols[c]
-            break
+    detected["date"] = pick_exact(date_exact) or pick_contains(
+        ("buchung", "valuta", "datum", "date", "booking", "posting"), ("betrag", "amount", "belastung", "gutschrift")
+    )
+    detected["description"] = pick_exact(desc_exact) or pick_contains(
+        ("beschreibung", "text", "zweck", "verwendung", "detail", "memo", "narrative", "payee", "merchant"), ()
+    )
+    detected["amount"] = pick_exact(amount_exact) or pick_contains(
+        ("betrag", "amount", "chf", "saldo"), ("datum", "date", "buchung")
+    )
 
-    if "amount" not in detected and "debit" in cols and "credit" in cols:
-        detected["debit"] = cols["debit"]
-        detected["credit"] = cols["credit"]
+    if "amount" not in detected or detected["amount"] is None:
+        debit_col = pick_exact(debit_exact) or pick_contains(("belastung", "debit", "soll", "abgang", "lastschrift"), ())
+        credit_col = pick_exact(credit_exact) or pick_contains(("gutschrift", "guthaben", "credit", "haben", "eingang"), ())
+        if debit_col and credit_col:
+            detected["debit"] = debit_col
+            detected["credit"] = credit_col
+            detected.pop("amount", None)
 
+    detected = {k: v for k, v in detected.items() if v}
     return detected
+
+
+def decode_csv_bytes(content: bytes) -> str:
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "iso-8859-1", "mac_roman"):
+        try:
+            return content.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return content.decode("utf-8", errors="replace")
+
+
+def sniff_csv_delimiter(sample: str) -> str:
+    first = ""
+    for line in sample.splitlines():
+        if line.strip():
+            first = line
+            break
+    if not first:
+        return ","
+    if first.count("\t") > first.count(",") and first.count("\t") > first.count(";"):
+        return "\t"
+    if first.count(";") > first.count(","):
+        return ";"
+    return ","
+
+
+def parse_csv_to_rows(content: bytes) -> tuple[List[str], List[Dict[str, Any]]]:
+    text = decode_csv_bytes(content)
+    delim = sniff_csv_delimiter(text[:8192])
+    reader = csv.DictReader(io.StringIO(text), delimiter=delim)
+    fieldnames = list(reader.fieldnames or [])
+    rows = list(reader)
+    return fieldnames, rows
+
+
+def parse_import_row_date(raw: Any) -> Optional[date]:
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        serial = float(raw)
+        if 200 < serial < 100000:
+            try:
+                return date(1899, 12, 30) + timedelta(days=int(serial))
+            except (OverflowError, ValueError):
+                pass
+    try:
+        return date_parser.parse(str(raw)).date()
+    except Exception:
+        return None
 
 def is_valid_month_key(month: str) -> bool:
     if not isinstance(month, str) or not re.match(r"^\d{4}-\d{2}$", month):
@@ -1243,31 +1335,38 @@ async def parse_actual_import(
 
     try:
         if ext == ".csv":
-            decoded = content.decode("utf-8-sig", errors="replace")
-            reader = csv.DictReader(io.StringIO(decoded))
-            parsed_rows = list(reader)
-            parsed_columns = reader.fieldnames or []
+            parsed_columns, parsed_rows = parse_csv_to_rows(content)
         else:
+            parsed_columns: List[str] = []
+            parsed_rows: List[Dict[str, Any]] = []
+            used_openpyxl = False
             try:
                 from openpyxl import load_workbook
+
+                workbook = load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+                sheet = workbook.active
+                rows_iter = sheet.iter_rows(values_only=True)
+                header_row = next(rows_iter, None)
+                if not header_row:
+                    raise ValueError("No header row found in XLSX")
+                parsed_columns = [str(h).strip() if h is not None else "" for h in header_row]
+                for values in rows_iter:
+                    row_dict: Dict[str, Any] = {}
+                    for i, col in enumerate(parsed_columns):
+                        key = col or f"column_{i+1}"
+                        row_dict[key] = values[i] if i < len(values) else None
+                    parsed_rows.append(row_dict)
+                used_openpyxl = True
             except Exception:
-                raise HTTPException(status_code=400, detail="XLSX parsing requires openpyxl in backend environment")
-
-            workbook = load_workbook(io.BytesIO(content), data_only=True, read_only=True)
-            sheet = workbook.active
-            rows_iter = sheet.iter_rows(values_only=True)
-            header_row = next(rows_iter, None)
-            if not header_row:
-                raise HTTPException(status_code=400, detail="No header row found in XLSX")
-
-            parsed_columns = [str(h).strip() if h is not None else "" for h in header_row]
-            parsed_rows = []
-            for values in rows_iter:
-                row_dict = {}
-                for i, col in enumerate(parsed_columns):
-                    key = col or f"column_{i+1}"
-                    row_dict[key] = values[i] if i < len(values) else None
-                parsed_rows.append(row_dict)
+                used_openpyxl = False
+            if not used_openpyxl:
+                try:
+                    parsed_columns, parsed_rows = read_first_sheet_as_dict_rows(content)
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Could not read XLSX ({exc}). Redeploy with openpyxl if this persists: pip install openpyxl==3.1.5",
+                    ) from exc
     except HTTPException:
         raise
     except Exception as exc:
@@ -1279,10 +1378,20 @@ async def parse_actual_import(
         raise HTTPException(status_code=400, detail="File too large for v1 import (max 10,000 rows)")
 
     detected = detect_import_columns(parsed_columns)
-    if "date" not in detected or "description" not in detected:
-        raise HTTPException(status_code=400, detail="Could not detect required date/description columns")
-    if "amount" not in detected and not ("debit" in detected and "credit" in detected):
-        raise HTTPException(status_code=400, detail="Could not detect amount column")
+    if "date" not in detected or not detected.get("date") or "description" not in detected or not detected.get("description"):
+        preview = ", ".join(str(c) for c in parsed_columns[:12]) if parsed_columns else "(no columns)"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not detect required date/description columns. Found headers: {preview}",
+        )
+    if ("amount" not in detected or not detected.get("amount")) and not (
+        detected.get("debit") and detected.get("credit")
+    ):
+        preview = ", ".join(str(c) for c in parsed_columns[:12]) if parsed_columns else "(no columns)"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not detect amount column (or debit+credit pair). Found headers: {preview}",
+        )
 
     if entity_id:
         entity_exists = await db.entities.find_one({"id": entity_id}, {"_id": 0, "id": 1})
@@ -1302,14 +1411,11 @@ async def parse_actual_import(
     created_rows = []
     for idx, row in enumerate(parsed_rows):
         raw_date = row.get(detected["date"])
-        if raw_date in (None, ""):
+        parsed_d = parse_import_row_date(raw_date)
+        if not parsed_d:
             continue
-        try:
-            parsed_date = date_parser.parse(str(raw_date))
-        except Exception:
-            continue
-        transaction_date = parsed_date.strftime("%Y-%m-%d")
-        month = parsed_date.strftime("%Y-%m")
+        transaction_date = parsed_d.strftime("%Y-%m-%d")
+        month = parsed_d.strftime("%Y-%m")
 
         description = str(row.get(detected["description"], "") or "").strip()
         if not description:

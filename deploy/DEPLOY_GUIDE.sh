@@ -52,6 +52,9 @@ source venv/bin/activate
 # Install only what's needed (use the production requirements)
 pip install -r requirements.prod.txt
 
+# If bulk XLSX import fails, ensure openpyxl is present (listed in requirements.prod.txt):
+#   source venv/bin/activate && pip install 'openpyxl==3.1.5' && supervisorctl restart cashpilot-backend
+
 # Create production .env
 cat > .env << 'EOF'
 MONGO_URL="mongodb+srv://USERNAME:PASSWORD@cluster.mongodb.net"
