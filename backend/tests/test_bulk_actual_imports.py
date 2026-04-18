@@ -239,6 +239,98 @@ def test_bulk_import_apply_addition_merges_with_existing_actual(auth_session, te
     assert round(float(occ_final.json()[0]["actual_amount"]), 2) == -700.0
 
 
+def test_bulk_import_within_batch_replace_then_addition_running_sum(auth_session, test_entity):
+    """Within a single batch, a Replace row followed by an Add-to-current row on the
+    same flow+month must produce a running sum: second row adds on top of the first.
+
+    Mirrors the real-world case of two Swisscom expense lines on the same statement:
+    row 1 (-110.25, Replace) writes -110.25, then row 2 (-101.85, Add to current)
+    must read the just-written -110.25 and land on -212.10.
+    """
+    flow_resp = auth_session.post(
+        f"{BASE_URL}/api/cash-flows",
+        json={
+            "label": "TEST Bulk Swisscom Running Sum",
+            "amount": -200,
+            "date": "2026-04-01",
+            "category": "Expense",
+            "certainty": "Materialized",
+            "recurrence": "none",
+            "entity_id": test_entity["id"],
+        },
+        timeout=20,
+    )
+    assert flow_resp.status_code == 200
+    flow = flow_resp.json()
+
+    csv_bytes = (
+        b"date,description,amount\n"
+        b"2026-04-05,Ordre de paiement Swisscom,-110.25\n"
+        b"2026-04-18,Ordre de paiement Swisscom,-101.85\n"
+    )
+    files = {"file": ("swisscom.csv", io.BytesIO(csv_bytes), "text/csv")}
+    parse_resp = auth_session.post(
+        f"{BASE_URL}/api/actual-imports/parse",
+        data={"entity_id": test_entity["id"]},
+        files=files,
+        timeout=20,
+    )
+    assert parse_resp.status_code == 200, parse_resp.text
+    batch_id = parse_resp.json()["batch"]["id"]
+    rows = parse_resp.json()["rows"]
+    assert len(rows) == 2
+
+    # Parser may not preserve CSV order in its response; sort by row_index so the
+    # first row really is the -110.25 Replace line.
+    rows_sorted = sorted(rows, key=lambda r: r.get("row_index", 0))
+    row_first, row_second = rows_sorted[0], rows_sorted[1]
+
+    # Row 1: Replace with -110.25
+    upd1 = auth_session.put(
+        f"{BASE_URL}/api/actual-imports/{batch_id}/rows/{row_first['id']}",
+        json={
+            "selected_flow_id": flow["id"],
+            "include": True,
+            "month": "2026-04",
+            "actual_merge_mode": "override",
+        },
+        timeout=20,
+    )
+    assert upd1.status_code == 200, upd1.text
+
+    # Row 2: Add to current with -101.85
+    upd2 = auth_session.put(
+        f"{BASE_URL}/api/actual-imports/{batch_id}/rows/{row_second['id']}",
+        json={
+            "selected_flow_id": flow["id"],
+            "include": True,
+            "month": "2026-04",
+            "actual_merge_mode": "addition",
+        },
+        timeout=20,
+    )
+    assert upd2.status_code == 200, upd2.text
+
+    apply_resp = auth_session.post(
+        f"{BASE_URL}/api/actual-imports/{batch_id}/apply",
+        json={},
+        timeout=30,
+    )
+    assert apply_resp.status_code == 200, apply_resp.text
+    apply_data = apply_resp.json()
+    assert apply_data.get("applied_rows", 0) == 2, apply_data
+
+    occ_resp = auth_session.get(
+        f"{BASE_URL}/api/flow-occurrences",
+        params={"flow_id": flow["id"], "month": "2026-04"},
+        timeout=20,
+    )
+    assert occ_resp.status_code == 200
+    occs = occ_resp.json()
+    assert len(occs) == 1
+    assert round(float(occs[0]["actual_amount"]), 2) == -212.10
+
+
 def test_bulk_import_new_flow_creates_cash_flow_and_actual(auth_session, test_entity):
     desc = f"UNIQUE_NEW_FLOW_{uuid.uuid4().hex[:10]}"
     csv_bytes = f"date,description,amount\n2026-07-15,{desc},-333.50\n".encode("utf-8")
