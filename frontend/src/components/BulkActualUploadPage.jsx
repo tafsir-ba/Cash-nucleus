@@ -19,6 +19,19 @@ const mergeModeOptions = [
   { value: "addition", label: "Add to current" },
 ];
 
+const sortColumnLabels = {
+  entity: "Entity",
+  month: "Month",
+  description: "Description",
+  amount: "Amount",
+  category: "Category",
+  classification: "Actual target",
+  flow: "Flow match",
+  confidence: "Confidence",
+  merge: "Amount vs actual",
+  variance: "Variance mode",
+};
+
 const scoreLabel = (score) => {
   if (score >= 0.8) return "High";
   if (score >= 0.6) return "Medium";
@@ -28,12 +41,17 @@ const scoreLabel = (score) => {
 const SortHeader = ({ label, sortKey, activeKey, dir, onToggle, align = "left", testId }) => {
   const active = activeKey === sortKey;
   const Indicator = !active ? ArrowsDownUp : dir === "asc" ? CaretUp : CaretDown;
+  const ariaSort = active ? (dir === "asc" ? "ascending" : "descending") : "none";
   return (
-    <th className={`px-2 py-2 text-zinc-500 ${align === "right" ? "text-right" : "text-left"}`}>
+    <th
+      aria-sort={ariaSort}
+      className={`px-2 py-2 text-zinc-500 ${align === "right" ? "text-right" : "text-left"}`}
+    >
       <button
         type="button"
         onClick={() => onToggle(sortKey)}
         data-testid={testId}
+        aria-label={`Sort by ${label}${active ? `, currently ${dir === "asc" ? "ascending" : "descending"}` : ""}`}
         className={`inline-flex items-center gap-1 font-medium tracking-wide hover:text-zinc-200 ${
           active ? "text-zinc-200" : "text-zinc-500"
         } ${align === "right" ? "flex-row-reverse w-full justify-start" : ""}`}
@@ -441,7 +459,8 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
           <div className="px-4 py-2 border-b border-zinc-800 text-[11px] text-zinc-600">
             <span className="text-zinc-500">Amount vs actual (per row):</span>{" "}
             <span className="text-zinc-400">Replace</span> sets this line’s amount as the new actual for that flow/month.{" "}
-            <span className="text-zinc-400">Add to current</span> adds this line on top of what is already stored (and on top of earlier lines in this batch for the same flow/month).
+            <span className="text-zinc-400">Add to current</span> adds this line on top of what is already stored (and on top of earlier lines in this batch for the same flow/month).{" "}
+            <span className="text-zinc-500">Sorting columns reorders this review table only — rows always apply in their original file order (the <span className="text-zinc-400">#</span> column).</span>
           </div>
 
           <div className="px-4 py-2 border-b border-zinc-800 flex items-center justify-between text-xs">
@@ -450,7 +469,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
               Review filter
               {sortKey && (
                 <span className="ml-3 inline-flex items-center gap-1 rounded bg-zinc-800/70 px-2 py-[2px] text-[10px] text-zinc-300">
-                  Sort: {sortKey} ({sortDir})
+                  Sort: {sortColumnLabels[sortKey] || sortKey} ({sortDir === "asc" ? "ascending" : "descending"})
                   <button
                     type="button"
                     onClick={() => { setSortKey(null); setSortDir("asc"); }}
@@ -481,6 +500,12 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
             <table className="w-full text-xs">
               <thead className="bg-zinc-900 sticky top-0 z-10">
                 <tr className="border-b border-zinc-800">
+                  <th
+                    className="text-left px-2 py-2 text-zinc-500"
+                    title="Apply order — rows always apply in original file order regardless of sort"
+                  >
+                    #
+                  </th>
                   <th className="text-left px-2 py-2 text-zinc-500">Use</th>
                   <SortHeader label="Entity"           sortKey="entity"        activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-entity" />
                   <SortHeader label="Month"            sortKey="month"         activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-month" />
@@ -509,6 +534,13 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
                   const isNewLine = classification === "new_flow";
                   return (
                     <tr key={row.id} className="border-b border-zinc-800/50">
+                      <td
+                        className="px-2 py-2 align-top text-[11px] text-zinc-500 font-mono tabular-nums"
+                        title="Apply order (file order). Independent of the visual sort above."
+                        data-testid={`bulk-row-applyorder-${row.id}`}
+                      >
+                        {(row.row_index ?? 0) + 1}
+                      </td>
                       <td className="px-2 py-2 align-top">
                         <input
                           type="checkbox"

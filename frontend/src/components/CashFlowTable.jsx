@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import { toast } from "sonner";
-import { Check, X, ArrowRight } from "@phosphor-icons/react";
+import { Check, X, ArrowRight, ClockCounterClockwise, Robot, User, ArrowCounterClockwise } from "@phosphor-icons/react";
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from "../components/ui/dialog";
@@ -24,15 +24,137 @@ const formatCHF = (amount) => {
   }).format(Math.abs(amount));
 };
 
+const formatEventTimestamp = (iso) => {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString("en-GB", {
+      day: "2-digit", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+};
+
+const signedCHF = (val) => {
+  if (val === null || val === undefined || Number.isNaN(Number(val))) return "—";
+  const n = Number(val);
+  return `${n < 0 ? "-" : ""}CHF ${formatCHF(n)}`;
+};
+
+const CellHistoryPanel = ({ flowId, month, refreshToken }) => {
+  const [events, setEvents] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!flowId || !month) return;
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    axios
+      .get(`${API}/flow-occurrences/${flowId}/history`, { params: { month, limit: 50 } })
+      .then((res) => { if (!cancelled) setEvents(Array.isArray(res.data) ? res.data : []); })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err.response?.data?.detail || "Failed to load history");
+          setEvents([]);
+        }
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [flowId, month, refreshToken]);
+
+  return (
+    <div className="mt-2 rounded-md border border-zinc-800 bg-zinc-950/40" data-testid="cell-history-panel">
+      <div className="px-3 py-2 text-[10px] uppercase tracking-wider text-zinc-500 border-b border-zinc-800 flex items-center gap-1.5">
+        <ClockCounterClockwise size={11} />
+        Change history
+        <span className="ml-auto text-zinc-600">
+          {events ? `${events.length} event${events.length === 1 ? "" : "s"}` : ""}
+        </span>
+      </div>
+      <div className="max-h-48 overflow-y-auto divide-y divide-zinc-800/60">
+        {loading && (
+          <div className="px-3 py-3 text-[11px] text-zinc-500">Loading history…</div>
+        )}
+        {!loading && error && (
+          <div className="px-3 py-3 text-[11px] text-rose-400">{error}</div>
+        )}
+        {!loading && !error && events && events.length === 0 && (
+          <div className="px-3 py-3 text-[11px] text-zinc-600">
+            No recorded changes yet. New manual edits and bulk-upload rows will appear here.
+          </div>
+        )}
+        {!loading && events && events.map((e) => {
+          const isBulk = e.source === "bulk_import";
+          const isUndo = e.source === "undo";
+          const Icon = isUndo ? ArrowCounterClockwise : isBulk ? Robot : User;
+          const sourceColor = isUndo ? "text-amber-400" : isBulk ? "text-cyan-400" : "text-zinc-400";
+          const sourceTextColor = isUndo ? "text-amber-300" : isBulk ? "text-cyan-300" : "text-zinc-200";
+          const sourceLabel = isUndo
+            ? (e.action === "clear" ? "Reverted (cleared)" : "Reverted")
+            : isBulk
+              ? "Bulk import"
+              : e.action === "clear" ? "Cleared" : "Manual edit";
+          const actor = e.actor_email || (isBulk ? "bulk import" : isUndo ? "undo" : "manual edit");
+          const prev = e.previous_actual_amount;
+          const next = e.new_actual_amount;
+          return (
+            <div key={e.id} className="px-3 py-2 text-[11px] space-y-0.5" data-testid="cell-history-event">
+              <div className="flex items-center gap-1.5 text-zinc-400">
+                <Icon size={11} className={sourceColor} />
+                <span className={sourceTextColor}>{sourceLabel}</span>
+                {e.merge_mode && (
+                  <span className="text-[9px] uppercase tracking-wider rounded bg-zinc-800 px-1 py-[1px] text-zinc-400">
+                    {e.merge_mode === "addition" ? "add" : "replace"}
+                  </span>
+                )}
+                <span className="ml-auto text-zinc-600 font-mono">{formatEventTimestamp(e.timestamp)}</span>
+              </div>
+              <div className="pl-[15px] text-zinc-500 flex flex-wrap gap-x-3 gap-y-0.5">
+                <span>
+                  <span className="text-zinc-600">prev</span>{" "}
+                  <span className="font-mono text-zinc-400">{signedCHF(prev)}</span>
+                </span>
+                <span className="text-zinc-700">→</span>
+                <span>
+                  <span className="text-zinc-600">new</span>{" "}
+                  <span className="font-mono text-zinc-200">{signedCHF(next)}</span>
+                </span>
+                {typeof e.input_amount === "number" && (
+                  <span>
+                    <span className="text-zinc-600">input</span>{" "}
+                    <span className="font-mono text-zinc-400">{signedCHF(e.input_amount)}</span>
+                  </span>
+                )}
+              </div>
+              <div className="pl-[15px] text-zinc-600 flex flex-wrap gap-x-2">
+                <span>{actor}</span>
+                {e.batch_filename && (
+                  <span className="text-zinc-500">· file: <span className="text-zinc-400 font-mono">{e.batch_filename}</span></span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 // Actual input dialog
 const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
   const [actualVal, setActualVal] = useState("");
   const [saving, setSaving] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyRefresh, setHistoryRefresh] = useState(0);
 
   useEffect(() => {
     if (cellInfo && open) {
       const val = cellInfo.cell?.has_actual ? cellInfo.cell.actual : cellInfo.cell?.amount;
       setActualVal(val !== undefined ? Math.abs(val).toString() : "");
+      setShowHistory(false);
     }
   }, [cellInfo, open]);
 
@@ -228,6 +350,22 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
             <p className="text-[10px] text-zinc-600 text-center mt-0.5">
               All actions are undoable via the undo button in the header
             </p>
+            <button
+              type="button"
+              onClick={() => { setShowHistory((v) => !v); setHistoryRefresh((n) => n + 1); }}
+              className="mt-1 inline-flex items-center justify-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-300"
+              data-testid="actual-history-toggle"
+            >
+              <ClockCounterClockwise size={11} />
+              {showHistory ? "Hide change history" : "View change history for this cell"}
+            </button>
+            {showHistory && (
+              <CellHistoryPanel
+                flowId={cellInfo.flowId}
+                month={cellInfo.month}
+                refreshToken={historyRefresh}
+              />
+            )}
           </div>
         </div>
       </DialogContent>

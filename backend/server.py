@@ -73,6 +73,19 @@ async def get_current_user(request: Request) -> dict:
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+async def get_optional_user(request: Request) -> dict:
+    """Same as get_current_user but returns {} for unauthenticated callers.
+
+    Used on endpoints that historically don't require auth (PUT/DELETE
+    /flow-occurrences, batched cash-flow writes) so we can still attribute an
+    actor to audit events when the caller happens to be authenticated, without
+    breaking existing clients/tests that hit these endpoints anonymously.
+    """
+    try:
+        return await get_current_user(request)
+    except HTTPException:
+        return {}
+
 class LoginRequest(BaseModel):
     email: str
     password: str
@@ -240,6 +253,36 @@ class FlowOccurrenceUpdate(BaseModel):
     month: str
     actual_amount: Optional[float] = None
     variance_action: Optional[str] = None  # "carry_forward" | "write_off"
+
+class FlowOccurrenceEvent(BaseModel):
+    """Append-only audit event for a (flow_id, month) actual change.
+
+    Distinct from the capped undo stack: this is the authoritative history a user
+    can consult to trace what touched a given cash-flow cell (manual edits + every
+    bulk-import row that wrote to it), including before/after amounts so the user
+    can verify a bulk upload actually reflects what was imported.
+    """
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    flow_id: str
+    month: str  # YYYY-MM
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    action: Literal["set", "clear"] = "set"
+    source: Literal["manual", "bulk_import", "undo"] = "manual"
+    # Bulk import context (None for manual events)
+    batch_id: Optional[str] = None
+    batch_filename: Optional[str] = None
+    batch_row_id: Optional[str] = None
+    # What the caller submitted (row amount for bulk, input value for manual)
+    input_amount: Optional[float] = None
+    merge_mode: Optional[Literal["override", "addition"]] = None
+    variance_action: Optional[str] = None
+    # Before / after snapshots of the stored actual_amount
+    previous_actual_amount: Optional[float] = None
+    new_actual_amount: Optional[float] = None
+    # Actor who triggered the write
+    actor_id: Optional[str] = None
+    actor_email: Optional[str] = None
 
 class ActualImportRow(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -710,10 +753,19 @@ async def push_undo(action_type: str, collection: str, target_ids: List[str],
         if oldest:
             await db.undo_stack.delete_many({"id": {"$in": [o["id"] for o in oldest]}})
 
-async def restore_record_actual_side_effects(side_effects: dict):
+async def restore_record_actual_side_effects(side_effects: dict, actor: Optional[dict] = None):
     prev_occurrence = side_effects.get("previous_occurrence")
     flow_id = side_effects.get("flow_id", "")
     month = side_effects.get("month", "")
+
+    # Snapshot the post-apply value so the audit event can show prev -> new for
+    # the undo itself, not just the rollback target.
+    current_before_undo = None
+    if flow_id and month:
+        current_before_undo = await db.flow_occurrences.find_one(
+            {"flow_id": flow_id, "month": month}, {"_id": 0}
+        )
+    current_actual_before = (current_before_undo or {}).get("actual_amount")
 
     if prev_occurrence:
         prev_occurrence.pop("_id", None)
@@ -722,8 +774,14 @@ async def restore_record_actual_side_effects(side_effects: dict):
             prev_occurrence,
             upsert=True,
         )
+        restored_actual = prev_occurrence.get("actual_amount")
+        restored_variance = prev_occurrence.get("variance_action")
+        event_action: Literal["set", "clear"] = "set"
     else:
         await db.flow_occurrences.delete_one({"flow_id": flow_id, "month": month})
+        restored_actual = None
+        restored_variance = None
+        event_action = "clear"
 
     created_carryovers = side_effects.get("created_carryover_ids", [])
     for cid in created_carryovers:
@@ -739,8 +797,25 @@ async def restore_record_actual_side_effects(side_effects: dict):
         await db.cash_flows.delete_many({"parent_id": created_flow_id})
         await db.cash_flows.delete_one({"id": created_flow_id})
 
+    # Emit an append-only audit event so the cell history truthfully reflects
+    # that the prior apply was reverted.
+    if flow_id and month:
+        await record_flow_occurrence_event(
+            flow_id=flow_id,
+            month=month,
+            action=event_action,
+            source="undo",
+            input_amount=None,
+            merge_mode=None,
+            variance_action=restored_variance,
+            previous_actual_amount=current_actual_before,
+            new_actual_amount=restored_actual,
+            actor_id=(actor or {}).get("id"),
+            actor_email=(actor or {}).get("email"),
+        )
+
 @api_router.post("/undo")
-async def undo_last_action():
+async def undo_last_action(user: dict = Depends(get_optional_user)):
     """Undo the most recent action. Restores full system state including dependencies."""
     last = await db.undo_stack.find_one({}, {"_id": 0}, sort=[("timestamp", -1)])
     if not last:
@@ -787,12 +862,12 @@ async def undo_last_action():
                         await coll.replace_one({"id": child_id}, child_clean, upsert=True)
     
     elif action_type == "record_actual":
-        await restore_record_actual_side_effects(side_effects)
+        await restore_record_actual_side_effects(side_effects, actor=user)
 
     elif action_type == "record_actual_batch":
         # Undo in reverse apply order to restore nested carryover dependencies correctly.
         for row_side_effects in reversed(side_effects.get("rows", [])):
-            await restore_record_actual_side_effects(row_side_effects)
+            await restore_record_actual_side_effects(row_side_effects, actor=user)
     
     # Remove the action from stack
     await db.undo_stack.delete_one({"id": last["id"]})
@@ -1203,13 +1278,34 @@ async def get_flow_occurrences(month: Optional[str] = None, flow_id: Optional[st
     occurrences = await db.flow_occurrences.find(query, {"_id": 0}).to_list(1000)
     return occurrences
 
-async def upsert_flow_occurrence(update: FlowOccurrenceUpdate, suppress_undo: bool = False):
+async def record_flow_occurrence_event(**fields) -> None:
+    """Insert one row into the flow_occurrence_events audit log.
+
+    Silently swallows failures so audit logging can never break a user-facing
+    write. A dropped event is less harmful than a failed apply mid-batch.
+    """
+    try:
+        event = FlowOccurrenceEvent(**fields)
+        await db.flow_occurrence_events.insert_one(event.model_dump())
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("flow_occurrence_events insert failed: %s", exc)
+
+
+async def upsert_flow_occurrence(
+    update: FlowOccurrenceUpdate,
+    suppress_undo: bool = False,
+    event_meta: Optional[dict] = None,
+):
     """Record an actual amount for a flow occurrence.
     
     Variance = planned - actual.
     If variance_action = 'carry_forward': creates a one-time flow for the difference in next month.
     If variance_action = 'write_off': difference is ignored.
     Pushes full undo state including occurrence + carryover flows.
+
+    When ``event_meta`` is provided, also emits a persistent audit event after the
+    write. Callers fill in source-specific fields (source, actor, batch info,
+    input_amount, merge_mode); this function supplies the before/after snapshots.
     """
     # Snapshot previous state for undo
     prev_occurrence = await db.flow_occurrences.find_one(
@@ -1297,7 +1393,26 @@ async def upsert_flow_occurrence(update: FlowOccurrenceUpdate, suppress_undo: bo
                 "created_carryover_ids": created_carryover_ids,
             }
         )
-    
+
+    if event_meta is not None:
+        prev_amount = prev_occurrence.get("actual_amount") if prev_occurrence else None
+        await record_flow_occurrence_event(
+            flow_id=update.flow_id,
+            month=update.month,
+            action=event_meta.get("action", "set"),
+            source=event_meta.get("source", "manual"),
+            batch_id=event_meta.get("batch_id"),
+            batch_filename=event_meta.get("batch_filename"),
+            batch_row_id=event_meta.get("batch_row_id"),
+            input_amount=event_meta.get("input_amount", update.actual_amount),
+            merge_mode=event_meta.get("merge_mode"),
+            variance_action=update.variance_action,
+            previous_actual_amount=prev_amount,
+            new_actual_amount=update.actual_amount,
+            actor_id=event_meta.get("actor_id"),
+            actor_email=event_meta.get("actor_email"),
+        )
+
     # Build response with useful info
     response = {"status": "ok"}
     if created_carryover_ids and update.actual_amount is not None:
@@ -1320,11 +1435,22 @@ async def upsert_flow_occurrence(update: FlowOccurrenceUpdate, suppress_undo: bo
     return response
 
 @api_router.put("/flow-occurrences")
-async def set_flow_occurrence(update: FlowOccurrenceUpdate):
-    return await upsert_flow_occurrence(update, suppress_undo=False)
+async def set_flow_occurrence(update: FlowOccurrenceUpdate, user: dict = Depends(get_optional_user)):
+    return await upsert_flow_occurrence(
+        update,
+        suppress_undo=False,
+        event_meta={
+            "action": "set",
+            "source": "manual",
+            "input_amount": update.actual_amount,
+            "merge_mode": "override",
+            "actor_id": user.get("id"),
+            "actor_email": user.get("email"),
+        },
+    )
 
 @api_router.delete("/flow-occurrences")
-async def clear_flow_occurrence(flow_id: str, month: str):
+async def clear_flow_occurrence(flow_id: str, month: str, user: dict = Depends(get_optional_user)):
     """Clear actual recording for a flow occurrence (revert to planned). Pushes undo."""
     # Snapshot for undo
     prev_occurrence = await db.flow_occurrences.find_one(
@@ -1355,8 +1481,49 @@ async def clear_flow_occurrence(flow_id: str, month: str):
                 "created_carryover_ids": [],
             }
         )
-    
+
+    await record_flow_occurrence_event(
+        flow_id=flow_id,
+        month=month,
+        action="clear",
+        source="manual",
+        previous_actual_amount=(prev_occurrence or {}).get("actual_amount"),
+        new_actual_amount=None,
+        actor_id=user.get("id"),
+        actor_email=user.get("email"),
+    )
+
     return {"status": "ok"}
+
+@api_router.get("/flow-occurrences/{flow_id}/history")
+async def get_flow_occurrence_history(
+    flow_id: str,
+    month: Optional[str] = None,
+    limit: int = 100,
+    user: dict = Depends(get_optional_user),
+):
+    """Return the audit trail of writes to a flow occurrence.
+
+    Use the optional ``month`` filter to scope to a single cash-flow-table cell.
+    Returned entries are ordered newest first and include source (manual vs
+    bulk_import), batch filename/row id when applicable, before/after amounts,
+    merge mode, and the actor.
+    """
+    if limit <= 0 or limit > 500:
+        limit = 100
+    query: Dict[str, Any] = {"flow_id": flow_id}
+    if month:
+        if not is_valid_month_key(month):
+            raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+        query["month"] = month
+    events = (
+        await db.flow_occurrence_events
+        .find(query, {"_id": 0})
+        .sort("timestamp", -1)
+        .limit(limit)
+        .to_list(limit)
+    )
+    return events
 
 async def recalculate_import_batch_counts(batch_id: str):
     rows = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0, "status": 1, "include": 1}).to_list(100000)
@@ -1802,7 +1969,21 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
                 actual_amount=float(final_amount),
                 variance_action=desired_variance_action,
             )
-            occ_result = await upsert_flow_occurrence(occ_update, suppress_undo=True)
+            occ_result = await upsert_flow_occurrence(
+                occ_update,
+                suppress_undo=True,
+                event_meta={
+                    "action": "set",
+                    "source": "bulk_import",
+                    "batch_id": batch_id,
+                    "batch_filename": batch.get("filename"),
+                    "batch_row_id": row_id,
+                    "input_amount": amount_value,
+                    "merge_mode": row_merge,
+                    "actor_id": user.get("id"),
+                    "actor_email": user.get("email"),
+                },
+            )
             applied += 1
             row_effects: Dict[str, Any] = {
                 "flow_id": flow_id,
@@ -2676,6 +2857,8 @@ async def seed_admin():
     await db.actual_import_rows.create_index([("id", 1)], unique=True)
     await db.actual_import_rows.create_index([("batch_id", 1), ("row_index", 1)], unique=True)
     await db.actual_import_rows.create_index([("batch_id", 1), ("status", 1)])
+    await db.flow_occurrence_events.create_index([("id", 1)], unique=True)
+    await db.flow_occurrence_events.create_index([("flow_id", 1), ("month", 1), ("timestamp", -1)])
 
 app.include_router(api_router)
 
