@@ -6,7 +6,7 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 import uuid
 from datetime import datetime, timezone, date, timedelta
 from dateutil.relativedelta import relativedelta
@@ -300,6 +300,8 @@ class ActualImportRowUpdate(BaseModel):
 class ActualImportApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     idempotency_key: Optional[str] = None
+    # override: row amount becomes the new actual. addition: row amount is summed onto existing actual (missing actual treated as 0).
+    actual_merge_mode: Literal["override", "addition"] = "override"
 
 
 # ============== UNDO SYSTEM ==============
@@ -448,7 +450,11 @@ def best_flow_match(
 
     return best
 
-def build_apply_fingerprint(rows: List[dict], idempotency_key: Optional[str] = None) -> str:
+def build_apply_fingerprint(
+    rows: List[dict],
+    idempotency_key: Optional[str] = None,
+    actual_merge_mode: str = "override",
+) -> str:
     items = []
     for row in rows:
         if not row.get("include", True):
@@ -460,7 +466,11 @@ def build_apply_fingerprint(rows: List[dict], idempotency_key: Optional[str] = N
             "amount": round(float(row.get("amount", 0)), 2),
             "variance_action": row.get("variance_action", "actual_only"),
         })
-    payload = {"rows": sorted(items, key=lambda x: x["row_id"]), "idempotency_key": idempotency_key or ""}
+    payload = {
+        "rows": sorted(items, key=lambda x: x["row_id"]),
+        "idempotency_key": idempotency_key or "",
+        "actual_merge_mode": actual_merge_mode,
+    }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -1579,7 +1589,7 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
         raise HTTPException(status_code=400, detail="Import batch was discarded")
 
     rows = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0}).sort("row_index", 1).to_list(100000)
-    fingerprint = build_apply_fingerprint(rows, payload.idempotency_key)
+    fingerprint = build_apply_fingerprint(rows, payload.idempotency_key, payload.actual_merge_mode)
 
     if batch.get("last_apply_fingerprint") == fingerprint and batch.get("status") in {"applied", "partial"}:
         return {
@@ -1681,7 +1691,19 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
             )
             existing_amount = prev_occurrence.get("actual_amount") if prev_occurrence else None
             existing_variance_action = prev_occurrence.get("variance_action") if prev_occurrence else None
-            if prev_occurrence and existing_amount is not None and round(float(existing_amount), 2) == round(float(amount_value), 2) and existing_variance_action == desired_variance_action:
+
+            base_existing = float(existing_amount) if existing_amount is not None else 0.0
+            if payload.actual_merge_mode == "addition":
+                final_amount = base_existing + amount_value
+            else:
+                final_amount = amount_value
+
+            if (
+                prev_occurrence
+                and existing_amount is not None
+                and round(float(existing_amount), 2) == round(float(final_amount), 2)
+                and existing_variance_action == desired_variance_action
+            ):
                 skipped += 1
                 await db.actual_import_rows.update_one(
                     {"id": row_id},
@@ -1697,7 +1719,7 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
             occ_update = FlowOccurrenceUpdate(
                 flow_id=flow_id,
                 month=month,
-                actual_amount=float(amount_value),
+                actual_amount=float(final_amount),
                 variance_action=desired_variance_action,
             )
             occ_result = await upsert_flow_occurrence(occ_update, suppress_undo=True)

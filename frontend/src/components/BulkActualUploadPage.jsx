@@ -34,6 +34,8 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
   const [batchHistory, setBatchHistory] = useState([]);
   const [persistingRows, setPersistingRows] = useState({});
   const [applyResult, setApplyResult] = useState(null);
+  /** "override" replaces the cell actual; "addition" sums the row amount onto the current actual. */
+  const [actualMergeMode, setActualMergeMode] = useState("override");
   const [rowFilter, setRowFilter] = useState("all");
   const [categories, setCategories] = useState(fallbackCategories);
   const [varianceActions, setVarianceActions] = useState(fallbackVarianceActions);
@@ -178,7 +180,9 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
 
     setApplying(true);
     try {
-      const res = await axios.post(`${API}/actual-imports/${batch.id}/apply`, {});
+      const res = await axios.post(`${API}/actual-imports/${batch.id}/apply`, {
+        actual_merge_mode: actualMergeMode,
+      });
       setBatch((prev) => ({ ...prev, status: res.data.status || prev?.status }));
       setApplyResult(res.data);
       if (res.data.status === "idempotent") {
@@ -482,6 +486,40 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
             {visibleRows.length === 0 && (
               <div className="px-3 py-8 text-center text-xs text-zinc-600">No rows for current filter.</div>
             )}
+          </div>
+
+          <div className="px-4 py-3 border-t border-zinc-800 bg-zinc-950/40">
+            <p className="text-[11px] text-zinc-500 uppercase tracking-wide mb-2">Bulk apply mode</p>
+            <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 text-xs text-zinc-300">
+              <label className="flex items-start gap-2 cursor-pointer max-w-md">
+                <input
+                  type="radio"
+                  name="actual-merge-mode"
+                  className="mt-0.5"
+                  checked={actualMergeMode === "override"}
+                  onChange={() => setActualMergeMode("override")}
+                  data-testid="bulk-merge-override"
+                />
+                <span>
+                  <span className="text-zinc-200 font-medium">Replace</span>
+                  <span className="text-zinc-500"> — each row amount becomes the new actual for that flow and month (default).</span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2 cursor-pointer max-w-md">
+                <input
+                  type="radio"
+                  name="actual-merge-mode"
+                  className="mt-0.5"
+                  checked={actualMergeMode === "addition"}
+                  onChange={() => setActualMergeMode("addition")}
+                  data-testid="bulk-merge-addition"
+                />
+                <span>
+                  <span className="text-zinc-200 font-medium">Add to current</span>
+                  <span className="text-zinc-500"> — row amount is added to whatever actual is already stored; empty actual counts as zero.</span>
+                </span>
+              </label>
+            </div>
           </div>
 
           <div className="p-4 border-t border-zinc-800 flex items-center justify-between">

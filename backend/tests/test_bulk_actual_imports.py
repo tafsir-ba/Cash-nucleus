@@ -150,3 +150,85 @@ def test_bulk_import_apply_records_occurrence_and_enforces_entity_scope(auth_ses
     # Cleanup secondary entity and flow.
     auth_session.delete(f"{BASE_URL}/api/cash-flows/{flow_other['id']}?delete_linked=true", timeout=20)
     auth_session.delete(f"{BASE_URL}/api/entities/{other_entity['id']}", timeout=20)
+
+
+def test_bulk_import_apply_addition_merges_with_existing_actual(auth_session, test_entity):
+    """Addition mode sums the import row onto the stored actual; override replaces it."""
+    flow_resp = auth_session.post(
+        f"{BASE_URL}/api/cash-flows",
+        json={
+            "label": "TEST Bulk Addition Merge",
+            "amount": -1000,
+            "date": "2026-06-01",
+            "category": "Expense",
+            "certainty": "Materialized",
+            "recurrence": "none",
+            "entity_id": test_entity["id"],
+        },
+        timeout=20,
+    )
+    assert flow_resp.status_code == 200
+    flow = flow_resp.json()
+
+    csv_first = b"date,description,amount\n2026-06-10,First line,-500\n"
+    files = {"file": ("statement.csv", io.BytesIO(csv_first), "text/csv")}
+    parse1 = auth_session.post(
+        f"{BASE_URL}/api/actual-imports/parse",
+        data={"entity_id": test_entity["id"]},
+        files=files,
+        timeout=20,
+    )
+    assert parse1.status_code == 200, parse1.text
+    batch1 = parse1.json()["batch"]["id"]
+    row1 = parse1.json()["rows"][0]
+    auth_session.put(
+        f"{BASE_URL}/api/actual-imports/{batch1}/rows/{row1['id']}",
+        json={"selected_flow_id": flow["id"], "include": True, "month": "2026-06"},
+        timeout=20,
+    )
+    apply1 = auth_session.post(
+        f"{BASE_URL}/api/actual-imports/{batch1}/apply",
+        json={"actual_merge_mode": "override"},
+        timeout=30,
+    )
+    assert apply1.status_code == 200, apply1.text
+
+    occ_mid = auth_session.get(
+        f"{BASE_URL}/api/flow-occurrences",
+        params={"flow_id": flow["id"], "month": "2026-06"},
+        timeout=20,
+    )
+    assert occ_mid.status_code == 200
+    assert round(float(occ_mid.json()[0]["actual_amount"]), 2) == -500.0
+
+    csv_second = b"date,description,amount\n2026-06-12,Second line,-200\n"
+    files2 = {"file": ("statement2.csv", io.BytesIO(csv_second), "text/csv")}
+    parse2 = auth_session.post(
+        f"{BASE_URL}/api/actual-imports/parse",
+        data={"entity_id": test_entity["id"]},
+        files=files2,
+        timeout=20,
+    )
+    assert parse2.status_code == 200, parse2.text
+    batch2 = parse2.json()["batch"]["id"]
+    row2 = parse2.json()["rows"][0]
+    auth_session.put(
+        f"{BASE_URL}/api/actual-imports/{batch2}/rows/{row2['id']}",
+        json={"selected_flow_id": flow["id"], "include": True, "month": "2026-06"},
+        timeout=20,
+    )
+    apply2 = auth_session.post(
+        f"{BASE_URL}/api/actual-imports/{batch2}/apply",
+        json={"actual_merge_mode": "addition"},
+        timeout=30,
+    )
+    assert apply2.status_code == 200, apply2.text
+    assert apply2.json().get("applied_rows", 0) >= 1
+
+    occ_final = auth_session.get(
+        f"{BASE_URL}/api/flow-occurrences",
+        params={"flow_id": flow["id"], "month": "2026-06"},
+        timeout=20,
+    )
+    assert occ_final.status_code == 200
+    assert round(float(occ_final.json()[0]["actual_amount"]), 2) == -700.0
