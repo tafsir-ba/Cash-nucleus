@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import axios from "axios";
 import { toast } from "sonner";
-import { Check, X, ArrowRight, ClockCounterClockwise, Robot, User, ArrowCounterClockwise } from "@phosphor-icons/react";
+import { Check, X, ArrowRight, ClockCounterClockwise, Robot, User, ArrowCounterClockwise, LockOpen } from "@phosphor-icons/react";
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from "../components/ui/dialog";
@@ -373,6 +373,11 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
   );
 };
 
+const calendarMonthStartKey = () => {
+  const t = new Date();
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}`;
+};
+
 export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChange, refreshKey, entities }) => {
   const [matrixData, setMatrixData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -381,6 +386,8 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
   const [hoveredRow, setHoveredRow] = useState(null);
   const [hoveredCol, setHoveredCol] = useState(null);
   const [varianceSummary, setVarianceSummary] = useState(null);
+  const [relockMonth, setRelockMonth] = useState("");
+  const [relockSaving, setRelockSaving] = useState(false);
 
   const fetchMatrix = useCallback(async () => {
     setLoading(true);
@@ -417,6 +424,31 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
   };
 
   const handleSaved = () => { fetchMatrix(); onDataChange?.(); };
+
+  const pastMonthsForRelock = useMemo(() => {
+    if (!matrixData?.months?.length) return [];
+    const cur = calendarMonthStartKey();
+    return [...matrixData.months].filter((m) => m.key < cur).reverse();
+  }, [matrixData]);
+
+  const handleRelockSnapshot = async () => {
+    if (!relockMonth) return;
+    setRelockSaving(true);
+    try {
+      const params = {};
+      if (selectedEntityId) params.entity_id = selectedEntityId;
+      await axios.delete(`${API}/projection/cash-snapshot/${relockMonth}`, { params });
+      toast.success(`Cleared frozen cash for ${relockMonth}. It will re-seal on the next load.`);
+      setRelockMonth("");
+      await fetchMatrix();
+      onDataChange?.();
+    } catch (err) {
+      const msg = err.response?.data?.detail;
+      toast.error(typeof msg === "string" ? msg : "Could not clear month snapshot");
+    } finally {
+      setRelockSaving(false);
+    }
+  };
 
   if (!matrixData || (matrixData.revenue_rows.length === 0 && matrixData.expense_rows.length === 0)) {
     return (
@@ -497,9 +529,41 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
 
   return (
     <div className="surface-card" data-testid="cashflow-table">
-      <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
-        <h2 className="text-sm font-medium tracking-[0.15em] uppercase text-zinc-400 font-heading">Cash Flow Table</h2>
-        {loading && <span className="text-xs text-zinc-600">Updating...</span>}
+      <div className="p-4 border-b border-zinc-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm font-medium tracking-[0.15em] uppercase text-zinc-400 font-heading">Cash Flow Table</h2>
+          {loading && <span className="text-xs text-zinc-600">Updating...</span>}
+        </div>
+        {pastMonthsForRelock.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2" data-testid="cash-snapshot-relock">
+            <label htmlFor="relock-month" className="text-[10px] uppercase tracking-wider text-zinc-500 whitespace-nowrap">
+              Re-lock cash
+            </label>
+            <select
+              id="relock-month"
+              value={relockMonth}
+              onChange={(e) => setRelockMonth(e.target.value)}
+              className="bg-zinc-900 border border-zinc-700 rounded text-xs text-zinc-300 py-1 px-2 font-mono max-w-[200px]"
+              data-testid="relock-month-select"
+            >
+              <option value="">Choose past month…</option>
+              {pastMonthsForRelock.map((m) => (
+                <option key={m.key} value={m.key}>{m.label}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              disabled={!relockMonth || relockSaving}
+              onClick={handleRelockSnapshot}
+              className="inline-flex items-center gap-1.5 rounded border border-zinc-600 bg-zinc-800/80 px-2.5 py-1 text-[11px] text-zinc-200 hover:bg-zinc-700 hover:border-zinc-500 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+              title="Remove the frozen month-end cash balance so it can be re-sealed from current data"
+              data-testid="relock-month-btn"
+            >
+              <LockOpen size={13} className="text-zinc-400" />
+              {relockSaving ? "Clearing…" : "Clear snapshot"}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Global Variance Tracking Bar */}

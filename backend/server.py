@@ -2210,6 +2210,47 @@ def projection_month_window(
     return window_start, end_date, start_of_month, total_months
 
 
+def cash_status_from_closing(closing: float, safety_buffer: float) -> str:
+    if closing >= safety_buffer:
+        return "Good"
+    if closing >= 0:
+        return "Watch"
+    return "Danger"
+
+
+async def resolve_past_month_cash_snapshots(
+    entity_id: Optional[str],
+    past_month_computed_closing: Dict[str, float],
+) -> Dict[str, float]:
+    """
+    Completed months (< current calendar month): closing cash is read from DB if present,
+    otherwise sealed once from computed_closing and never updated when cash_now changes later.
+    """
+    if not past_month_computed_closing:
+        return {}
+    eid = entity_id or ""
+    now = datetime.now(timezone.utc).isoformat()
+    for month_key, closing in past_month_computed_closing.items():
+        await db.cash_balance_snapshots.update_one(
+            {"entity_id": eid, "month": month_key},
+            {
+                "$setOnInsert": {
+                    "id": str(uuid.uuid4()),
+                    "entity_id": eid,
+                    "month": month_key,
+                    "closing_cash": round(float(closing), 2),
+                    "locked_at": now,
+                }
+            },
+            upsert=True,
+        )
+    docs = await db.cash_balance_snapshots.find(
+        {"entity_id": eid, "month": {"$in": list(past_month_computed_closing.keys())}},
+        {"_id": 0, "month": 1, "closing_cash": 1},
+    ).to_list(500)
+    return {d["month"]: float(d["closing_cash"]) for d in docs}
+
+
 def compute_month_openings(
     sorted_month_keys: List[str],
     net_by_month: Dict[str, float],
@@ -2363,6 +2404,20 @@ async def get_projection(
             closing_cash=round(closing, 2),
             status=status
         ))
+
+    # Freeze end-of-month cash for completed calendar months (does not move when cash_now changes later)
+    past_computed = {m.month: m.closing_cash for m in months if m.month < current_month_key}
+    snap_map = await resolve_past_month_cash_snapshots(entity_id, past_computed)
+    if snap_map:
+        months = [
+            m.model_copy(update={
+                "closing_cash": round(snap_map[m.month], 2),
+                "status": cash_status_from_closing(snap_map[m.month], safety_buffer),
+            })
+            if m.month < current_month_key and m.month in snap_map
+            else m
+            for m in months
+        ]
 
     if lowest_cash is None:
         lowest_cash = cash_now
@@ -2545,6 +2600,15 @@ async def get_projection_matrix(
         k = mk["key"]
         closing = opening_map[k] + net_map[k]
         cash_balance_per_month[k] = round(closing, 2)
+
+    past_computed_bal = {
+        k: cash_balance_per_month[k]
+        for k in sorted_mk
+        if k < current_month_key
+    }
+    snap_bal = await resolve_past_month_cash_snapshots(entity_id, past_computed_bal)
+    for k in snap_bal:
+        cash_balance_per_month[k] = round(snap_bal[k], 2)
     
     # Horizon totals — computed from engine data, never by frontend
     total_revenue = round(sum(revenue_per_month.values()), 2)
@@ -2564,6 +2628,35 @@ async def get_projection_matrix(
         "total_cost": total_cost,
         "total_net": total_net,
     }
+
+
+@api_router.delete("/projection/cash-snapshot/{month}")
+async def delete_cash_month_snapshot(
+    month: str,
+    entity_id: Optional[str] = Query(None, description="Match consolidated view (omit) or entity filter"),
+    _user: dict = Depends(get_current_user),
+):
+    """
+    Remove the frozen month-end cash snapshot so that month can be re-sealed from the engine
+    on the next projection/matrix load (e.g. after correcting bank balances).
+    Only completed calendar months (strictly before this month) are allowed.
+    """
+    if not re.match(r"^\d{4}-\d{2}$", month):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+    current_month_key = date.today().replace(day=1).strftime("%Y-%m")
+    if month >= current_month_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Only past months can be cleared. Current and future months are always live.",
+        )
+    eid = entity_id or ""
+    result = await db.cash_balance_snapshots.delete_one({"entity_id": eid, "month": month})
+    if result.deleted_count == 0:
+        raise HTTPException(
+            status_code=404,
+            detail="No frozen cash snapshot for that month in this scope (entity / consolidated).",
+        )
+    return {"status": "deleted", "month": month, "entity_id": entity_id}
 
 
 @api_router.get("/projection/drivers")
@@ -2978,6 +3071,7 @@ async def seed_admin():
     await db.actual_import_rows.create_index([("batch_id", 1), ("status", 1)])
     await db.flow_occurrence_events.create_index([("id", 1)], unique=True)
     await db.flow_occurrence_events.create_index([("flow_id", 1), ("month", 1), ("timestamp", -1)])
+    await db.cash_balance_snapshots.create_index([("entity_id", 1), ("month", 1)], unique=True)
 
 app.include_router(api_router)
 
