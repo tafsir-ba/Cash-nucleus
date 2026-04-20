@@ -53,16 +53,7 @@ export const ProjectionChart = ({ projection, selectedMonth, onMonthSelect, hasD
   /** How many calendar months before "now" to include on the chart (full series stays in API/table). */
   const [pastSpan, setPastSpan] = useState(2);
 
-  if (!projection || !hasData) {
-    return (
-      <div className="chart-container h-[340px] flex flex-col items-center justify-center" data-testid="chart-projection">
-        <p className="text-zinc-500 text-sm mb-2">Add cash or flows to see projection</p>
-        <p className="text-zinc-600 text-xs">Your forecast will appear here</p>
-      </div>
-    );
-  }
-
-  const { months, safety_buffer, lowest_cash, lowest_cash_month, first_watch_month, first_danger_month } = projection;
+  const months = projection?.months ?? [];
   const monthCount = months.length;
 
   const chartData = useMemo(() => {
@@ -74,6 +65,17 @@ export const ProjectionChart = ({ projection, selectedMonth, onMonthSelect, hasD
     const from = Math.max(0, anchor - pastSpan);
     return months.slice(from);
   }, [months, pastSpan]);
+
+  if (!projection || !hasData) {
+    return (
+      <div className="chart-container h-[340px] flex flex-col items-center justify-center" data-testid="chart-projection">
+        <p className="text-zinc-500 text-sm mb-2">Add cash or flows to see projection</p>
+        <p className="text-zinc-600 text-xs">Your forecast will appear here</p>
+      </div>
+    );
+  }
+
+  const { safety_buffer, lowest_cash, lowest_cash_month, first_watch_month, first_danger_month } = projection;
 
   const chartMonthCount = chartData.length;
 
