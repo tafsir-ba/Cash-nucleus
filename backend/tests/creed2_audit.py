@@ -89,12 +89,11 @@ def compare_projection_vs_matrix(scenario, horizon, entity_id=None, label=""):
     log(tag, "Cash now", abs(proj["cash_now"] - matrix["cash_now"]) < 0.01,
         f"proj={proj['cash_now']}, matrix={matrix['cash_now']}")
     
-    # 6. Cash balance progression: cash_now + cumulative net = cash_balance per month
-    running = matrix["cash_now"]
+    # 6. Cash balance per month matches projection closing (includes historical months with anchored openings)
+    proj_closing = {m["month"]: m["closing_cash"] for m in proj["months"]}
     balance_ok = True
     for mk in sorted(matrix["net_per_month"].keys()):
-        running += matrix["net_per_month"][mk]
-        expected_bal = round(running, 2)
+        expected_bal = round(proj_closing.get(mk, 0), 2)
         actual_bal = round(matrix["cash_balance_per_month"].get(mk, 0), 2)
         if abs(expected_bal - actual_bal) > 0.01:
             balance_ok = False

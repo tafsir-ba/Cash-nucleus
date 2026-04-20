@@ -147,16 +147,16 @@ def test_numerical_integrity():
                     rc_ok = False
             log("Integrity", f"{tag} Rev-Cost=Net", rc_ok)
             
-            # D. Cash balance = cumulative
-            running = matrix["cash_now"]
+            # D. Matrix month-end cash matches projection (history + forward)
+            proj_close = {m["month"]: m["closing_cash"] for m in proj["months"]}
             bal_ok = True
             for mk in sorted(matrix["net_per_month"].keys()):
-                running += matrix["net_per_month"][mk]
+                expected_bal = proj_close.get(mk, 0)
                 actual_bal = matrix["cash_balance_per_month"].get(mk, 0)
-                if abs(running - actual_bal) > 0.01:
+                if abs(expected_bal - actual_bal) > 0.01:
                     bal_ok = False
                     log("Integrity", f"{tag} Balance {mk}", False,
-                        f"expected={round(running,2)} got={actual_bal}")
+                        f"expected={round(expected_bal,2)} got={actual_bal}")
             log("Integrity", f"{tag} Balance progression", bal_ok)
             
             # E. Horizon totals
@@ -547,11 +547,16 @@ def test_decision_panel():
         proj = get_proj(sc, 36)
         r = runway[sc]
         
-        # Find actual first breach in projection
+        # First breach in forward months only (projection may include historical months)
+        cm_key = date.today().replace(day=1).strftime("%Y-%m")
         actual_breach = None
-        for i, m in enumerate(proj["months"]):
+        fwd = 0
+        for m in proj["months"]:
+            if m["month"] < cm_key:
+                continue
+            fwd += 1
             if m["closing_cash"] < 0:
-                actual_breach = {"idx": i+1, "month": m["month_label"]}
+                actual_breach = {"idx": fwd, "month": m["month_label"]}
                 break
         
         if actual_breach:

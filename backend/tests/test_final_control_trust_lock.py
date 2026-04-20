@@ -53,7 +53,7 @@ class TestCreed2ProjectionMatrixMatch:
         proj_net_per_month = {m["month"]: m["net"] for m in proj["months"]}
         matrix_net_per_month = matrix["net_per_month"]
         
-        # Compare all 12 months
+        # Compare all months (forward + rolling history)
         for month_key, proj_net in proj_net_per_month.items():
             matrix_net = matrix_net_per_month.get(month_key, 0)
             assert abs(proj_net - matrix_net) < 0.01, f"Month {month_key}: projection net {proj_net} != matrix net {matrix_net}"
@@ -92,8 +92,8 @@ class TestCreed2ProjectionMatrixMatch:
         proj = api_client.get(f"{BASE_URL}/api/projection?horizon=24").json()
         matrix = api_client.get(f"{BASE_URL}/api/projection/matrix?horizon=24").json()
         
-        # Verify 24 months returned
-        assert len(matrix["months"]) == 24, f"Expected 24 months, got {len(matrix['months'])}"
+        # 24M forward + at least 2 months surface history (more if DB has older occurrences)
+        assert len(matrix["months"]) >= 26, f"Expected at least 26 months, got {len(matrix['months'])}"
         
         # Sum projection months
         proj_total_net = sum(m["net"] for m in proj["months"])

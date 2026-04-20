@@ -11,7 +11,6 @@ from dateutil.relativedelta import relativedelta
 
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://cash-risk-map.preview.emergentagent.com').rstrip('/')
 
-
 class TestMatrixEndpoint:
     """Tests for /api/projection/matrix - must match projection engine exactly"""
     
@@ -82,7 +81,7 @@ class TestMatrixEndpoint:
             })
             assert response.status_code == 200
             data = response.json()
-            assert len(data["months"]) == horizon, f"Expected {horizon} months, got {len(data['months'])}"
+            assert len(data["months"]) >= horizon + 2, f"Expected at least {horizon + 2} months, got {len(data['months'])}"
 
 
 class TestActualsAndVariance:

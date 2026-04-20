@@ -2162,6 +2162,77 @@ def get_certainty_levels(scenario: str) -> List[str]:
         "full": ["Materialized", "Sure to happen", "50/50", "Idea"]
     }.get(scenario, ["Materialized"])
 
+# History window: at least MIN_SURFACE_HISTORY_MONTHS before "now"; extend backward to any month
+# that still has occurrence/actual records (until MAX cap). Forward span = horizon unchanged.
+MIN_SURFACE_HISTORY_MONTHS = 2
+MAX_HISTORY_WINDOW_MONTHS = 120
+
+
+def earliest_occurrence_month_start(flow_ids: Optional[set], occs: List[dict]) -> Optional[date]:
+    """Earliest first-of-month for any occurrence row tied to filtered flows (preserves past actuals in matrix)."""
+    best: Optional[date] = None
+    for occ in occs:
+        fid = occ.get("flow_id")
+        if flow_ids is not None and fid not in flow_ids:
+            continue
+        m = occ.get("month")
+        if not m or not isinstance(m, str) or len(m) < 7:
+            continue
+        try:
+            y, mo = int(m[:4]), int(m[5:7])
+            d = date(y, mo, 1)
+        except (ValueError, TypeError):
+            continue
+        if best is None or d < best:
+            best = d
+    return best
+
+
+def projection_month_window(
+    today: date,
+    horizon: int,
+    earliest_data_month: Optional[date],
+) -> tuple[date, date, date, int]:
+    """First column month, exclusive end expansion, current month start, total month count."""
+    start_of_month = today.replace(day=1)
+    min_pad = start_of_month - relativedelta(months=MIN_SURFACE_HISTORY_MONTHS)
+    hard_floor = start_of_month - relativedelta(months=MAX_HISTORY_WINDOW_MONTHS)
+    candidates = [min_pad]
+    if earliest_data_month is not None:
+        em = earliest_data_month.replace(day=1)
+        if em <= start_of_month:
+            candidates.append(em)
+    window_start = min(candidates)
+    window_start = max(hard_floor, window_start)
+    lookback_months = (start_of_month.year - window_start.year) * 12 + (start_of_month.month - window_start.month)
+    total_months = lookback_months + horizon
+    end_date = window_start + relativedelta(months=total_months)
+    return window_start, end_date, start_of_month, total_months
+
+
+def compute_month_openings(
+    sorted_month_keys: List[str],
+    net_by_month: Dict[str, float],
+    cash_now: float,
+    current_month_key: str,
+) -> Dict[str, float]:
+    """Opening at start of each month; opening of current month = cash_now (aligned with projection KPIs)."""
+    opening: Dict[str, float] = {}
+    if not sorted_month_keys:
+        return opening
+    if current_month_key not in sorted_month_keys:
+        current_month_key = sorted_month_keys[0]
+    c = sorted_month_keys.index(current_month_key)
+    opening[current_month_key] = cash_now
+    for j in range(c - 1, -1, -1):
+        mk = sorted_month_keys[j]
+        opening[mk] = opening[sorted_month_keys[j + 1]] - net_by_month.get(mk, 0.0)
+    for j in range(c + 1, len(sorted_month_keys)):
+        mk = sorted_month_keys[j]
+        opening[mk] = opening[sorted_month_keys[j - 1]] + net_by_month.get(sorted_month_keys[j - 1], 0.0)
+    return opening
+
+
 @api_router.get("/projection")
 async def get_projection(
     scenario: str = "likely",
@@ -2191,24 +2262,31 @@ async def get_projection(
     settings = await db.settings.find_one({"id": "settings"}, {"_id": 0})
     safety_buffer = settings.get("safety_buffer", 50000) if settings else 50000
     
-    # Projection based on horizon
-    today = date.today()
-    start_of_month = today.replace(day=1)
-    end_date = start_of_month + relativedelta(months=horizon)
-    
     # Filter by certainty
     certainty_levels = get_certainty_levels(scenario)
     filtered = [f for f in flows_with_amounts if f.get("certainty") in certainty_levels]
-    
-    # Get actuals — when recorded, projection uses actual amount instead of planned
+
+    # Occurrences first (drives how far back the window must go so past actuals stay visible)
     all_occs = await db.flow_occurrences.find({}, {"_id": 0}).to_list(1000)
     actuals_map = {}  # (flow_id, month) -> actual_amount
     for occ in all_occs:
         if occ.get("actual_amount") is not None:
             actuals_map[(occ["flow_id"], occ["month"])] = occ["actual_amount"]
-    
+
+    # Projection: horizon forward + history to earliest occurrence (capped) + small surface pad
+    today = date.today()
+    flow_id_set = {f.get("id") for f in flows if f.get("id")}
+    earliest_data = earliest_occurrence_month_start(
+        flow_id_set if entity_id else None,
+        all_occs,
+    )
+    window_start, end_date, start_of_month, total_months = projection_month_window(
+        today, horizon, earliest_data
+    )
+    current_month_key = start_of_month.strftime("%Y-%m")
+
     # Expand recurring
-    expanded = expand_recurring_flows(filtered, start_of_month, end_date)
+    expanded = expand_recurring_flows(filtered, window_start, end_date)
     
     # Apply actuals overlay: replace planned with actual where recorded
     for ef in expanded:
@@ -2219,8 +2297,8 @@ async def get_projection(
     
     # Group by month
     months_data = {}
-    for i in range(horizon):
-        m = start_of_month + relativedelta(months=i)
+    for i in range(total_months):
+        m = window_start + relativedelta(months=i)
         key = m.strftime("%Y-%m")
         months_data[key] = {
             "month": key,
@@ -2237,40 +2315,45 @@ async def get_projection(
             else:
                 months_data[key]["outflows"] += abs(flow["amount"])
     
-    # Calculate projection
+    # Calculate projection (opening balances anchored at start of current month = cash_now)
+    sorted_keys = sorted(months_data.keys())
+    net_by_month = {
+        k: months_data[k]["inflows"] - months_data[k]["outflows"] for k in sorted_keys
+    }
+    opening_map = compute_month_openings(sorted_keys, net_by_month, cash_now, current_month_key)
+
     months = []
-    closing = cash_now
-    lowest_cash = cash_now
+    lowest_cash = None
     lowest_cash_month = start_of_month.strftime("%b %Y")
     highest_pressure_month = start_of_month.strftime("%b %Y")
     highest_pressure = 0.0
     first_watch_month = None
     first_danger_month = None
-    
-    for key in sorted(months_data.keys()):
+
+    for key in sorted_keys:
         data = months_data[key]
-        net = data["inflows"] - data["outflows"]
-        closing += net
-        
+        net = net_by_month[key]
+        closing = opening_map[key] + net
+
         if closing >= safety_buffer:
             status = "Good"
         elif closing >= 0:
             status = "Watch"
-            if first_watch_month is None:
+            if key >= current_month_key and first_watch_month is None:
                 first_watch_month = data["month_label"]
         else:
             status = "Danger"
-            if first_danger_month is None:
+            if key >= current_month_key and first_danger_month is None:
                 first_danger_month = data["month_label"]
-        
-        if closing < lowest_cash:
-            lowest_cash = closing
-            lowest_cash_month = data["month_label"]
-        
-        if data["outflows"] > highest_pressure:
-            highest_pressure = data["outflows"]
-            highest_pressure_month = data["month_label"]
-        
+
+        if key >= current_month_key:
+            if lowest_cash is None or closing < lowest_cash:
+                lowest_cash = closing
+                lowest_cash_month = data["month_label"]
+            if data["outflows"] > highest_pressure:
+                highest_pressure = data["outflows"]
+                highest_pressure_month = data["month_label"]
+
         months.append(MonthProjection(
             month=data["month"],
             month_label=data["month_label"],
@@ -2280,7 +2363,10 @@ async def get_projection(
             closing_cash=round(closing, 2),
             status=status
         ))
-    
+
+    if lowest_cash is None:
+        lowest_cash = cash_now
+
     overall_status = "Danger" if lowest_cash < 0 else ("Watch" if lowest_cash < safety_buffer else "Good")
     
     return ProjectionResponse(
@@ -2323,13 +2409,20 @@ async def get_projection_matrix(
     for occ in all_occs:
         if occ.get("actual_amount") is not None:
             actuals_map[(occ["flow_id"], occ["month"])] = occ["actual_amount"]
-    
+
     today = date.today()
-    start_of_month = today.replace(day=1)
-    end_date = start_of_month + relativedelta(months=horizon)
-    
+    flow_id_set = {f.get("id") for f in flows if f.get("id")}
+    earliest_data = earliest_occurrence_month_start(
+        flow_id_set if entity_id else None,
+        all_occs,
+    )
+    window_start, end_date, start_of_month, total_months = projection_month_window(
+        today, horizon, earliest_data
+    )
+    current_month_key = start_of_month.strftime("%Y-%m")
+
     # Same expand function
-    expanded = expand_recurring_flows(filtered, start_of_month, end_date)
+    expanded = expand_recurring_flows(filtered, window_start, end_date)
     
     # Store planned amounts before actuals overlay
     planned_map = {}  # (flow_id, month) -> planned_amount
@@ -2348,8 +2441,8 @@ async def get_projection_matrix(
     
     # Build month keys
     month_keys = []
-    for i in range(horizon):
-        m = start_of_month + relativedelta(months=i)
+    for i in range(total_months):
+        m = window_start + relativedelta(months=i)
         month_keys.append({
             "key": m.strftime("%Y-%m"),
             "label": m.strftime("%b %Y")
@@ -2443,12 +2536,15 @@ async def get_projection_matrix(
     acc_query = {"entity_id": entity_id} if entity_id else {}
     accounts = await db.bank_accounts.find(acc_query, {"_id": 0}).to_list(100)
     cash_now = sum(acc.get("amount", 0) for acc in accounts)
-    
+
+    sorted_mk = [mk["key"] for mk in month_keys]
+    net_map = {k: net_per_month.get(k, 0.0) for k in sorted_mk}
+    opening_map = compute_month_openings(sorted_mk, net_map, cash_now, current_month_key)
     cash_balance_per_month = {}
-    running = cash_now
     for mk in month_keys:
-        running += net_per_month.get(mk["key"], 0)
-        cash_balance_per_month[mk["key"]] = round(running, 2)
+        k = mk["key"]
+        closing = opening_map[k] + net_map[k]
+        cash_balance_per_month[k] = round(closing, 2)
     
     # Horizon totals — computed from engine data, never by frontend
     total_revenue = round(sum(revenue_per_month.values()), 2)
@@ -2494,11 +2590,18 @@ async def get_negative_month_drivers(
     for occ in all_occs:
         if occ.get("actual_amount") is not None:
             actuals_map[(occ["flow_id"], occ["month"])] = occ["actual_amount"]
-    
+
     today = date.today()
-    start_of_month = today.replace(day=1)
-    end_date = start_of_month + relativedelta(months=horizon)
-    expanded = expand_recurring_flows(filtered, start_of_month, end_date)
+    flow_id_set = {f.get("id") for f in flows if f.get("id")}
+    earliest_data = earliest_occurrence_month_start(
+        flow_id_set if entity_id else None,
+        all_occs,
+    )
+    window_start, end_date, start_of_month, total_months = projection_month_window(
+        today, horizon, earliest_data
+    )
+    current_month_key = start_of_month.strftime("%Y-%m")
+    expanded = expand_recurring_flows(filtered, window_start, end_date)
     
     for ef in expanded:
         fid = ef.get("flow_id", "")
@@ -2508,8 +2611,8 @@ async def get_negative_month_drivers(
     
     # Group by month, compute net
     months_data = {}
-    for i in range(horizon):
-        m = start_of_month + relativedelta(months=i)
+    for i in range(total_months):
+        m = window_start + relativedelta(months=i)
         key = m.strftime("%Y-%m")
         months_data[key] = {"flows": [], "net": 0.0, "label": m.strftime("%b %Y")}
     
@@ -2523,13 +2626,16 @@ async def get_negative_month_drivers(
     acc_query = {"entity_id": entity_id} if entity_id else {}
     accounts = await db.bank_accounts.find(acc_query, {"_id": 0}).to_list(100)
     cash_now = sum(acc.get("amount", 0) for acc in accounts)
-    
-    running = cash_now
+
+    sorted_dk = sorted(months_data.keys())
+    net_map_d = {k: months_data[k]["net"] for k in sorted_dk}
+    opening_d = compute_month_openings(sorted_dk, net_map_d, cash_now, current_month_key)
+
     result = []
-    for key in sorted(months_data.keys()):
+    for key in sorted_dk:
         md = months_data[key]
-        running += md["net"]
-        
+        running = opening_d[key] + md["net"]
+
         if md["net"] >= 0:
             continue
         
@@ -2614,16 +2720,24 @@ async def get_scenario_delta(
         })
     
     total_gap = round(sum(m["gap_net"] for m in months), 2)
-    
+
+    cm_key = date.today().replace(day=1).strftime("%Y-%m")
+
+    def _first_breach_forward(proj_months):
+        idx = 0
+        for m in proj_months:
+            if m.month < cm_key:
+                continue
+            idx += 1
+            if m.closing_cash < 0:
+                return idx
+        return None
+
     return {
         "months": months,
         "total_gap_net": total_gap,
-        "committed_runway": next(
-            (i + 1 for i, m in enumerate(committed.months) if m.closing_cash < 0), None
-        ),
-        "likely_runway": next(
-            (i + 1 for i, m in enumerate(likely.months) if m.closing_cash < 0), None
-        ),
+        "committed_runway": _first_breach_forward(committed.months),
+        "likely_runway": _first_breach_forward(likely.months),
     }
 
 
@@ -2637,22 +2751,27 @@ async def get_cash_runway(
         horizon = 36
     
     result = {}
+    current_month_key = date.today().replace(day=1).strftime("%Y-%m")
     for sc in ["committed", "likely"]:
         proj = await get_projection(scenario=sc, entity_id=entity_id, horizon=horizon)
         breach_idx = None
         breach_month = None
         min_balance = proj.cash_now
-        for i, m in enumerate(proj.months):
+        forward_i = 0
+        for m in proj.months:
+            if m.month < current_month_key:
+                continue
+            forward_i += 1
             if m.closing_cash < min_balance:
                 min_balance = m.closing_cash
             if m.closing_cash < 0 and breach_idx is None:
-                breach_idx = i + 1
+                breach_idx = forward_i
                 breach_month = m.month_label
-        
+
         # required_injection = max(0, -min_cash_balance + buffer)
         # buffer defaults to 0, uses system safety_buffer if available
         required_injection = max(0, round(-min_balance, 2))
-        
+
         result[sc] = {
             "months_until_breach": breach_idx,
             "breach_month": breach_month,

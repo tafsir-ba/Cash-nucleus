@@ -58,16 +58,17 @@ class TestBackendMatrixTotals:
         print(f"✓ net_per_month has {len(data['net_per_month'])} months")
     
     def test_matrix_24m_horizon_returns_24_months(self):
-        """24M horizon should return 24 months of data"""
+        """24M forward horizon includes at least surface history (and more if occurrence data exists)"""
         res = requests.get(f"{BASE_URL}/api/projection/matrix", params={"horizon": 24, "scenario": "likely"})
         assert res.status_code == 200
         data = res.json()
-        assert len(data["months"]) == 24, f"Expected 24 months, got {len(data['months'])}"
-        assert len(data["net_per_month"]) == 24, f"Expected 24 net_per_month entries, got {len(data['net_per_month'])}"
-        assert len(data["revenue_per_month"]) == 24
-        assert len(data["cost_per_month"]) == 24
-        assert len(data["cash_balance_per_month"]) == 24
-        print("✓ 24M horizon returns 24 months of totals")
+        n = len(data["months"])
+        assert n >= 26, f"Expected at least 26 months (24+2), got {n}"
+        assert len(data["net_per_month"]) == n, f"net_per_month keys should match months count"
+        assert len(data["revenue_per_month"]) == n
+        assert len(data["cost_per_month"]) == n
+        assert len(data["cash_balance_per_month"]) == n
+        print("✓ 24M horizon returns history + forward totals")
 
 
 class TestMatrixCellSemantics:

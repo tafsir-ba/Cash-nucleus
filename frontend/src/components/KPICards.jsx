@@ -48,27 +48,45 @@ export const KPICards = ({ projection, hasAccounts, onAddAccount, onCashNowClick
   const isNoData = cash_now === 0 && !hasAccounts;
   const hasDanger = first_danger_month !== null;
 
+  const today = new Date();
+  const todayLabel = today.toLocaleDateString("de-CH", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 md:gap-4" data-testid="kpi-cards">
       {/* Cash Now */}
-      <div className="kpi-card cursor-pointer hover:border-zinc-600" onClick={onCashNowClick} data-testid="kpi-cash-now">
-        <span className="kpi-label">Cash Now</span>
-        {isNoData ? (
-          <>
-            <span className="text-lg text-zinc-500 mt-1">No accounts defined</span>
-            <button 
-              onClick={onAddAccount}
-              className="mt-2 text-sm text-zinc-400 hover:text-zinc-200 flex items-center gap-1 transition-colors"
-            >
-              <Plus size={14} /> Add bank account
-            </button>
-          </>
-        ) : (
-          <>
-            <span className="kpi-value font-mono">{formatCurrency(cash_now)}</span>
-            <span className="kpi-meta">Current balance</span>
-          </>
-        )}
+      <div className="flex flex-col gap-1.5 min-w-0">
+        <time
+          dateTime={todayIso}
+          className="text-[11px] text-zinc-500 tracking-wide truncate"
+          data-testid="kpi-today-date"
+        >
+          {todayLabel}
+        </time>
+        <div className="kpi-card cursor-pointer hover:border-zinc-600" onClick={onCashNowClick} data-testid="kpi-cash-now">
+          <span className="kpi-label">Cash Now</span>
+          {isNoData ? (
+            <>
+              <span className="text-lg text-zinc-500 mt-1">No accounts defined</span>
+              <button 
+                onClick={onAddAccount}
+                className="mt-2 text-sm text-zinc-400 hover:text-zinc-200 flex items-center gap-1 transition-colors"
+              >
+                <Plus size={14} /> Add bank account
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="kpi-value font-mono">{formatCurrency(cash_now)}</span>
+              <span className="kpi-meta">Current balance</span>
+            </>
+          )}
+        </div>
       </div>
 
       {/* FIRST DANGER MONTH - THE CRITICAL METRIC */}

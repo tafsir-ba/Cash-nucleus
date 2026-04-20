@@ -9,29 +9,33 @@ import uuid
 
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://cash-risk-map.preview.emergentagent.com').rstrip('/')
 
+# At least MIN_SURFACE_HISTORY_MONTHS (2) before current + horizon forward when no older data
+MIN_SURFACE_PLUS_HORIZON = lambda h: h + 2
+
+
 class TestProjectionEngine:
     """Tests for projection endpoint with different horizons"""
     
     def test_projection_horizon_12_months(self):
-        """GET /api/projection with horizon=12 returns 12 months"""
+        """GET /api/projection with horizon=12 returns at least forward + surface history"""
         response = requests.get(f"{BASE_URL}/api/projection", params={"horizon": 12})
         assert response.status_code == 200
         data = response.json()
-        assert len(data["months"]) == 12, f"Expected 12 months, got {len(data['months'])}"
+        assert len(data["months"]) >= MIN_SURFACE_PLUS_HORIZON(12), f"Expected at least {MIN_SURFACE_PLUS_HORIZON(12)} months, got {len(data['months'])}"
         
     def test_projection_horizon_24_months(self):
-        """GET /api/projection with horizon=24 returns 24 months"""
+        """GET /api/projection with horizon=24 returns at least forward + surface history"""
         response = requests.get(f"{BASE_URL}/api/projection", params={"horizon": 24})
         assert response.status_code == 200
         data = response.json()
-        assert len(data["months"]) == 24, f"Expected 24 months, got {len(data['months'])}"
+        assert len(data["months"]) >= MIN_SURFACE_PLUS_HORIZON(24), f"Expected at least {MIN_SURFACE_PLUS_HORIZON(24)} months, got {len(data['months'])}"
         
     def test_projection_horizon_36_months(self):
-        """GET /api/projection with horizon=36 returns 36 months"""
+        """GET /api/projection with horizon=36 returns at least forward + surface history"""
         response = requests.get(f"{BASE_URL}/api/projection", params={"horizon": 36})
         assert response.status_code == 200
         data = response.json()
-        assert len(data["months"]) == 36, f"Expected 36 months, got {len(data['months'])}"
+        assert len(data["months"]) >= MIN_SURFACE_PLUS_HORIZON(36), f"Expected at least {MIN_SURFACE_PLUS_HORIZON(36)} months, got {len(data['months'])}"
         
     def test_projection_response_structure(self):
         """GET /api/projection returns correct structure with all KPI fields"""

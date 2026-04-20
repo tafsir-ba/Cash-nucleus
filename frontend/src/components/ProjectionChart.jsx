@@ -1,3 +1,4 @@
+import { useState, useMemo } from 'react';
 import {
   LineChart,
   Line,
@@ -26,6 +27,11 @@ const formatFullCurrency = (amount) => {
   }).format(amount);
 };
 
+const localCalendarMonthKey = () => {
+  const t = new Date();
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`;
+};
+
 const CustomTooltip = ({ active, payload }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
@@ -44,6 +50,9 @@ const CustomTooltip = ({ active, payload }) => {
 };
 
 export const ProjectionChart = ({ projection, selectedMonth, onMonthSelect, hasData, horizon = 12 }) => {
+  /** How many calendar months before "now" to include on the chart (full series stays in API/table). */
+  const [pastSpan, setPastSpan] = useState(2);
+
   if (!projection || !hasData) {
     return (
       <div className="chart-container h-[340px] flex flex-col items-center justify-center" data-testid="chart-projection">
@@ -54,22 +63,36 @@ export const ProjectionChart = ({ projection, selectedMonth, onMonthSelect, hasD
   }
 
   const { months, safety_buffer, lowest_cash, lowest_cash_month, first_watch_month, first_danger_month } = projection;
-  
-  const lowestMonth = months.find(m => m.closing_cash === lowest_cash);
-  const firstWatchData = months.find(m => m.month_label === first_watch_month);
-  const firstDangerData = months.find(m => m.month_label === first_danger_month);
-  
-  // Auto-scale Y-axis
-  const allValues = months.map(m => m.closing_cash);
-  const minValue = Math.min(...allValues, 0);
-  const maxValue = Math.max(...allValues, safety_buffer);
+  const monthCount = months.length;
+
+  const chartData = useMemo(() => {
+    if (!months.length) return [];
+    if (pastSpan === 'all') return months;
+    const curKey = localCalendarMonthKey();
+    const curIdx = months.findIndex((m) => m.month === curKey);
+    const anchor = curIdx >= 0 ? curIdx : Math.max(0, months.length - 1);
+    const from = Math.max(0, anchor - pastSpan);
+    return months.slice(from);
+  }, [months, pastSpan]);
+
+  const chartMonthCount = chartData.length;
+
+  const lowestInChart = chartData.length
+    ? chartData.reduce((best, m) => (m.closing_cash < best.closing_cash ? m : best), chartData[0])
+    : null;
+  const firstWatchInChart = chartData.find((m) => m.month_label === first_watch_month);
+  const firstDangerInChart = chartData.find((m) => m.month_label === first_danger_month);
+
+  const allValues = chartData.map((m) => m.closing_cash);
+  const minValue = allValues.length ? Math.min(...allValues, 0) : 0;
+  const maxValue = allValues.length ? Math.max(...allValues, safety_buffer) : safety_buffer;
   const range = maxValue - minValue;
   const padding = Math.max(range * 0.15, 5000);
   const yMin = Math.floor((minValue - padding) / 5000) * 5000;
   const yMax = Math.ceil((maxValue + padding) / 5000) * 5000;
 
-  const currentMonth = new Date().toISOString().slice(0, 7);
-  const currentMonthData = months.find(m => m.month === currentMonth);
+  const currentMonth = localCalendarMonthKey();
+  const currentMonthData = chartData.find((m) => m.month === currentMonth);
 
   const handleClick = (data) => {
     if (data && data.activePayload && data.activePayload[0]) {
@@ -77,16 +100,44 @@ export const ProjectionChart = ({ projection, selectedMonth, onMonthSelect, hasD
     }
   };
 
-  // Adjust tick interval for longer horizons
-  const tickInterval = horizon <= 12 ? 0 : horizon <= 24 ? 1 : 2;
+  const tickInterval =
+    chartMonthCount <= 12 ? 0 : chartMonthCount <= 24 ? 1 : chartMonthCount <= 36 ? 2 : 3;
 
   return (
     <div className="chart-container" data-testid="chart-projection">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-sm font-medium tracking-[0.15em] uppercase text-zinc-400 font-heading">
-          {horizon}-Month Projection
-        </h2>
-        <div className="flex items-center gap-3 text-xs text-zinc-500">
+      <div className="flex flex-col gap-3 mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-medium tracking-[0.15em] uppercase text-zinc-400 font-heading">
+              {horizon}-Month forward
+            </h2>
+            <p className="text-[11px] text-zinc-600 mt-0.5">
+              Chart: {chartMonthCount} of {monthCount} months
+              {pastSpan === 'all' ? ' (full history)' : ` (now + ${pastSpan} mo past)`}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <label htmlFor="chart-history-span" className="text-[10px] uppercase tracking-wider text-zinc-500 whitespace-nowrap">
+              Past on chart
+            </label>
+            <select
+              id="chart-history-span"
+              value={pastSpan === 'all' ? 'all' : String(pastSpan)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setPastSpan(v === 'all' ? 'all' : Number(v));
+              }}
+              className="bg-zinc-900 border border-zinc-700 rounded text-xs text-zinc-300 py-1 px-2 font-mono focus:outline-none focus:ring-1 focus:ring-zinc-500"
+              data-testid="chart-history-span"
+            >
+              <option value="2">2 months</option>
+              <option value="6">6 months</option>
+              <option value="12">12 months</option>
+              <option value="all">All</option>
+            </select>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-500">
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"></span>Safe</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500"></span>Watch</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500"></span>Danger</span>
@@ -95,7 +146,7 @@ export const ProjectionChart = ({ projection, selectedMonth, onMonthSelect, hasD
       
       <div className="h-[240px]">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={months} margin={{ top: 15, right: 25, left: 15, bottom: 5 }} onClick={handleClick}>
+          <LineChart data={chartData} margin={{ top: 15, right: 25, left: 15, bottom: 5 }} onClick={handleClick}>
             {yMin < 0 && <ReferenceArea y1={yMin} y2={0} fill="#fb7185" fillOpacity={0.1} />}
             <ReferenceArea y1={Math.max(0, yMin)} y2={safety_buffer} fill="#fbbf24" fillOpacity={0.08} />
             <ReferenceArea y1={safety_buffer} y2={yMax} fill="#34d399" fillOpacity={0.08} />
@@ -140,25 +191,25 @@ export const ProjectionChart = ({ projection, selectedMonth, onMonthSelect, hasD
               dataKey="closing_cash" 
               stroke="#fafafa" 
               strokeWidth={2.5}
-              dot={{ fill: '#fafafa', strokeWidth: 0, r: horizon > 12 ? 1 : 3 }}
+              dot={{ fill: '#fafafa', strokeWidth: 0, r: chartMonthCount > 18 ? 1 : 3 }}
               activeDot={{ fill: '#fafafa', stroke: '#18181b', strokeWidth: 2, r: 5 }}
               connectNulls={true}
             />
             
-            {firstDangerData && (
-              <ReferenceDot x={firstDangerData.month_label} y={firstDangerData.closing_cash} r={6} fill="#fb7185" stroke="#18181b" strokeWidth={2} />
+            {firstDangerInChart && (
+              <ReferenceDot x={firstDangerInChart.month_label} y={firstDangerInChart.closing_cash} r={6} fill="#fb7185" stroke="#18181b" strokeWidth={2} />
             )}
             
-            {firstWatchData && !firstDangerData && (
-              <ReferenceDot x={firstWatchData.month_label} y={firstWatchData.closing_cash} r={5} fill="#fbbf24" stroke="#18181b" strokeWidth={2} />
+            {firstWatchInChart && !firstDangerInChart && (
+              <ReferenceDot x={firstWatchInChart.month_label} y={firstWatchInChart.closing_cash} r={5} fill="#fbbf24" stroke="#18181b" strokeWidth={2} />
             )}
             
-            {lowestMonth && lowestMonth.month_label !== first_danger_month && (
+            {lowestInChart && (!firstDangerInChart || lowestInChart.month !== firstDangerInChart.month) && (
               <ReferenceDot
-                x={lowestMonth.month_label}
-                y={lowestMonth.closing_cash}
+                x={lowestInChart.month_label}
+                y={lowestInChart.closing_cash}
                 r={5}
-                fill={lowest_cash < 0 ? '#fb7185' : '#fbbf24'}
+                fill={lowestInChart.closing_cash < 0 ? '#fb7185' : '#fbbf24'}
                 stroke="#18181b"
                 strokeWidth={2}
               />
@@ -167,7 +218,7 @@ export const ProjectionChart = ({ projection, selectedMonth, onMonthSelect, hasD
         </ResponsiveContainer>
       </div>
       
-      {/* Key callouts */}
+      {/* Key callouts — KPIs stay full-horizon; chart above is zoomed */}
       <div className="mt-3 flex flex-wrap gap-2 text-xs">
         {first_danger_month && (
           <div className="px-2 py-1 rounded bg-rose-500/10 border border-rose-500/20 text-rose-400 font-medium">
