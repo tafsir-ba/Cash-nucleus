@@ -43,6 +43,14 @@ const scoreLabel = (score) => {
   return "Low";
 };
 
+/** Included row still missing entity (new line) or flow match (existing line). */
+const isUnmatchedRow = (row, scope) => {
+  if (!row.include) return false;
+  const cls = row.classification || "existing_flow";
+  if (cls === "new_flow") return !(row.entity_id || scope);
+  return !row.selected_flow_id;
+};
+
 const SortHeader = ({ label, sortKey, activeKey, dir, onToggle, align = "left", testId }) => {
   const active = activeKey === sortKey;
   const Indicator = !active ? ArrowsDownUp : dir === "asc" ? CaretUp : CaretDown;
@@ -418,11 +426,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     const included = rows.filter((r) => r.include);
     const discardedRows = rows.length - included.length;
     const scope = entityId || batch?.entity_id;
-    const unmatched = included.filter((r) => {
-      const cls = r.classification || "existing_flow";
-      if (cls === "new_flow") return !(r.entity_id || scope);
-      return !r.selected_flow_id;
-    }).length;
+    const unmatched = included.filter((r) => isUnmatchedRow(r, scope)).length;
     return {
       total: rows.length,
       included: included.length,
@@ -493,12 +497,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     let filtered;
     if (rowFilter === "included") filtered = rows.filter((r) => r.include);
     else if (rowFilter === "unmatched") {
-      filtered = rows.filter((r) => {
-        if (!r.include) return false;
-        const cls = r.classification || "existing_flow";
-        if (cls === "new_flow") return !(r.entity_id || scope);
-        return !r.selected_flow_id;
-      });
+      filtered = rows.filter((r) => isUnmatchedRow(r, scope));
     } else if (rowFilter === "failed") filtered = rows.filter((r) => r.status === "failed");
     else if (rowFilter === "warnings") filtered = rows.filter((r) => r.status === "warning");
     else filtered = rows;
@@ -704,6 +703,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                 {visibleRows.map((row) => {
                   const rowEntityEffective =
                     row.entity_id || entityId || batch?.entity_id || entities[0]?.id || "";
+                  const scope = entityId || batch?.entity_id;
                   const flowOptions = allFlows.filter(
                     (f) =>
                       f.entity_id === rowEntityEffective &&
@@ -715,16 +715,28 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                   const isNewLine = classification === "new_flow";
                   const isInMultiGroup =
                     !!row.multi_edit && multiEditRowsOrdered.length > 1;
+                  const isUnmatched = isUnmatchedRow(row, scope);
                   return (
                     <tr
                       key={row.id}
                       className={`border-b border-zinc-800/50 ${
-                        isInMultiGroup ? "bg-zinc-800/25" : ""
+                        isUnmatched
+                          ? "bg-amber-950/45"
+                          : isInMultiGroup
+                            ? "bg-zinc-800/25"
+                            : ""
                       }`}
                       title={
-                        isInMultiGroup
-                          ? "Multi group: changing Entity, Month, Category, etc. on this row updates all Multi-checked rows"
-                          : undefined
+                        [
+                          isUnmatched
+                            ? "Unmatched: assign entity or flow match before apply"
+                            : null,
+                          isInMultiGroup
+                            ? "Multi group: changing Entity, Month, Category, etc. on this row updates all Multi-checked rows"
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" — ") || undefined
                       }
                     >
                       <td
