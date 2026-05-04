@@ -283,26 +283,28 @@ class FlowOccurrenceEvent(BaseModel):
     # Actor who triggered the write
     actor_id: Optional[str] = None
     actor_email: Optional[str] = None
+    # If True, this event is skipped when recomputing the cell from history (e.g. mistaken clear).
+    ignore_in_replay: bool = False
 
-class FlowOccurrenceHistoryMergeCorrection(BaseModel):
+class FlowOccurrenceHistoryPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    merge_mode: Literal["override", "addition"]
+    merge_mode: Optional[Literal["override", "addition"]] = None
+    ignore_in_replay: Optional[bool] = None
 
 
 def recompute_actual_from_event_log(
     events_in_replay_order: List[Dict[str, Any]],
-    amended_event_id: Optional[str] = None,
-    amended_merge_mode: Optional[str] = None,
 ) -> Optional[float]:
     """Replay cell history in **apply order** (oldest → newest).
 
-    Callers must pass events ordered like bulk apply: primarily by timestamp, then
-    by CSV row order within each batch (see ``load_events_ordered_for_replay``).
-    Optionally override merge_mode for one bulk_import event id.
+    Events may set ``ignore_in_replay`` (e.g. mistaken clear). Merge modes are read
+    from each event record. Callers must pass events ordered like bulk apply (see
+    ``load_events_ordered_for_replay``).
     """
     running: Optional[float] = None
     for e in events_in_replay_order:
-        eid = e.get("id")
+        if e.get("ignore_in_replay"):
+            continue
         action = e.get("action", "set")
         source = e.get("source", "manual")
 
@@ -332,8 +334,6 @@ def recompute_actual_from_event_log(
                 continue
             inp = float(inp)
             mm = e.get("merge_mode")
-            if amended_event_id and eid == amended_event_id and amended_merge_mode is not None:
-                mm = amended_merge_mode
             if mm == "addition":
                 base = float(running) if running is not None else 0.0
                 running = base + inp
@@ -1595,45 +1595,80 @@ async def load_events_ordered_for_replay(flow_id: str, month: str) -> List[Dict[
 
 
 @api_router.patch("/flow-occurrences/history/{event_id}")
-async def correct_flow_occurrence_history_merge(
+async def patch_flow_occurrence_history_event(
     event_id: str,
-    body: FlowOccurrenceHistoryMergeCorrection,
+    body: FlowOccurrenceHistoryPatch,
     user: dict = Depends(get_optional_user),
 ):
-    """Correct whether a bulk-import line used Replace vs Add, then recompute the cell actual from full history."""
+    """Update bulk merge mode (Replace vs Add) and/or mark a mistaken clear so it is skipped on replay."""
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
+    if body.merge_mode is None and body.ignore_in_replay is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide merge_mode and/or ignore_in_replay",
+        )
+
     event = await db.flow_occurrence_events.find_one({"id": event_id}, {"_id": 0})
     if not event:
         raise HTTPException(status_code=404, detail="History event not found")
-    if event.get("source") != "bulk_import":
+
+    if body.merge_mode is not None and event.get("source") != "bulk_import":
         raise HTTPException(
             status_code=400,
-            detail="Only bulk import events can change merge mode / replace vs add",
+            detail="merge_mode applies only to bulk import events",
         )
-    current_mm = event.get("merge_mode")
-    if current_mm == body.merge_mode:
-        occ = await db.flow_occurrences.find_one(
-            {"flow_id": event["flow_id"], "month": event["month"]},
-            {"_id": 0, "actual_amount": 1},
+    if body.ignore_in_replay is not None and event.get("action") != "clear":
+        raise HTTPException(
+            status_code=400,
+            detail="ignore_in_replay applies only to Cleared events",
         )
-        return {
-            "status": "unchanged",
-            "actual_amount": (occ or {}).get("actual_amount"),
-            "merge_mode": body.merge_mode,
-        }
 
     flow_id = event["flow_id"]
     month = event["month"]
     if not is_valid_month_key(str(month)):
         raise HTTPException(status_code=400, detail="Invalid month on event record")
 
+    patch_updates: Dict[str, Any] = {}
+    if body.merge_mode is not None:
+        patch_updates["merge_mode"] = body.merge_mode
+    if body.ignore_in_replay is not None:
+        patch_updates["ignore_in_replay"] = body.ignore_in_replay
+
+    unchanged = True
+    if body.merge_mode is not None and event.get("merge_mode") != body.merge_mode:
+        unchanged = False
+    if body.ignore_in_replay is not None and bool(event.get("ignore_in_replay")) != bool(body.ignore_in_replay):
+        unchanged = False
+
+    if unchanged:
+        occ = await db.flow_occurrences.find_one(
+            {"flow_id": flow_id, "month": month},
+            {"_id": 0, "actual_amount": 1},
+        )
+        return {
+            "status": "unchanged",
+            "actual_amount": (occ or {}).get("actual_amount"),
+            **({"merge_mode": body.merge_mode} if body.merge_mode is not None else {}),
+            **({"ignore_in_replay": body.ignore_in_replay} if body.ignore_in_replay is not None else {}),
+        }
+
+    await db.flow_occurrence_events.update_one({"id": event_id}, {"$set": patch_updates})
+
+    row_id = event.get("batch_row_id")
+    if body.merge_mode is not None and row_id:
+        await db.actual_import_rows.update_one(
+            {"id": row_id},
+            {
+                "$set": {
+                    "actual_merge_mode": "addition" if body.merge_mode == "addition" else "override",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+
     all_events = await load_events_ordered_for_replay(flow_id, month)
-    new_actual = recompute_actual_from_event_log(
-        all_events,
-        amended_event_id=event_id,
-        amended_merge_mode=body.merge_mode,
-    )
+    new_actual = recompute_actual_from_event_log(all_events)
 
     prev_occ = await db.flow_occurrences.find_one(
         {"flow_id": flow_id, "month": month},
@@ -1657,28 +1692,12 @@ async def correct_flow_occurrence_history_merge(
             )
             await db.flow_occurrences.insert_one(occ.model_dump())
 
-    await db.flow_occurrence_events.update_one(
-        {"id": event_id},
-        {"$set": {"merge_mode": body.merge_mode}},
-    )
-
-    row_id = event.get("batch_row_id")
-    if row_id:
-        await db.actual_import_rows.update_one(
-            {"id": row_id},
-            {
-                "$set": {
-                    "actual_merge_mode": "addition" if body.merge_mode == "addition" else "override",
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
-            },
-        )
-
-    return {
-        "status": "ok",
-        "actual_amount": new_actual,
-        "merge_mode": body.merge_mode,
-    }
+    out: Dict[str, Any] = {"status": "ok", "actual_amount": new_actual}
+    if body.merge_mode is not None:
+        out["merge_mode"] = body.merge_mode
+    if body.ignore_in_replay is not None:
+        out["ignore_in_replay"] = body.ignore_in_replay
+    return out
 
 @api_router.get("/flow-occurrences/{flow_id}/history")
 async def get_flow_occurrence_history(

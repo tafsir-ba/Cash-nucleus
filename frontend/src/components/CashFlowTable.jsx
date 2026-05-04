@@ -162,6 +162,37 @@ const CellHistoryPanel = ({ flowId, month, refreshToken, onCorrected }) => {
                   <span className="text-zinc-500">· file: <span className="text-zinc-400 font-mono">{e.batch_filename}</span></span>
                 )}
               </div>
+              {e.action === "clear" && (
+                <label className="pl-[15px] mt-1.5 flex items-start gap-2 cursor-pointer text-[10px] text-zinc-500">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 rounded border-zinc-600"
+                    checked={!!e.ignore_in_replay}
+                    disabled={!!correctingId}
+                    onChange={async (ev) => {
+                      const v = ev.target.checked;
+                      setCorrectingId(e.id);
+                      try {
+                        await axios.patch(`${API}/flow-occurrences/history/${e.id}`, {
+                          ignore_in_replay: v,
+                        });
+                        toast.success(
+                          v
+                            ? "This clear is ignored when recalculating the actual from history"
+                            : "This clear is applied again when recalculating",
+                        );
+                        onCorrected?.();
+                      } catch (err) {
+                        toast.error(err.response?.data?.detail || "Could not update");
+                      } finally {
+                        setCorrectingId(null);
+                      }
+                    }}
+                    data-testid={`cell-history-ignore-clear-${e.id}`}
+                  />
+                  <span>Mistaken clear — ignore when recalculating actual from history</span>
+                </label>
+              )}
             </div>
           );
         })}
