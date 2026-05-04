@@ -284,6 +284,67 @@ class FlowOccurrenceEvent(BaseModel):
     actor_id: Optional[str] = None
     actor_email: Optional[str] = None
 
+class FlowOccurrenceHistoryMergeCorrection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    merge_mode: Literal["override", "addition"]
+
+
+def recompute_actual_from_event_log(
+    events: List[Dict[str, Any]],
+    amended_event_id: Optional[str] = None,
+    amended_merge_mode: Optional[str] = None,
+) -> Optional[float]:
+    """Replay cell history in time order; optionally override merge_mode for one bulk_import event."""
+    sorted_ev = sorted(
+        events,
+        key=lambda e: (e.get("timestamp") or "", e.get("id") or ""),
+    )
+    running: Optional[float] = None
+    for e in sorted_ev:
+        eid = e.get("id")
+        action = e.get("action", "set")
+        source = e.get("source", "manual")
+
+        if action == "clear":
+            running = None
+            continue
+
+        if source == "manual":
+            na = e.get("new_actual_amount")
+            if na is None:
+                running = None
+            else:
+                running = float(na)
+            continue
+
+        if source == "undo":
+            na = e.get("new_actual_amount")
+            if na is None:
+                running = None
+            else:
+                running = float(na)
+            continue
+
+        if source == "bulk_import":
+            inp = e.get("input_amount")
+            if inp is None:
+                continue
+            inp = float(inp)
+            mm = e.get("merge_mode")
+            if amended_event_id and eid == amended_event_id and amended_merge_mode is not None:
+                mm = amended_merge_mode
+            if mm == "addition":
+                base = float(running) if running is not None else 0.0
+                running = base + inp
+            else:
+                # override (or legacy null)
+                running = inp
+            continue
+
+    if running is not None and math.isfinite(running):
+        return round(running, 2)
+    return None
+
 class ActualImportRow(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -1497,6 +1558,97 @@ async def clear_flow_occurrence(flow_id: str, month: str, user: dict = Depends(g
     )
 
     return {"status": "ok"}
+
+@api_router.patch("/flow-occurrences/history/{event_id}")
+async def correct_flow_occurrence_history_merge(
+    event_id: str,
+    body: FlowOccurrenceHistoryMergeCorrection,
+    user: dict = Depends(get_optional_user),
+):
+    """Correct whether a bulk-import line used Replace vs Add, then recompute the cell actual from full history."""
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    event = await db.flow_occurrence_events.find_one({"id": event_id}, {"_id": 0})
+    if not event:
+        raise HTTPException(status_code=404, detail="History event not found")
+    if event.get("source") != "bulk_import":
+        raise HTTPException(
+            status_code=400,
+            detail="Only bulk import events can change merge mode / replace vs add",
+        )
+    current_mm = event.get("merge_mode")
+    if current_mm == body.merge_mode:
+        occ = await db.flow_occurrences.find_one(
+            {"flow_id": event["flow_id"], "month": event["month"]},
+            {"_id": 0, "actual_amount": 1},
+        )
+        return {
+            "status": "unchanged",
+            "actual_amount": (occ or {}).get("actual_amount"),
+            "merge_mode": body.merge_mode,
+        }
+
+    flow_id = event["flow_id"]
+    month = event["month"]
+    if not is_valid_month_key(str(month)):
+        raise HTTPException(status_code=400, detail="Invalid month on event record")
+
+    all_events = (
+        await db.flow_occurrence_events
+        .find({"flow_id": flow_id, "month": month}, {"_id": 0})
+        .sort([("timestamp", 1), ("id", 1)])
+        .to_list(5000)
+    )
+    new_actual = recompute_actual_from_event_log(
+        all_events,
+        amended_event_id=event_id,
+        amended_merge_mode=body.merge_mode,
+    )
+
+    prev_occ = await db.flow_occurrences.find_one(
+        {"flow_id": flow_id, "month": month},
+        {"_id": 0},
+    )
+    if new_actual is None:
+        if prev_occ:
+            await db.flow_occurrences.delete_one({"flow_id": flow_id, "month": month})
+    else:
+        if prev_occ:
+            await db.flow_occurrences.update_one(
+                {"flow_id": flow_id, "month": month},
+                {"$set": {"actual_amount": new_actual}},
+            )
+        else:
+            occ = FlowOccurrence(
+                flow_id=flow_id,
+                month=month,
+                actual_amount=new_actual,
+                variance_action=None,
+            )
+            await db.flow_occurrences.insert_one(occ.model_dump())
+
+    await db.flow_occurrence_events.update_one(
+        {"id": event_id},
+        {"$set": {"merge_mode": body.merge_mode}},
+    )
+
+    row_id = event.get("batch_row_id")
+    if row_id:
+        await db.actual_import_rows.update_one(
+            {"id": row_id},
+            {
+                "$set": {
+                    "actual_merge_mode": "addition" if body.merge_mode == "addition" else "override",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+
+    return {
+        "status": "ok",
+        "actual_amount": new_actual,
+        "merge_mode": body.merge_mode,
+    }
 
 @api_router.get("/flow-occurrences/{flow_id}/history")
 async def get_flow_occurrence_history(

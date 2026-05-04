@@ -42,10 +42,11 @@ const signedCHF = (val) => {
   return `${n < 0 ? "-" : ""}CHF ${formatCHF(n)}`;
 };
 
-const CellHistoryPanel = ({ flowId, month, refreshToken }) => {
+const CellHistoryPanel = ({ flowId, month, refreshToken, onCorrected }) => {
   const [events, setEvents] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [correctingId, setCorrectingId] = useState(null);
 
   useEffect(() => {
     if (!flowId || !month) return;
@@ -102,10 +103,36 @@ const CellHistoryPanel = ({ flowId, month, refreshToken }) => {
           const next = e.new_actual_amount;
           return (
             <div key={e.id} className="px-3 py-2 text-[11px] space-y-0.5" data-testid="cell-history-event">
-              <div className="flex items-center gap-1.5 text-zinc-400">
+              <div className="flex items-center gap-1.5 text-zinc-400 flex-wrap">
                 <Icon size={11} className={sourceColor} />
                 <span className={sourceTextColor}>{sourceLabel}</span>
-                {e.merge_mode && (
+                {isBulk && e.action === "set" && (
+                  <select
+                    aria-label="Bulk row merge mode"
+                    className="text-[9px] uppercase tracking-wider rounded bg-zinc-800 border border-zinc-700 px-1 py-[1px] text-zinc-300 max-w-[140px] cursor-pointer hover:border-zinc-600 disabled:opacity-50"
+                    value={e.merge_mode === "addition" ? "addition" : "override"}
+                    disabled={!!correctingId}
+                    onChange={async (ev) => {
+                      const nextMode = ev.target.value;
+                      setCorrectingId(e.id);
+                      try {
+                        await axios.patch(`${API}/flow-occurrences/history/${e.id}`, {
+                          merge_mode: nextMode,
+                        });
+                        toast.success("Recalculated actual from history using this merge mode");
+                        onCorrected?.();
+                      } catch (err) {
+                        toast.error(err.response?.data?.detail || "Could not update merge mode");
+                      } finally {
+                        setCorrectingId(null);
+                      }
+                    }}
+                  >
+                    <option value="override">Replace</option>
+                    <option value="addition">Add to current</option>
+                  </select>
+                )}
+                {!isBulk && e.merge_mode && (
                   <span className="text-[9px] uppercase tracking-wider rounded bg-zinc-800 px-1 py-[1px] text-zinc-400">
                     {e.merge_mode === "addition" ? "add" : "replace"}
                   </span>
@@ -364,6 +391,10 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
                 flowId={cellInfo.flowId}
                 month={cellInfo.month}
                 refreshToken={historyRefresh}
+                onCorrected={() => {
+                  setHistoryRefresh((n) => n + 1);
+                  onSave?.();
+                }}
               />
             )}
           </div>
