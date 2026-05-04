@@ -3,11 +3,11 @@ import axios from "axios";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import {
-  UploadSimple, CheckCircle, XCircle, ArrowClockwise, FolderOpen, CaretUp, CaretDown, ArrowsDownUp, Plus, MagnifyingGlass,
+  UploadSimple, CheckCircle, XCircle, ArrowClockwise, FolderOpen, CaretUp, CaretDown, ArrowsDownUp, Plus, MagnifyingGlass, WarningCircle,
 } from "@phosphor-icons/react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import {
-  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "../components/ui/dialog";
 import { Label } from "../components/ui/label";
 import { inspectAmountInput, formatAmountInput } from "./amountExpression";
@@ -144,6 +144,47 @@ const rowMatchesBulkReviewSearch = (row, needleLower, ctx) => {
   return buildBulkRowReviewSearchText(row, ctx).toLowerCase().includes(needleLower);
 };
 
+/**
+ * Included rows that did not record a new actual: failed, or skipped (idempotent / no change).
+ * Merges API error list for any row not already covered.
+ */
+const buildApplyReviewItems = (rows, applyResult) => {
+  const errorByRowId = {};
+  for (const e of applyResult?.errors || []) {
+    if (e?.row_id) errorByRowId[e.row_id] = e.error;
+  }
+  const items = [];
+  const seen = new Set();
+  for (const row of rows || []) {
+    if (!row.include) continue;
+    if (row.status === "failed" || row.status === "skipped") {
+      const isFail = row.status === "failed";
+      const reason = isFail
+        ? (row.error || errorByRowId[row.id] || "Unknown error")
+        : "No change — actual already matched planned (same value and variance mode).";
+      items.push({ row, reason, kind: isFail ? "failed" : "skipped" });
+      seen.add(row.id);
+    }
+  }
+  for (const e of applyResult?.errors || []) {
+    if (!e?.row_id || seen.has(e.row_id)) continue;
+    const row = (rows || []).find((r) => r.id === e.row_id);
+    if (row) {
+      items.push({ row, reason: e.error, kind: "failed" });
+    } else {
+      items.push({
+        row: { id: e.row_id, row_index: 0, month: "—", description: "—", amount: "—" },
+        reason: e.error,
+        kind: "failed",
+        orphan: true,
+      });
+    }
+    seen.add(e.row_id);
+  }
+  items.sort((a, b) => (a.row.row_index ?? 0) - (b.row.row_index ?? 0));
+  return items;
+};
+
 const SortHeader = ({ label, sortKey, activeKey, dir, onToggle, align = "left", testId }) => {
   const active = activeKey === sortKey;
   const Indicator = !active ? ArrowsDownUp : dir === "asc" ? CaretUp : CaretDown;
@@ -184,6 +225,8 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
   const [batchHistory, setBatchHistory] = useState([]);
   const [persistingRows, setPersistingRows] = useState({});
   const [applyResult, setApplyResult] = useState(null);
+  const [applyReviewOpen, setApplyReviewOpen] = useState(false);
+  const [applyReviewItems, setApplyReviewItems] = useState([]);
   const [rowFilter, setRowFilter] = useState("all");
   /** Filters the review table across visible columns (substring, case-insensitive). */
   const [reviewSearch, setReviewSearch] = useState("");
@@ -280,6 +323,8 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
       setRows(res.data.rows || []);
       setSelectedHistoryBatchId(res.data.batch?.id || "none");
       setApplyResult(null);
+      setApplyReviewOpen(false);
+      setApplyReviewItems([]);
       await fetchBatchHistory(entityId);
       toast.success(`Parsed ${res.data.batch.total_rows} rows`);
     } catch (err) {
@@ -364,18 +409,21 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
   };
 
   const reloadRows = async (batchId = batch?.id) => {
-    if (!batchId) return;
+    if (!batchId) return null;
     setLoadingRows(true);
     try {
       const [batchRes, rowsRes] = await Promise.all([
         axios.get(`${API}/actual-imports/${batchId}`),
         axios.get(`${API}/actual-imports/${batchId}/rows`),
       ]);
+      const list = rowsRes.data || [];
       setBatch(batchRes.data);
-      setRows(rowsRes.data || []);
+      setRows(list);
       setSelectedHistoryBatchId(batchId);
+      return list;
     } catch {
       toast.error("Failed to refresh import batch");
+      return null;
     } finally {
       setLoadingRows(false);
     }
@@ -385,6 +433,8 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     setSelectedHistoryBatchId(batchId);
     await reloadRows(batchId);
     setApplyResult(null);
+    setApplyReviewOpen(false);
+    setApplyReviewItems([]);
   };
 
   const applyAmountExpression = (row) => {
@@ -409,16 +459,27 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
       const res = await axios.post(`${API}/actual-imports/${batch.id}/apply`, {});
       setBatch((prev) => ({ ...prev, status: res.data.status || prev?.status }));
       setApplyResult(res.data);
+      onDataChange?.();
+      const refreshedRows = await reloadRows(batch.id);
+      const reviewItems = buildApplyReviewItems(refreshedRows || [], res.data);
+      if (reviewItems.length > 0) {
+        setApplyReviewItems(reviewItems);
+        setApplyReviewOpen(true);
+      } else {
+        setApplyReviewItems([]);
+        setApplyReviewOpen(false);
+      }
       if (res.data.status === "idempotent") {
         toast.success("Same batch payload already applied; no duplicate changes made.");
-      } else {
+      } else if (reviewItems.length > 0) {
         const applied = res.data.applied_rows || 0;
-        const skipped = res.data.skipped_rows || 0;
-        const failed = res.data.failed_rows || 0;
-        toast.success(`Applied ${applied} rows (${skipped} skipped, ${failed} failed).`);
+        toast.message(
+          `Apply finished: ${applied} row(s) updated. ${reviewItems.length} row(s) did not change or failed — see the dialog.`,
+          { duration: 6500 },
+        );
+      } else {
+        toast.success(`Applied ${res.data.applied_rows || 0} row(s).`);
       }
-      onDataChange?.();
-      await reloadRows(batch.id);
       await fetchBatchHistory(entityId);
     } catch (err) {
       toast.error(err.response?.data?.detail || "Failed to apply imported rows");
@@ -1306,20 +1367,77 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
               <XCircle size={14} /> Batch apply failed. Review row mappings and try again.
             </div>
           )}
-          {applyResult?.errors?.length > 0 && (
-            <div className="px-4 pb-4">
-              <p className="text-xs text-rose-300 mb-2">Apply errors (top {applyResult.errors.length}):</p>
-              <div className="max-h-24 overflow-auto rounded border border-rose-500/20 bg-rose-500/5 p-2">
-                {applyResult.errors.map((e) => (
-                  <div key={e.row_id} className="text-[11px] text-rose-300 font-mono">
-                    {e.row_id?.slice(0, 8)}… — {e.error}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </>
       )}
+
+      <Dialog open={applyReviewOpen} onOpenChange={setApplyReviewOpen}>
+        <DialogContent className="bg-zinc-900 border-zinc-800 max-w-3xl max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden" data-testid="bulk-apply-review-dialog">
+          <DialogHeader className="px-5 pt-5 pb-3 border-b border-zinc-800 shrink-0">
+            <DialogTitle className="text-zinc-100 font-heading text-sm tracking-wide uppercase flex items-center gap-2">
+              <WarningCircle size={20} className="text-amber-400 shrink-0" weight="fill" aria-hidden />
+              Rows not updated
+            </DialogTitle>
+            <DialogDescription className="text-xs text-zinc-500 space-y-1">
+              <span>
+                These lines were included in the run but did not record a new actual (failed) or were left unchanged because values already matched (skipped).
+              </span>
+              {applyResult?.discarded_rows > 0 && (
+                <span className="block text-zinc-600">
+                  {applyResult.discarded_rows} other line(s) were not part of this run (Use unchecked).
+                </span>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="overflow-auto px-3 py-2 min-h-0 flex-1">
+            <table className="w-full text-[11px]">
+              <thead className="sticky top-0 bg-zinc-900 z-[1]">
+                <tr className="text-left text-zinc-500 border-b border-zinc-800">
+                  <th className="py-2 pr-2 font-medium">#</th>
+                  <th className="py-2 pr-2 font-medium">Month</th>
+                  <th className="py-2 pr-2 font-medium min-w-[140px]">Description</th>
+                  <th className="py-2 pr-2 font-medium text-right">Amount</th>
+                  <th className="py-2 pr-2 font-medium min-w-[100px]">Flow</th>
+                  <th className="py-2 pr-2 font-medium">Type</th>
+                  <th className="py-2 font-medium min-w-[180px]">Why</th>
+                </tr>
+              </thead>
+              <tbody>
+                {applyReviewItems.map(({ row, reason, kind, orphan }) => (
+                  <tr key={row.id} className="border-b border-zinc-800/60 align-top">
+                    <td className="py-2 pr-2 font-mono text-zinc-500 tabular-nums">
+                      {orphan ? "—" : (row.row_index ?? 0) + 1}
+                    </td>
+                    <td className="py-2 pr-2 text-zinc-300 whitespace-nowrap">{row.month || "—"}</td>
+                    <td className="py-2 pr-2 text-zinc-300 max-w-[220px]">
+                      <span className="line-clamp-2" title={row.description}>{row.description || "—"}</span>
+                    </td>
+                    <td className="py-2 pr-2 text-right font-mono text-zinc-300 whitespace-nowrap">{row.amount ?? "—"}</td>
+                    <td className="py-2 pr-2 text-zinc-400 truncate max-w-[140px]" title={orphan ? "" : (flowLabelById[row.selected_flow_id] || (row.classification === "new_flow" ? "New line" : "Unmatched"))}>
+                      {orphan ? "—" : (flowLabelById[row.selected_flow_id] || (row.classification === "new_flow" ? "New line" : "Unmatched"))}
+                    </td>
+                    <td className="py-2 pr-2 whitespace-nowrap">
+                      <span className={kind === "failed" ? "text-rose-400" : "text-amber-400/90"}>
+                        {kind === "failed" ? "Failed" : "Skipped"}
+                      </span>
+                    </td>
+                    <td className="py-2 text-zinc-400">{reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <DialogFooter className="px-5 py-3 border-t border-zinc-800 bg-zinc-950/80 shrink-0">
+            <button
+              type="button"
+              className="btn-primary text-sm"
+              onClick={() => setApplyReviewOpen(false)}
+              data-testid="bulk-apply-review-dismiss"
+            >
+              Got it — fix in table
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={newFlowOpen} onOpenChange={setNewFlowOpen}>
         <DialogContent className="bg-zinc-900 border-zinc-800 sm:max-w-md">
