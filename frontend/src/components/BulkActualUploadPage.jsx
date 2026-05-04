@@ -51,6 +51,27 @@ const isUnmatchedRow = (row, scope) => {
   return !row.selected_flow_id;
 };
 
+/**
+ * Rows that should indent "Amount vs actual" (addition under replace), in table order.
+ * Same `selected_flow_id` groups rows; without a flow, each row is its own group.
+ */
+const mergeModeAddIndentRowIds = (rowsInOrder) => {
+  const ids = new Set();
+  const seenReplaceInFlow = new Map();
+  for (const row of rowsInOrder) {
+    const flowKey = row.selected_flow_id
+      ? String(row.selected_flow_id)
+      : `__row__${row.id}`;
+    const mode = row.actual_merge_mode || "override";
+    if (mode === "override") {
+      seenReplaceInFlow.set(flowKey, true);
+    } else if (mode === "addition" && seenReplaceInFlow.get(flowKey) === true) {
+      ids.add(row.id);
+    }
+  }
+  return ids;
+};
+
 const SortHeader = ({ label, sortKey, activeKey, dir, onToggle, align = "left", testId }) => {
   const active = activeKey === sortKey;
   const Indicator = !active ? ArrowsDownUp : dir === "asc" ? CaretUp : CaretDown;
@@ -519,6 +540,11 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, rowFilter, entityId, batch?.entity_id, sortKey, sortDir, entityNameById, flowLabelById]);
 
+  const mergeAddIndentIds = useMemo(
+    () => mergeModeAddIndentRowIds(visibleRows),
+    [visibleRows],
+  );
+
   return (
     <div className="surface-card w-full min-w-0" data-testid="bulk-actual-page">
       <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
@@ -716,6 +742,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                   const isInMultiGroup =
                     !!row.multi_edit && multiEditRowsOrdered.length > 1;
                   const isUnmatched = isUnmatchedRow(row, scope);
+                  const indentMergeAdd = mergeAddIndentIds.has(row.id);
                   return (
                     <tr
                       key={row.id}
@@ -936,7 +963,18 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                           {isSaving ? "Saving..." : row.error || row.status}
                         </div>
                       </td>
-                      <td className="px-2 py-2 align-top">
+                      <td
+                        className={`px-2 py-2 align-top ${
+                          indentMergeAdd
+                            ? "pl-3 border-l-2 border-l-sky-500/35 bg-sky-950/20"
+                            : ""
+                        }`}
+                        title={
+                          indentMergeAdd
+                            ? "Add to current: stacks on the Replace row above (same flow match)"
+                            : undefined
+                        }
+                      >
                         <Select
                           value={row.actual_merge_mode || "override"}
                           onValueChange={(v) => {
@@ -953,7 +991,10 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                             }
                           }}
                         >
-                          <SelectTrigger className="w-[140px] bg-zinc-950 border-zinc-800 h-[30px]" data-testid={`bulk-row-merge-${row.id}`}>
+                          <SelectTrigger
+                            className="w-[140px] max-w-full bg-zinc-950 border-zinc-800 h-[30px]"
+                            data-testid={`bulk-row-merge-${row.id}`}
+                          >
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
