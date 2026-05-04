@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import { toast } from "sonner";
 import { format } from "date-fns";
-import { UploadSimple, CheckCircle, XCircle, ArrowClockwise, FolderOpen, CaretUp, CaretDown, ArrowsDownUp, Plus } from "@phosphor-icons/react";
+import {
+  UploadSimple, CheckCircle, XCircle, ArrowClockwise, FolderOpen, CaretUp, CaretDown, ArrowsDownUp, Plus, MagnifyingGlass,
+} from "@phosphor-icons/react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
@@ -72,6 +74,76 @@ const mergeModeAddIndentRowIds = (rowsInOrder) => {
   return ids;
 };
 
+const REVENUE_CATEGORY = "Revenue";
+
+const bulkImportAmountNumber = (row, inspected) => {
+  if (inspected?.isValid && typeof inspected.value === "number" && Number.isFinite(inspected.value)) {
+    return inspected.value;
+  }
+  const n = parseFloat(String(row?.amount ?? "").replace(/[^0-9.\-]/g, ""));
+  return Number.isFinite(n) ? n : 0;
+};
+
+/** %-linked flows may have amount 0 in the API; match bank debit/credit via category vs Revenue. */
+const flowMatchesBulkImportDirection = (flow, rowAmountNum, entityEff) => {
+  if (flow.entity_id !== entityEff) return false;
+  const rowIsExpense = rowAmountNum < 0;
+  if (flow.is_percentage) {
+    const flowIsExpense = flow.category !== REVENUE_CATEGORY;
+    return flowIsExpense === rowIsExpense;
+  }
+  const a = typeof flow.amount === "number" ? flow.amount : parseFloat(flow.amount);
+  if (!Number.isFinite(a) || a === 0) return false;
+  return rowAmountNum >= 0 ? a > 0 : a < 0;
+};
+
+const mergeModeLabelLookup = Object.fromEntries(
+  mergeModeOptions.map((m) => [m.value, m.label]),
+);
+
+const buildBulkRowReviewSearchText = (row, ctx) => {
+  const {
+    entityNameById,
+    entityScope,
+    flowLabelById,
+    varianceLabelByValue,
+  } = ctx;
+  const entityIdEff = row.entity_id || entityScope || "";
+  const entityName = entityNameById[entityIdEff] || "";
+  const flowLabel = row.selected_flow_id
+    ? flowLabelById[row.selected_flow_id] || ""
+    : "Unmatched";
+  const mergeMode = row.actual_merge_mode || "override";
+  const varianceKey = row.variance_action || "actual_only";
+  const parts = [
+    String((row.row_index ?? 0) + 1),
+    row.include ? "included" : "excluded",
+    row.multi_edit ? "multi" : "",
+    entityName,
+    row.month,
+    row.description,
+    String(row.amount ?? ""),
+    row.category,
+    row.classification === "new_flow" ? "new line new_flow" : "existing line existing_flow",
+    flowLabel,
+    scoreLabel(row.match_score),
+    String(row.match_score ?? ""),
+    mergeMode,
+    mergeModeLabelLookup[mergeMode] || "",
+    varianceKey,
+    varianceLabelByValue[varianceKey] || "",
+    row.error || "",
+    row.status || "",
+    String(row.id || ""),
+  ];
+  return parts.join(" ");
+};
+
+const rowMatchesBulkReviewSearch = (row, needleLower, ctx) => {
+  if (!needleLower) return true;
+  return buildBulkRowReviewSearchText(row, ctx).toLowerCase().includes(needleLower);
+};
+
 const SortHeader = ({ label, sortKey, activeKey, dir, onToggle, align = "left", testId }) => {
   const active = activeKey === sortKey;
   const Indicator = !active ? ArrowsDownUp : dir === "asc" ? CaretUp : CaretDown;
@@ -113,6 +185,11 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
   const [persistingRows, setPersistingRows] = useState({});
   const [applyResult, setApplyResult] = useState(null);
   const [rowFilter, setRowFilter] = useState("all");
+  /** Filters the review table across visible columns (substring, case-insensitive). */
+  const [reviewSearch, setReviewSearch] = useState("");
+  useEffect(() => {
+    setReviewSearch("");
+  }, [batch?.id]);
   const [categories, setCategories] = useState(fallbackCategories);
   const [varianceActions, setVarianceActions] = useState(fallbackVarianceActions);
   const [selectedHistoryBatchId, setSelectedHistoryBatchId] = useState("none");
@@ -482,6 +559,11 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     setSortDir("asc");
   };
 
+  const varianceLabelByValue = useMemo(
+    () => Object.fromEntries(varianceActions.map((a) => [a.value, a.label])),
+    [varianceActions],
+  );
+
   const sortValueFor = (row, key) => {
     switch (key) {
       case "entity": {
@@ -523,6 +605,17 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     else if (rowFilter === "warnings") filtered = rows.filter((r) => r.status === "warning");
     else filtered = rows;
 
+    const needle = reviewSearch.trim().toLowerCase();
+    if (needle) {
+      const ctx = {
+        entityNameById,
+        entityScope: entityId || batch?.entity_id || "",
+        flowLabelById,
+        varianceLabelByValue,
+      };
+      filtered = filtered.filter((r) => rowMatchesBulkReviewSearch(r, needle, ctx));
+    }
+
     const fileOrder = (a, b) => (a.row_index ?? 0) - (b.row_index ?? 0);
     if (!sortKey) {
       return [...filtered].sort(fileOrder);
@@ -538,12 +631,84 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
       return fileOrder(a, b);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, rowFilter, entityId, batch?.entity_id, sortKey, sortDir, entityNameById, flowLabelById]);
+  }, [rows, rowFilter, entityId, batch?.entity_id, sortKey, sortDir, entityNameById, flowLabelById, reviewSearch, varianceLabelByValue]);
 
   const mergeAddIndentIds = useMemo(
     () => mergeModeAddIndentRowIds(visibleRows),
     [visibleRows],
   );
+
+  const bulkSetIncludeForVisible = async (includeVal) => {
+    if (!batch || visibleRows.length === 0) return;
+    const targets = visibleRows;
+    setPersistingRows((prev) => {
+      const next = { ...prev };
+      targets.forEach((r) => {
+        next[r.id] = true;
+      });
+      return next;
+    });
+    try {
+      const responses = await Promise.all(
+        targets.map((r) =>
+          axios.put(`${API}/actual-imports/${batch.id}/rows/${r.id}`, { include: includeVal }),
+        ),
+      );
+      setRows((prev) => {
+        const byId = {};
+        responses.forEach((res) => {
+          if (res.data?.id) byId[res.data.id] = res.data;
+        });
+        return prev.map((row) => (byId[row.id] ? { ...row, ...byId[row.id] } : row));
+      });
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to update include flags");
+    } finally {
+      setPersistingRows((prev) => {
+        const next = { ...prev };
+        targets.forEach((r) => {
+          delete next[r.id];
+        });
+        return next;
+      });
+    }
+  };
+
+  const bulkSetMultiForVisible = async (multiVal) => {
+    if (!batch || visibleRows.length === 0) return;
+    const targets = visibleRows;
+    setPersistingRows((prev) => {
+      const next = { ...prev };
+      targets.forEach((r) => {
+        next[r.id] = true;
+      });
+      return next;
+    });
+    try {
+      const responses = await Promise.all(
+        targets.map((r) =>
+          axios.put(`${API}/actual-imports/${batch.id}/rows/${r.id}`, { multi_edit: multiVal }),
+        ),
+      );
+      setRows((prev) => {
+        const byId = {};
+        responses.forEach((res) => {
+          if (res.data?.id) byId[res.data.id] = res.data;
+        });
+        return prev.map((row) => (byId[row.id] ? { ...row, ...byId[row.id] } : row));
+      });
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to update Multi flags");
+    } finally {
+      setPersistingRows((prev) => {
+        const next = { ...prev };
+        targets.forEach((r) => {
+          delete next[r.id];
+        });
+        return next;
+      });
+    }
+  };
 
   return (
     <div className="surface-card w-full min-w-0" data-testid="bulk-actual-page">
@@ -663,12 +828,12 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
             <span className="text-zinc-400">Variance</span> on <span className="text-zinc-300">any row that has Multi checked</span> (while two or more rows have Multi) updates every Multi-checked row. Description and amount stay per line.
           </div>
 
-          <div className="px-4 py-2 border-b border-zinc-800 flex items-center justify-between text-xs">
-            <div className="text-zinc-500 flex items-center gap-2">
-              <FolderOpen size={12} />
-              Review filter
+          <div className="px-4 py-2 border-b border-zinc-800 flex flex-wrap items-center gap-3 justify-between text-xs">
+            <div className="text-zinc-500 flex flex-wrap items-center gap-2 min-w-0">
+              <FolderOpen size={12} className="shrink-0" aria-hidden />
+              <span className="shrink-0">Review filter</span>
               {sortKey && (
-                <span className="ml-3 inline-flex items-center gap-1 rounded bg-zinc-800/70 px-2 py-[2px] text-[10px] text-zinc-300">
+                <span className="inline-flex items-center gap-1 rounded bg-zinc-800/70 px-2 py-[2px] text-[10px] text-zinc-300">
                   Sort: {sortColumnLabels[sortKey] || sortKey} ({sortDir === "asc" ? "ascending" : "descending"})
                   <button
                     type="button"
@@ -682,18 +847,40 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                 </span>
               )}
             </div>
-            <Select value={rowFilter} onValueChange={setRowFilter}>
-              <SelectTrigger className="w-[180px] bg-zinc-950 border-zinc-800 h-[30px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All rows</SelectItem>
-                <SelectItem value="included">Included only</SelectItem>
-                <SelectItem value="unmatched">Unmatched included</SelectItem>
-                <SelectItem value="warnings">Warnings</SelectItem>
-                <SelectItem value="failed">Failed</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="flex flex-wrap items-center gap-2 flex-1 justify-end min-w-[min(100%,280px)]">
+              <label htmlFor="bulk-review-search" className="sr-only">
+                Search rows across all columns
+              </label>
+              <div className="relative flex-1 min-w-[160px] max-w-md">
+                <MagnifyingGlass
+                  size={14}
+                  className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-zinc-500"
+                  aria-hidden
+                />
+                <input
+                  id="bulk-review-search"
+                  type="search"
+                  value={reviewSearch}
+                  onChange={(e) => setReviewSearch(e.target.value)}
+                  placeholder="Search all columns…"
+                  autoComplete="off"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-md pl-8 pr-3 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-600"
+                  data-testid="bulk-review-search"
+                />
+              </div>
+              <Select value={rowFilter} onValueChange={setRowFilter}>
+                <SelectTrigger className="w-[180px] bg-zinc-950 border-zinc-800 h-[30px] shrink-0" data-testid="bulk-row-filter">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All rows</SelectItem>
+                  <SelectItem value="included">Included only</SelectItem>
+                  <SelectItem value="unmatched">Unmatched included</SelectItem>
+                  <SelectItem value="warnings">Warnings</SelectItem>
+                  <SelectItem value="failed">Failed</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           <div className="overflow-x-auto overflow-y-auto max-h-[calc(100vh-240px)] min-h-[320px]">
@@ -706,12 +893,62 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                   >
                     #
                   </th>
-                  <th className="text-left px-2 py-2 text-zinc-500">Use</th>
+                  <th className="align-top text-left px-2 py-2 text-zinc-500">
+                    <div className="flex flex-col gap-1.5 min-w-[4.75rem]">
+                      <span>Use</span>
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          type="button"
+                          className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:pointer-events-none"
+                          disabled={visibleRows.length === 0}
+                          onClick={() => bulkSetIncludeForVisible(true)}
+                          aria-label="Include all visible rows in apply"
+                          data-testid="bulk-use-select-all"
+                        >
+                          All
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:pointer-events-none"
+                          disabled={visibleRows.length === 0}
+                          onClick={() => bulkSetIncludeForVisible(false)}
+                          aria-label="Exclude all visible rows from apply"
+                          data-testid="bulk-use-select-none"
+                        >
+                          None
+                        </button>
+                      </div>
+                    </div>
+                  </th>
                   <th
-                    className="text-left px-2 py-2 text-zinc-500"
+                    className="align-top text-left px-2 py-2 text-zinc-500"
                     title="Bulk-edit group: check Multi on rows that receive the same field changes when you edit Entity, Month, etc. on any Multi-checked row"
                   >
-                    Multi
+                    <div className="flex flex-col gap-1.5 min-w-[4.75rem]">
+                      <span>Multi</span>
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          type="button"
+                          className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:pointer-events-none"
+                          disabled={visibleRows.length === 0}
+                          onClick={() => bulkSetMultiForVisible(true)}
+                          aria-label="Turn on Multi for all visible rows"
+                          data-testid="bulk-multi-select-all"
+                        >
+                          All
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:pointer-events-none"
+                          disabled={visibleRows.length === 0}
+                          onClick={() => bulkSetMultiForVisible(false)}
+                          aria-label="Turn off Multi for all visible rows"
+                          data-testid="bulk-multi-select-none"
+                        >
+                          None
+                        </button>
+                      </div>
+                    </div>
                   </th>
                   <SortHeader label="Entity"           sortKey="entity"        activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-entity" />
                   <SortHeader label="Month"            sortKey="month"         activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-month" />
@@ -730,12 +967,11 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                   const rowEntityEffective =
                     row.entity_id || entityId || batch?.entity_id || entities[0]?.id || "";
                   const scope = entityId || batch?.entity_id;
-                  const flowOptions = allFlows.filter(
-                    (f) =>
-                      f.entity_id === rowEntityEffective &&
-                      (row.amount >= 0 ? f.amount > 0 : f.amount < 0),
-                  );
                   const inspected = inspectAmountInput(row.amount);
+                  const amtNum = bulkImportAmountNumber(row, inspected);
+                  const flowOptions = allFlows.filter((f) =>
+                    flowMatchesBulkImportDirection(f, amtNum, rowEntityEffective),
+                  );
                   const isSaving = !!persistingRows[row.id];
                   const classification = row.classification || "existing_flow";
                   const isNewLine = classification === "new_flow";

@@ -2358,6 +2358,50 @@ def expand_recurring_flows(flows: List[dict], start_date: date, end_date: date) 
     
     return expanded
 
+
+def recompute_percentage_child_amounts_from_parent(
+    expanded: List[dict],
+    flows_by_id: Dict[str, dict],
+    actuals_map: Dict[tuple, float],
+) -> None:
+    """After overlaying explicit actuals on parents, derive % child amounts per month.
+
+    Template amounts for percentage-linked flows can be 0 or stale; once the parent cell
+    has an effective amount (including recorded actuals), children without their own
+    occurrence track the parent's month amount × percentage.
+    """
+    effective: Dict[tuple, float] = {}
+    for ef in expanded:
+        fid = ef.get("flow_id", "")
+        if not fid:
+            continue
+        mkey = ef["date"].strftime("%Y-%m")
+        effective[(fid, mkey)] = ef["amount"]
+
+    for ef in expanded:
+        fid = ef.get("flow_id", "")
+        if not fid:
+            continue
+        fm = flows_by_id.get(fid)
+        if not fm or not fm.get("is_percentage") or not fm.get("parent_id"):
+            continue
+        mkey = ef["date"].strftime("%Y-%m")
+        if actuals_map.get((fid, mkey)) is not None:
+            continue
+        pid = fm["parent_id"]
+        pct = fm.get("percentage_of_parent")
+        if pct is None:
+            continue
+        parent_amt = effective.get((pid, mkey))
+        if parent_amt is None:
+            continue
+        computed_abs = abs(parent_amt) * float(pct) / 100.0
+        cat = fm.get("category", Category.EXPENSE.value)
+        new_amt = normalize_amount_for_category(cat, computed_abs)
+        ef["amount"] = new_amt
+        effective[(fid, mkey)] = new_amt
+
+
 def get_certainty_levels(scenario: str) -> List[str]:
     return {
         "committed": ["Materialized"],
@@ -2539,7 +2583,10 @@ async def get_projection(
         mkey = ef["date"].strftime("%Y-%m")
         if (fid, mkey) in actuals_map:
             ef["amount"] = actuals_map[(fid, mkey)]
-    
+
+    flows_by_id = {f.get("id", ""): f for f in filtered if f.get("id")}
+    recompute_percentage_child_amounts_from_parent(expanded, flows_by_id, actuals_map)
+
     # Group by month
     months_data = {}
     for i in range(total_months):
@@ -2697,7 +2744,10 @@ async def get_projection_matrix(
         mkey = ef["date"].strftime("%Y-%m")
         if (fid, mkey) in actuals_map:
             ef["amount"] = actuals_map[(fid, mkey)]
-    
+
+    flows_by_id = {f.get("id", ""): f for f in filtered if f.get("id")}
+    recompute_percentage_child_amounts_from_parent(expanded, flows_by_id, actuals_map)
+
     # Build month keys
     month_keys = []
     for i in range(total_months):
