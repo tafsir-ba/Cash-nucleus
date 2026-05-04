@@ -200,6 +200,62 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     }
   };
 
+  /** Included rows in apply (#) order; first row is the multi-edit anchor. */
+  const includedRowsOrdered = useMemo(
+    () =>
+      [...rows].filter((r) => r.include).sort((a, b) => (a.row_index ?? 0) - (b.row_index ?? 0)),
+    [rows],
+  );
+
+  const includedRowIds = useMemo(
+    () => new Set(includedRowsOrdered.map((r) => r.id)),
+    [includedRowsOrdered],
+  );
+
+  const anchorRowId = includedRowsOrdered[0]?.id ?? null;
+
+  const shouldBulkEdit = (rowId) =>
+    includedRowsOrdered.length > 1 && rowId === anchorRowId;
+
+  /** When several rows are included (Use), edits on the anchor row update every included row. */
+  const persistFromAnchorRow = async (rowId, patch) => {
+    if (!batch) return;
+    if (!shouldBulkEdit(rowId)) {
+      await persistRowPatch(rowId, patch);
+      return;
+    }
+    const targets = includedRowsOrdered;
+    setPersistingRows((prev) => {
+      const next = { ...prev };
+      targets.forEach((r) => {
+        next[r.id] = true;
+      });
+      return next;
+    });
+    try {
+      const responses = await Promise.all(
+        targets.map((r) => axios.put(`${API}/actual-imports/${batch.id}/rows/${r.id}`, patch)),
+      );
+      setRows((prev) => {
+        const byId = {};
+        responses.forEach((res) => {
+          if (res.data?.id) byId[res.data.id] = res.data;
+        });
+        return prev.map((row) => (byId[row.id] ? { ...row, ...byId[row.id] } : row));
+      });
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to save row edits");
+    } finally {
+      setPersistingRows((prev) => {
+        const next = { ...prev };
+        targets.forEach((r) => {
+          delete next[r.id];
+        });
+        return next;
+      });
+    }
+  };
+
   const reloadRows = async (batchId = batch?.id) => {
     if (!batchId) return;
     setLoadingRows(true);
@@ -573,6 +629,13 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
             <span className="text-zinc-500">Sorting columns reorders this review table only — rows always apply in their original file order (the <span className="text-zinc-400">#</span> column).</span>
           </div>
 
+          <div className="px-4 py-2 border-b border-zinc-800 text-[11px] text-zinc-500">
+            <span className="text-zinc-400">Multi-edit:</span> when two or more rows are checked in <span className="text-zinc-400">Use</span>, change{" "}
+            <span className="text-zinc-400">Entity</span>, <span className="text-zinc-400">Month</span>, <span className="text-zinc-400">Category</span>,{" "}
+            <span className="text-zinc-400">Actual target</span>, <span className="text-zinc-400">Flow match</span>, <span className="text-zinc-400">Amount vs actual</span>, or{" "}
+            <span className="text-zinc-400">Variance</span> on the <span className="text-zinc-300">first included row</span> (lowest <span className="text-zinc-400">#</span> among checked rows) to update every checked row. Description and amount stay per line.
+          </div>
+
           <div className="px-4 py-2 border-b border-zinc-800 flex items-center justify-between text-xs">
             <div className="text-zinc-500 flex items-center gap-2">
               <FolderOpen size={12} />
@@ -642,8 +705,16 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                   const isSaving = !!persistingRows[row.id];
                   const classification = row.classification || "existing_flow";
                   const isNewLine = classification === "new_flow";
+                  const isMultiEditAnchor =
+                    includedRowsOrdered.length > 1 && row.id === anchorRowId;
                   return (
-                    <tr key={row.id} className="border-b border-zinc-800/50">
+                    <tr
+                      key={row.id}
+                      className={`border-b border-zinc-800/50 ${
+                        isMultiEditAnchor ? "bg-zinc-800/25" : ""
+                      }`}
+                      title={isMultiEditAnchor ? "Multi-edit leader: changes here apply to all checked (Use) rows" : undefined}
+                    >
                       <td
                         className="px-2 py-2 align-top text-[11px] text-zinc-500 font-mono tabular-nums"
                         title="Apply order (file order). Independent of the visual sort above."
@@ -665,8 +736,16 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                         <Select
                           value={rowEntityEffective}
                           onValueChange={(v) => {
-                            updateRowLocal(row.id, { entity_id: v, selected_flow_id: null });
-                            persistRowPatch(row.id, { entity_id: v, selected_flow_id: null });
+                            const patch = { entity_id: v, selected_flow_id: null };
+                            if (shouldBulkEdit(row.id)) {
+                              setRows((prev) =>
+                                prev.map((r) => (includedRowIds.has(r.id) ? { ...r, ...patch } : r)),
+                              );
+                              persistFromAnchorRow(row.id, patch);
+                            } else {
+                              updateRowLocal(row.id, patch);
+                              persistRowPatch(row.id, patch);
+                            }
                           }}
                         >
                           <SelectTrigger className="w-[140px] bg-zinc-950 border-zinc-800 h-[30px]" data-testid={`bulk-row-entity-${row.id}`}>
@@ -685,8 +764,17 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                         <input
                           type="month"
                           value={row.month}
-                          onChange={(e) => updateRowLocal(row.id, { month: e.target.value })}
-                          onBlur={(e) => persistRowPatch(row.id, { month: e.target.value })}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (shouldBulkEdit(row.id)) {
+                              setRows((prev) =>
+                                prev.map((r) => (includedRowIds.has(r.id) ? { ...r, month: v } : r)),
+                              );
+                            } else {
+                              updateRowLocal(row.id, { month: v });
+                            }
+                          }}
+                          onBlur={(e) => persistFromAnchorRow(row.id, { month: e.target.value })}
                           className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-100"
                         />
                       </td>
@@ -720,8 +808,15 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                       </td>
                       <td className="px-2 py-2 align-top">
                         <Select value={row.category} onValueChange={(v) => {
-                          updateRowLocal(row.id, { category: v });
-                          persistRowPatch(row.id, { category: v });
+                          if (shouldBulkEdit(row.id)) {
+                            setRows((prev) =>
+                              prev.map((r) => (includedRowIds.has(r.id) ? { ...r, category: v } : r)),
+                            );
+                            persistFromAnchorRow(row.id, { category: v });
+                          } else {
+                            updateRowLocal(row.id, { category: v });
+                            persistRowPatch(row.id, { category: v });
+                          }
                         }}>
                           <SelectTrigger className="w-[120px] bg-zinc-950 border-zinc-800 h-[30px]">
                             <SelectValue />
@@ -743,8 +838,15 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                               v === "new_flow"
                                 ? { classification: "new_flow", selected_flow_id: null }
                                 : { classification: "existing_flow" };
-                            updateRowLocal(row.id, payload);
-                            persistRowPatch(row.id, payload);
+                            if (shouldBulkEdit(row.id)) {
+                              setRows((prev) =>
+                                prev.map((r) => (includedRowIds.has(r.id) ? { ...r, ...payload } : r)),
+                              );
+                              persistFromAnchorRow(row.id, payload);
+                            } else {
+                              updateRowLocal(row.id, payload);
+                              persistRowPatch(row.id, payload);
+                            }
                           }}
                         >
                           <SelectTrigger className="w-[160px] bg-zinc-950 border-zinc-800 h-[30px]" data-testid={`bulk-classify-${row.id}`}>
@@ -762,8 +864,16 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                           disabled={isNewLine}
                           onValueChange={(v) => {
                             const next = v === "none" ? null : v;
-                            updateRowLocal(row.id, { selected_flow_id: next, classification: "existing_flow" });
-                            persistRowPatch(row.id, { selected_flow_id: next, classification: "existing_flow" });
+                            const payload = { selected_flow_id: next, classification: "existing_flow" };
+                            if (shouldBulkEdit(row.id)) {
+                              setRows((prev) =>
+                                prev.map((r) => (includedRowIds.has(r.id) ? { ...r, ...payload } : r)),
+                              );
+                              persistFromAnchorRow(row.id, payload);
+                            } else {
+                              updateRowLocal(row.id, payload);
+                              persistRowPatch(row.id, payload);
+                            }
                           }}
                         >
                           <SelectTrigger className="w-[220px] bg-zinc-950 border-zinc-800 h-[30px]">
@@ -793,8 +903,17 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                         <Select
                           value={row.actual_merge_mode || "override"}
                           onValueChange={(v) => {
-                            updateRowLocal(row.id, { actual_merge_mode: v });
-                            persistRowPatch(row.id, { actual_merge_mode: v });
+                            if (shouldBulkEdit(row.id)) {
+                              setRows((prev) =>
+                                prev.map((r) =>
+                                  includedRowIds.has(r.id) ? { ...r, actual_merge_mode: v } : r,
+                                ),
+                              );
+                              persistFromAnchorRow(row.id, { actual_merge_mode: v });
+                            } else {
+                              updateRowLocal(row.id, { actual_merge_mode: v });
+                              persistRowPatch(row.id, { actual_merge_mode: v });
+                            }
                           }}
                         >
                           <SelectTrigger className="w-[140px] bg-zinc-950 border-zinc-800 h-[30px]" data-testid={`bulk-row-merge-${row.id}`}>
@@ -813,8 +932,17 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                         <Select
                           value={row.variance_action || "actual_only"}
                           onValueChange={(v) => {
-                            updateRowLocal(row.id, { variance_action: v });
-                            persistRowPatch(row.id, { variance_action: v });
+                            if (shouldBulkEdit(row.id)) {
+                              setRows((prev) =>
+                                prev.map((r) =>
+                                  includedRowIds.has(r.id) ? { ...r, variance_action: v } : r,
+                                ),
+                              );
+                              persistFromAnchorRow(row.id, { variance_action: v });
+                            } else {
+                              updateRowLocal(row.id, { variance_action: v });
+                              persistRowPatch(row.id, { variance_action: v });
+                            }
                           }}
                         >
                           <SelectTrigger className="w-[160px] bg-zinc-950 border-zinc-800 h-[30px]">
