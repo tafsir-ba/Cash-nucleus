@@ -200,7 +200,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     }
   };
 
-  /** Rows with Multi checked, in file (#) order; first is the multi-edit leader. */
+  /** Rows with Multi checked, in file (#) order (used for stable apply + API batch order). */
   const multiEditRowsOrdered = useMemo(
     () =>
       [...rows]
@@ -214,12 +214,11 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     [multiEditRowsOrdered],
   );
 
-  const anchorRowId = multiEditRowsOrdered[0]?.id ?? null;
-
+  /** True when this row has Multi on and there are at least two Multi rows — edits propagate to the whole group. */
   const shouldBulkEdit = (rowId) =>
-    multiEditRowsOrdered.length > 1 && rowId === anchorRowId;
+    multiEditRowsOrdered.length > 1 && multiEditRowIds.has(rowId);
 
-  /** When several rows have Multi checked, edits on the first such row update all Multi rows. */
+  /** When several rows have Multi checked, edits on any such row update all Multi rows. */
   const persistFromAnchorRow = async (rowId, patch) => {
     if (!batch) return;
     if (!shouldBulkEdit(rowId)) {
@@ -636,7 +635,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
             <span className="text-zinc-400">Multi</span> groups rows for bulk field edits: with two or more <span className="text-zinc-400">Multi</span> rows, changing{" "}
             <span className="text-zinc-400">Entity</span>, <span className="text-zinc-400">Month</span>, <span className="text-zinc-400">Category</span>,{" "}
             <span className="text-zinc-400">Actual target</span>, <span className="text-zinc-400">Flow match</span>, <span className="text-zinc-400">Amount vs actual</span>, or{" "}
-            <span className="text-zinc-400">Variance</span> on the <span className="text-zinc-300">first Multi row</span> (lowest <span className="text-zinc-400">#</span> among Multi-checked rows) updates every Multi-checked row. Description and amount stay per line.
+            <span className="text-zinc-400">Variance</span> on <span className="text-zinc-300">any row that has Multi checked</span> (while two or more rows have Multi) updates every Multi-checked row. Description and amount stay per line.
           </div>
 
           <div className="px-4 py-2 border-b border-zinc-800 flex items-center justify-between text-xs">
@@ -685,7 +684,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                   <th className="text-left px-2 py-2 text-zinc-500">Use</th>
                   <th
                     className="text-left px-2 py-2 text-zinc-500"
-                    title="Bulk-edit group: check Multi on rows that should receive the same field changes from the first Multi row (#)"
+                    title="Bulk-edit group: check Multi on rows that receive the same field changes when you edit Entity, Month, etc. on any Multi-checked row"
                   >
                     Multi
                   </th>
@@ -714,15 +713,19 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                   const isSaving = !!persistingRows[row.id];
                   const classification = row.classification || "existing_flow";
                   const isNewLine = classification === "new_flow";
-                  const isMultiEditAnchor =
-                    multiEditRowsOrdered.length > 1 && row.id === anchorRowId;
+                  const isInMultiGroup =
+                    !!row.multi_edit && multiEditRowsOrdered.length > 1;
                   return (
                     <tr
                       key={row.id}
                       className={`border-b border-zinc-800/50 ${
-                        isMultiEditAnchor ? "bg-zinc-800/25" : ""
+                        isInMultiGroup ? "bg-zinc-800/25" : ""
                       }`}
-                      title={isMultiEditAnchor ? "Multi leader: field changes here apply to all Multi-checked rows" : undefined}
+                      title={
+                        isInMultiGroup
+                          ? "Multi group: changing Entity, Month, Category, etc. on this row updates all Multi-checked rows"
+                          : undefined
+                      }
                     >
                       <td
                         className="px-2 py-2 align-top text-[11px] text-zinc-500 font-mono tabular-nums"
