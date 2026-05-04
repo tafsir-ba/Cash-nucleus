@@ -1,8 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import { toast } from "sonner";
-import { UploadSimple, CheckCircle, XCircle, ArrowClockwise, FolderOpen, CaretUp, CaretDown, ArrowsDownUp } from "@phosphor-icons/react";
+import { format } from "date-fns";
+import { UploadSimple, CheckCircle, XCircle, ArrowClockwise, FolderOpen, CaretUp, CaretDown, ArrowsDownUp, Plus } from "@phosphor-icons/react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+} from "../components/ui/dialog";
+import { Label } from "../components/ui/label";
 import { inspectAmountInput, formatAmountInput } from "./amountExpression";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
@@ -63,7 +68,7 @@ const SortHeader = ({ label, sortKey, activeKey, dir, onToggle, align = "left", 
   );
 };
 
-export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
+export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefreshKey = 0 }) => {
   const [entityId, setEntityId] = useState("");
   const [file, setFile] = useState(null);
   const [batch, setBatch] = useState(null);
@@ -88,6 +93,13 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
   // stay deterministic regardless of how the user arranges the table.
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState("asc");
+  const [newFlowOpen, setNewFlowOpen] = useState(false);
+  const [newFlowLabel, setNewFlowLabel] = useState("");
+  const [newFlowEntityId, setNewFlowEntityId] = useState("");
+  const [newFlowCategory, setNewFlowCategory] = useState("Expense");
+  const [newFlowMonth, setNewFlowMonth] = useState(() => format(new Date(), "yyyy-MM"));
+  const [newFlowApplyAll, setNewFlowApplyAll] = useState(false);
+  const [creatingFlow, setCreatingFlow] = useState(false);
 
   useEffect(() => {
     if (!entityId && entities.length > 0) {
@@ -95,12 +107,16 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
     }
   }, [entities, entityId]);
 
-  useEffect(() => {
+  const loadAllFlows = useCallback(() => {
     axios
       .get(`${API}/cash-flows`)
       .then((res) => setAllFlows(Array.isArray(res.data) ? res.data : []))
       .catch(() => setAllFlows([]));
   }, []);
+
+  useEffect(() => {
+    loadAllFlows();
+  }, [loadAllFlows, flowsRefreshKey]);
 
   useEffect(() => {
     axios
@@ -260,6 +276,84 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
       toast.error("Failed to discard batch");
     } finally {
       setDiscarding(false);
+    }
+  };
+
+  const openNewFlowDialog = () => {
+    setNewFlowEntityId(entityId || entities[0]?.id || "");
+    setNewFlowMonth(rows[0]?.month || format(new Date(), "yyyy-MM"));
+    setNewFlowLabel("");
+    setNewFlowApplyAll(false);
+    setNewFlowOpen(true);
+  };
+
+  const createFlowLineFromBulk = async () => {
+    const label = newFlowLabel.trim();
+    if (!label) {
+      toast.error("Enter a label for the new line");
+      return;
+    }
+    const ent = newFlowEntityId || entityId;
+    if (!ent) {
+      toast.error("Select an entity");
+      return;
+    }
+    const month = newFlowMonth || format(new Date(), "yyyy-MM");
+    const dateStr = `${month}-01`;
+    setCreatingFlow(true);
+    try {
+      const res = await axios.post(`${API}/cash-flows`, {
+        label,
+        amount: 1,
+        date: dateStr,
+        category: newFlowCategory,
+        certainty: "Materialized",
+        recurrence: "none",
+        entity_id: ent,
+      });
+      const created = res.data;
+      loadAllFlows();
+      onDataChange?.();
+
+      if (newFlowApplyAll && batch?.id && created?.id) {
+        const toPatch = rows.filter(
+          (r) =>
+            r.include &&
+            (r.entity_id || entityId || batch?.entity_id) === ent
+        );
+        await Promise.all(
+          toPatch.map((row) =>
+            axios.put(`${API}/actual-imports/${batch.id}/rows/${row.id}`, {
+              selected_flow_id: created.id,
+              classification: "existing_flow",
+            })
+          )
+        );
+        setRows((prev) =>
+          prev.map((row) => {
+            if (!row.include) return row;
+            if ((row.entity_id || entityId || batch?.entity_id) !== ent) return row;
+            return {
+              ...row,
+              selected_flow_id: created.id,
+              classification: "existing_flow",
+            };
+          })
+        );
+      }
+
+      toast.success(
+        newFlowApplyAll && batch
+          ? `Created "${created.label}" and set Flow match on included rows for this entity`
+          : `Created flow line "${created.label}"`
+      );
+      setNewFlowOpen(false);
+      setNewFlowLabel("");
+      setNewFlowApplyAll(false);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Could not create flow line");
+    } finally {
+      setCreatingFlow(false);
     }
   };
 
@@ -454,6 +548,22 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
             {batch.id && (
               <span className="text-zinc-500">Batch ID: <span className="text-zinc-400 font-mono">{batch.id.slice(0, 8)}…</span></span>
             )}
+          </div>
+
+          <div className="px-4 py-2 border-b border-zinc-800 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={openNewFlowDialog}
+              className="btn-secondary text-xs inline-flex items-center gap-1 shrink-0"
+              data-testid="bulk-new-flow-line"
+            >
+              <Plus size={14} aria-hidden />
+              New flow line for matching
+            </button>
+            <p className="text-[10px] text-zinc-600 leading-snug max-w-2xl">
+              The Flow match list stays in sync when you add or edit cash lines elsewhere. Create a line here to add it to the dropdowns for this entity
+              (debits match expense-style lines; credits match revenue-style lines).
+            </p>
           </div>
 
           <div className="px-4 py-2 border-b border-zinc-800 text-[11px] text-zinc-600">
@@ -768,6 +878,98 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack }) => {
           )}
         </>
       )}
+
+      <Dialog open={newFlowOpen} onOpenChange={setNewFlowOpen}>
+        <DialogContent className="bg-zinc-900 border-zinc-800 sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-zinc-100 font-heading text-sm tracking-wide uppercase">
+              New cash flow line
+            </DialogTitle>
+            <DialogDescription className="text-zinc-500 text-xs">
+              Creates a real cash flow row you can map bank lines to. Pick Revenue for inflows, or another category for outflows.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 pt-2">
+            <div>
+              <Label className="text-xs text-zinc-500 mb-1 block">Label</Label>
+              <input
+                type="text"
+                value={newFlowLabel}
+                onChange={(e) => setNewFlowLabel(e.target.value)}
+                placeholder="e.g. Swisscom, Rent"
+                className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100"
+                data-testid="bulk-new-flow-label"
+              />
+            </div>
+            <div>
+              <Label className="text-xs text-zinc-500 mb-1 block">Entity</Label>
+              <Select value={newFlowEntityId} onValueChange={setNewFlowEntityId}>
+                <SelectTrigger className="bg-zinc-950 border-zinc-800 h-[38px]">
+                  <SelectValue placeholder="Entity" />
+                </SelectTrigger>
+                <SelectContent>
+                  {entities.map((e) => (
+                    <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs text-zinc-500 mb-1 block">Category (sign)</Label>
+              <Select value={newFlowCategory} onValueChange={setNewFlowCategory}>
+                <SelectTrigger className="bg-zinc-950 border-zinc-800 h-[38px]" data-testid="bulk-new-flow-category">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {categories.map((c) => (
+                    <SelectItem key={c} value={c}>{c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[10px] text-zinc-600 mt-1">
+                Revenue lines are positive (credits); other categories are negative (debits), matching the Flow match column filters.
+              </p>
+            </div>
+            <div>
+              <Label className="text-xs text-zinc-500 mb-1 block">Start month</Label>
+              <input
+                type="month"
+                value={newFlowMonth}
+                onChange={(e) => setNewFlowMonth(e.target.value)}
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-zinc-100 text-sm"
+              />
+            </div>
+            {batch && (
+              <label className="flex items-start gap-2 text-xs text-zinc-400 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newFlowApplyAll}
+                  onChange={(e) => setNewFlowApplyAll(e.target.checked)}
+                  className="mt-0.5 rounded border-zinc-700"
+                  data-testid="bulk-new-flow-apply-all"
+                />
+                <span>
+                  Set Flow match to this new line for all included rows for this entity (same entity column as above).
+                </span>
+              </label>
+            )}
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" className="btn-secondary text-xs" onClick={() => setNewFlowOpen(false)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary text-xs"
+                disabled={creatingFlow}
+                onClick={createFlowLineFromBulk}
+                data-testid="bulk-new-flow-submit"
+              >
+                {creatingFlow ? "Creating…" : "Create line"}
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

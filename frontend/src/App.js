@@ -86,6 +86,8 @@ function Dashboard({ user, onLogout }) {
   // Tab state + flows for table
   const [activeTab, setActiveTab] = useState("chart"); // "chart" | "table" | "entries" | "bulk_actuals"
   const [allFlows, setAllFlows] = useState([]);
+  /** Bumps when any screen mutates cash flows so Bulk Actuals can refetch the flow match list. */
+  const [dataRevision, setDataRevision] = useState(0);
   
   // Undo state
   const [undoInfo, setUndoInfo] = useState(null);
@@ -179,19 +181,17 @@ function Dashboard({ user, onLogout }) {
     }
   }, [selectedMonth, fetchMonthDetails]);
 
-  const handleCashFlowAdded = () => {
-    fetchProjection();
-    checkData();
-    checkUndo();
-    if (selectedMonth) fetchMonthDetails(selectedMonth);
-    toast.success("Added");
-  };
-
   const handleDataChange = () => {
     fetchProjection();
     checkData();
     checkUndo();
+    setDataRevision((r) => r + 1);
     if (selectedMonth) fetchMonthDetails(selectedMonth);
+  };
+
+  const handleCashFlowAdded = () => {
+    handleDataChange();
+    toast.success("Added");
   };
 
   const handleMonthSelect = (month) => {
@@ -437,6 +437,7 @@ function Dashboard({ user, onLogout }) {
             <BulkActualUploadPage
               entities={entities}
               onDataChange={handleDataChange}
+              flowsRefreshKey={dataRevision}
               onBack={() => setActiveTab("chart")}
             />
           </section>
