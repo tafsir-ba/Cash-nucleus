@@ -200,31 +200,33 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     }
   };
 
-  /** Included rows in apply (#) order; first row is the multi-edit anchor. */
-  const includedRowsOrdered = useMemo(
+  /** Rows with Multi checked, in file (#) order; first is the multi-edit leader. */
+  const multiEditRowsOrdered = useMemo(
     () =>
-      [...rows].filter((r) => r.include).sort((a, b) => (a.row_index ?? 0) - (b.row_index ?? 0)),
+      [...rows]
+        .filter((r) => !!r.multi_edit)
+        .sort((a, b) => (a.row_index ?? 0) - (b.row_index ?? 0)),
     [rows],
   );
 
-  const includedRowIds = useMemo(
-    () => new Set(includedRowsOrdered.map((r) => r.id)),
-    [includedRowsOrdered],
+  const multiEditRowIds = useMemo(
+    () => new Set(multiEditRowsOrdered.map((r) => r.id)),
+    [multiEditRowsOrdered],
   );
 
-  const anchorRowId = includedRowsOrdered[0]?.id ?? null;
+  const anchorRowId = multiEditRowsOrdered[0]?.id ?? null;
 
   const shouldBulkEdit = (rowId) =>
-    includedRowsOrdered.length > 1 && rowId === anchorRowId;
+    multiEditRowsOrdered.length > 1 && rowId === anchorRowId;
 
-  /** When several rows are included (Use), edits on the anchor row update every included row. */
+  /** When several rows have Multi checked, edits on the first such row update all Multi rows. */
   const persistFromAnchorRow = async (rowId, patch) => {
     if (!batch) return;
     if (!shouldBulkEdit(rowId)) {
       await persistRowPatch(rowId, patch);
       return;
     }
-    const targets = includedRowsOrdered;
+    const targets = multiEditRowsOrdered;
     setPersistingRows((prev) => {
       const next = { ...prev };
       targets.forEach((r) => {
@@ -520,7 +522,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
   }, [rows, rowFilter, entityId, batch?.entity_id, sortKey, sortDir, entityNameById, flowLabelById]);
 
   return (
-    <div className="surface-card" data-testid="bulk-actual-page">
+    <div className="surface-card w-full min-w-0" data-testid="bulk-actual-page">
       <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
         <div>
           <h2 className="text-sm font-medium tracking-[0.15em] uppercase text-zinc-400 font-heading">
@@ -630,10 +632,11 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
           </div>
 
           <div className="px-4 py-2 border-b border-zinc-800 text-[11px] text-zinc-500">
-            <span className="text-zinc-400">Multi-edit:</span> when two or more rows are checked in <span className="text-zinc-400">Use</span>, change{" "}
+            <span className="text-zinc-400">Use</span> includes or excludes a line from the final <span className="text-zinc-400">Update Actuals</span> run.{" "}
+            <span className="text-zinc-400">Multi</span> groups rows for bulk field edits: with two or more <span className="text-zinc-400">Multi</span> rows, changing{" "}
             <span className="text-zinc-400">Entity</span>, <span className="text-zinc-400">Month</span>, <span className="text-zinc-400">Category</span>,{" "}
             <span className="text-zinc-400">Actual target</span>, <span className="text-zinc-400">Flow match</span>, <span className="text-zinc-400">Amount vs actual</span>, or{" "}
-            <span className="text-zinc-400">Variance</span> on the <span className="text-zinc-300">first included row</span> (lowest <span className="text-zinc-400">#</span> among checked rows) to update every checked row. Description and amount stay per line.
+            <span className="text-zinc-400">Variance</span> on the <span className="text-zinc-300">first Multi row</span> (lowest <span className="text-zinc-400">#</span> among Multi-checked rows) updates every Multi-checked row. Description and amount stay per line.
           </div>
 
           <div className="px-4 py-2 border-b border-zinc-800 flex items-center justify-between text-xs">
@@ -669,7 +672,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
             </Select>
           </div>
 
-          <div className="overflow-x-auto max-h-[560px]">
+          <div className="overflow-x-auto overflow-y-auto max-h-[calc(100vh-240px)] min-h-[320px]">
             <table className="w-full text-xs">
               <thead className="bg-zinc-900 sticky top-0 z-10">
                 <tr className="border-b border-zinc-800">
@@ -680,6 +683,12 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                     #
                   </th>
                   <th className="text-left px-2 py-2 text-zinc-500">Use</th>
+                  <th
+                    className="text-left px-2 py-2 text-zinc-500"
+                    title="Bulk-edit group: check Multi on rows that should receive the same field changes from the first Multi row (#)"
+                  >
+                    Multi
+                  </th>
                   <SortHeader label="Entity"           sortKey="entity"        activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-entity" />
                   <SortHeader label="Month"            sortKey="month"         activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-month" />
                   <SortHeader label="Description"      sortKey="description"   activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-description" />
@@ -706,14 +715,14 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                   const classification = row.classification || "existing_flow";
                   const isNewLine = classification === "new_flow";
                   const isMultiEditAnchor =
-                    includedRowsOrdered.length > 1 && row.id === anchorRowId;
+                    multiEditRowsOrdered.length > 1 && row.id === anchorRowId;
                   return (
                     <tr
                       key={row.id}
                       className={`border-b border-zinc-800/50 ${
                         isMultiEditAnchor ? "bg-zinc-800/25" : ""
                       }`}
-                      title={isMultiEditAnchor ? "Multi-edit leader: changes here apply to all checked (Use) rows" : undefined}
+                      title={isMultiEditAnchor ? "Multi leader: field changes here apply to all Multi-checked rows" : undefined}
                     >
                       <td
                         className="px-2 py-2 align-top text-[11px] text-zinc-500 font-mono tabular-nums"
@@ -733,13 +742,26 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                         />
                       </td>
                       <td className="px-2 py-2 align-top">
+                        <input
+                          type="checkbox"
+                          checked={!!row.multi_edit}
+                          onChange={(e) => {
+                            const v = e.target.checked;
+                            updateRowLocal(row.id, { multi_edit: v });
+                            persistRowPatch(row.id, { multi_edit: v });
+                          }}
+                          title="Include in Multi bulk field edits"
+                          data-testid={`bulk-row-multi-${row.id}`}
+                        />
+                      </td>
+                      <td className="px-2 py-2 align-top">
                         <Select
                           value={rowEntityEffective}
                           onValueChange={(v) => {
                             const patch = { entity_id: v, selected_flow_id: null };
                             if (shouldBulkEdit(row.id)) {
                               setRows((prev) =>
-                                prev.map((r) => (includedRowIds.has(r.id) ? { ...r, ...patch } : r)),
+                                prev.map((r) => (multiEditRowIds.has(r.id) ? { ...r, ...patch } : r)),
                               );
                               persistFromAnchorRow(row.id, patch);
                             } else {
@@ -768,7 +790,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                             const v = e.target.value;
                             if (shouldBulkEdit(row.id)) {
                               setRows((prev) =>
-                                prev.map((r) => (includedRowIds.has(r.id) ? { ...r, month: v } : r)),
+                                prev.map((r) => (multiEditRowIds.has(r.id) ? { ...r, month: v } : r)),
                               );
                             } else {
                               updateRowLocal(row.id, { month: v });
@@ -810,7 +832,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                         <Select value={row.category} onValueChange={(v) => {
                           if (shouldBulkEdit(row.id)) {
                             setRows((prev) =>
-                              prev.map((r) => (includedRowIds.has(r.id) ? { ...r, category: v } : r)),
+                              prev.map((r) => (multiEditRowIds.has(r.id) ? { ...r, category: v } : r)),
                             );
                             persistFromAnchorRow(row.id, { category: v });
                           } else {
@@ -840,7 +862,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                                 : { classification: "existing_flow" };
                             if (shouldBulkEdit(row.id)) {
                               setRows((prev) =>
-                                prev.map((r) => (includedRowIds.has(r.id) ? { ...r, ...payload } : r)),
+                                prev.map((r) => (multiEditRowIds.has(r.id) ? { ...r, ...payload } : r)),
                               );
                               persistFromAnchorRow(row.id, payload);
                             } else {
@@ -867,7 +889,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                             const payload = { selected_flow_id: next, classification: "existing_flow" };
                             if (shouldBulkEdit(row.id)) {
                               setRows((prev) =>
-                                prev.map((r) => (includedRowIds.has(r.id) ? { ...r, ...payload } : r)),
+                                prev.map((r) => (multiEditRowIds.has(r.id) ? { ...r, ...payload } : r)),
                               );
                               persistFromAnchorRow(row.id, payload);
                             } else {
@@ -906,7 +928,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                             if (shouldBulkEdit(row.id)) {
                               setRows((prev) =>
                                 prev.map((r) =>
-                                  includedRowIds.has(r.id) ? { ...r, actual_merge_mode: v } : r,
+                                  multiEditRowIds.has(r.id) ? { ...r, actual_merge_mode: v } : r,
                                 ),
                               );
                               persistFromAnchorRow(row.id, { actual_merge_mode: v });
@@ -935,7 +957,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                             if (shouldBulkEdit(row.id)) {
                               setRows((prev) =>
                                 prev.map((r) =>
-                                  includedRowIds.has(r.id) ? { ...r, variance_action: v } : r,
+                                  multiEditRowIds.has(r.id) ? { ...r, variance_action: v } : r,
                                 ),
                               );
                               persistFromAnchorRow(row.id, { variance_action: v });

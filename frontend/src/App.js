@@ -214,7 +214,13 @@ function Dashboard({ user, onLogout }) {
       
       {/* Header */}
       <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="w-full max-w-[1600px] mx-auto px-4 md:px-6 lg:px-8 py-4">
+        <div
+          className={`w-full mx-auto py-4 ${
+            activeTab === "bulk_actuals"
+              ? "max-w-none px-3 sm:px-4 lg:px-6"
+              : "max-w-[1600px] px-4 md:px-6 lg:px-8"
+          }`}
+        >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <div>
@@ -279,17 +285,24 @@ function Dashboard({ user, onLogout }) {
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="w-full max-w-[1600px] mx-auto px-4 md:px-6 lg:px-8 py-6">
-        {/* KPI Cards - 5 columns now */}
-        <section className="mb-6">
-          <KPICards 
-            projection={projection} 
-            hasAccounts={hasAccounts}
-            onAddAccount={() => setBankAccountsOpen(true)}
-            onCashNowClick={() => setTreasuryOpen(true)}
-          />
-        </section>
+      {/* Main Content — full width on Bulk Actuals for the working table */}
+      <main
+        className={`w-full mx-auto ${
+          activeTab === "bulk_actuals"
+            ? "max-w-none px-3 sm:px-4 lg:px-6 py-3"
+            : "max-w-[1600px] px-4 md:px-6 lg:px-8 py-6"
+        }`}
+      >
+        {activeTab !== "bulk_actuals" && (
+          <section className="mb-6">
+            <KPICards
+              projection={projection}
+              hasAccounts={hasAccounts}
+              onAddAccount={() => setBankAccountsOpen(true)}
+              onCashNowClick={() => setTreasuryOpen(true)}
+            />
+          </section>
+        )}
 
         {/* Tab Switcher: Chart / Cash Flow Table */}
         <div className="flex items-center gap-1 mb-4 bg-zinc-900 border border-zinc-800 p-0.5 rounded-md w-fit" data-testid="view-tabs">
@@ -433,7 +446,7 @@ function Dashboard({ user, onLogout }) {
             />
           </section>
         ) : ENABLE_BULK_ACTUALS ? (
-          <section>
+          <section className="min-w-0 w-full">
             <BulkActualUploadPage
               entities={entities}
               onDataChange={handleDataChange}

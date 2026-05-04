@@ -290,6 +290,8 @@ class ActualImportRow(BaseModel):
     batch_id: str
     row_index: int
     include: bool = True
+    # UI: row participates in multi-edit (first checked row in file order is the leader).
+    multi_edit: bool = False
     status: str = "ready"  # ready | warning | discarded | applied | failed | skipped
     raw_date: str = ""
     raw_description: str = ""
@@ -335,6 +337,7 @@ class ActualImportBatch(BaseModel):
 class ActualImportRowUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     include: Optional[bool] = None
+    multi_edit: Optional[bool] = None
     transaction_date: Optional[str] = None
     month: Optional[str] = None
     description: Optional[str] = None
