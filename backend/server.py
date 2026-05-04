@@ -290,17 +290,18 @@ class FlowOccurrenceHistoryMergeCorrection(BaseModel):
 
 
 def recompute_actual_from_event_log(
-    events: List[Dict[str, Any]],
+    events_in_replay_order: List[Dict[str, Any]],
     amended_event_id: Optional[str] = None,
     amended_merge_mode: Optional[str] = None,
 ) -> Optional[float]:
-    """Replay cell history in time order; optionally override merge_mode for one bulk_import event."""
-    sorted_ev = sorted(
-        events,
-        key=lambda e: (e.get("timestamp") or "", e.get("id") or ""),
-    )
+    """Replay cell history in **apply order** (oldest → newest).
+
+    Callers must pass events ordered like bulk apply: primarily by timestamp, then
+    by CSV row order within each batch (see ``load_events_ordered_for_replay``).
+    Optionally override merge_mode for one bulk_import event id.
+    """
     running: Optional[float] = None
-    for e in sorted_ev:
+    for e in events_in_replay_order:
         eid = e.get("id")
         action = e.get("action", "set")
         source = e.get("source", "manual")
@@ -1559,6 +1560,40 @@ async def clear_flow_occurrence(flow_id: str, month: str, user: dict = Depends(g
 
     return {"status": "ok"}
 
+
+async def load_events_ordered_for_replay(flow_id: str, month: str) -> List[Dict[str, Any]]:
+    """Order audit events the same way bulk apply runs: timestamp, then row_index within each batch.
+
+    Multiple CSV lines for the same flow/month often share the same timestamp; sorting
+    only by time + random event id did not match file order. ``row_index`` comes from
+    ``actual_import_rows`` via ``batch_row_id``.
+    """
+    events = (
+        await db.flow_occurrence_events.find({"flow_id": flow_id, "month": month}, {"_id": 0}).to_list(5000)
+    )
+    row_ids = list({e.get("batch_row_id") for e in events if e.get("batch_row_id")})
+    idx_map: Dict[str, int] = {}
+    if row_ids:
+        rows = (
+            await db.actual_import_rows.find(
+                {"id": {"$in": row_ids}},
+                {"_id": 0, "id": 1, "row_index": 1},
+            )
+            .to_list(len(row_ids))
+        )
+        idx_map = {r["id"]: int(r.get("row_index", 0)) for r in rows}
+
+    def sort_key(e: Dict[str, Any]) -> tuple:
+        ts = e.get("timestamp") or ""
+        bid = str(e.get("batch_id") or "")
+        br = e.get("batch_row_id")
+        ri = idx_map.get(br, 0) if br else 0
+        eid = str(e.get("id") or "")
+        return (ts, bid, ri, eid)
+
+    return sorted(events, key=sort_key)
+
+
 @api_router.patch("/flow-occurrences/history/{event_id}")
 async def correct_flow_occurrence_history_merge(
     event_id: str,
@@ -1593,12 +1628,7 @@ async def correct_flow_occurrence_history_merge(
     if not is_valid_month_key(str(month)):
         raise HTTPException(status_code=400, detail="Invalid month on event record")
 
-    all_events = (
-        await db.flow_occurrence_events
-        .find({"flow_id": flow_id, "month": month}, {"_id": 0})
-        .sort([("timestamp", 1), ("id", 1)])
-        .to_list(5000)
-    )
+    all_events = await load_events_ordered_for_replay(flow_id, month)
     new_actual = recompute_actual_from_event_log(
         all_events,
         amended_event_id=event_id,
