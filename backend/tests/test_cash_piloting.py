@@ -152,6 +152,7 @@ class TestBankAccountCRUD:
         account = response.json()
         assert account["label"] == "TEST_Account"
         assert account["amount"] == 10000.50
+        assert account.get("last_movement") is None
         account_id = account["id"]
         
         # Update
@@ -161,6 +162,7 @@ class TestBankAccountCRUD:
         assert response.status_code == 200
         updated = response.json()
         assert updated["amount"] == 15000.00
+        assert updated.get("last_movement") == pytest.approx(4999.5)
         
         # Delete
         response = requests.delete(f"{BASE_URL}/api/bank-accounts/{account_id}")

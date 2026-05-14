@@ -29,6 +29,18 @@ const formatCurrency = (amount) => {
   }).format(amount);
 };
 
+const formatMovement = (delta) => {
+  if (delta == null) return "—";
+  const abs = Math.abs(delta);
+  const formatted = new Intl.NumberFormat('de-CH', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(abs);
+  if (delta > 0) return `+${formatted}`;
+  if (delta < 0) return `−${formatted}`;
+  return formatted;
+};
+
 const COLORS = [
   'bg-zinc-100', 'bg-emerald-400', 'bg-amber-400', 'bg-rose-400',
   'bg-sky-400', 'bg-violet-400', 'bg-orange-400', 'bg-teal-400',
@@ -177,6 +189,16 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
 
   const sortedAccounts = [...accounts].sort((a, b) => {
     if (!sortField) return 0;
+    if (sortField === 'last_movement') {
+      const am = a.last_movement;
+      const bm = b.last_movement;
+      const aMissing = am == null;
+      const bMissing = bm == null;
+      if (aMissing && bMissing) return 0;
+      if (aMissing) return sortDir === 'asc' ? 1 : -1;
+      if (bMissing) return sortDir === 'asc' ? -1 : 1;
+      return sortDir === 'asc' ? am - bm : bm - am;
+    }
     let aVal, bVal;
     if (sortField === 'entity') {
       aVal = getEntityName(a.entity_id);
@@ -352,6 +374,7 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                       <SortHeader field="entity">Entity</SortHeader>
                       <SortHeader field="label">Account</SortHeader>
                       <SortHeader field="amount">Balance</SortHeader>
+                      <SortHeader field="last_movement">Movement</SortHeader>
                       <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-right py-3 px-3">Share</th>
                       <th className="py-3 px-2 w-16"></th>
                     </tr>
@@ -373,6 +396,20 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                           </td>
                           <td className="py-2.5 px-3 text-sm font-mono text-zinc-100 tabular-nums">
                             {formatCurrency(account.amount)}
+                          </td>
+                          <td
+                            className={`py-2.5 px-3 text-xs font-mono tabular-nums ${
+                              account.last_movement == null
+                                ? "text-zinc-600"
+                                : account.last_movement > 0
+                                  ? "text-emerald-400"
+                                  : account.last_movement < 0
+                                    ? "text-rose-400"
+                                    : "text-zinc-500"
+                            }`}
+                            data-testid={`treasury-movement-${account.id}`}
+                          >
+                            {formatMovement(account.last_movement)}
                           </td>
                           <td className="py-2.5 px-3 text-xs text-zinc-500 text-right tabular-nums">
                             {share.toFixed(1)}%

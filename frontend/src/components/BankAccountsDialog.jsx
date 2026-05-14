@@ -29,6 +29,18 @@ const formatCurrency = (amount) => {
   }).format(amount);
 };
 
+const formatMovement = (delta) => {
+  if (delta == null) return null;
+  const abs = Math.abs(delta);
+  const formatted = new Intl.NumberFormat('de-CH', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(abs);
+  if (delta > 0) return `+${formatted}`;
+  if (delta < 0) return `−${formatted}`;
+  return formatted;
+};
+
 export const BankAccountsDialog = ({ open, onOpenChange, onDataChange, entities, onEntitiesChange }) => {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -195,6 +207,11 @@ export const BankAccountsDialog = ({ open, onOpenChange, onDataChange, entities,
                     >
                       <p className="text-sm text-zinc-200">{account.label}</p>
                       <div className="flex items-center gap-3">
+                        {account.last_movement != null && (
+                          <span className="text-xs font-mono text-zinc-500 tabular-nums">
+                            {formatMovement(account.last_movement)}
+                          </span>
+                        )}
                         <span className="text-sm font-mono text-zinc-300">
                           {formatCurrency(account.amount)}
                         </span>

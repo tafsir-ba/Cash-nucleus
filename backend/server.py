@@ -149,6 +149,7 @@ class BankAccount(BaseModel):
     entity: str = ""
     label: str
     amount: float
+    last_movement: Optional[float] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -1004,6 +1005,17 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate):
     update_data = {k: v for k, v in update.model_dump().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="No valid update data")
+
+    existing = await db.bank_accounts.find_one({"id": account_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Bank account not found")
+
+    if "amount" in update_data:
+        old_amount = existing.get("amount")
+        new_amount = update_data["amount"]
+        if old_amount is not None and new_amount != old_amount:
+            update_data["last_movement"] = new_amount - old_amount
+
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db.bank_accounts.find_one_and_update(
         {"id": account_id}, {"$set": update_data},
