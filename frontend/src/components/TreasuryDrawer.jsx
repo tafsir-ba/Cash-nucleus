@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from "../components/ui/select";
 import { Label } from "../components/ui/label";
+import { CashPositionHistoryDialog } from "./CashPositionHistoryDialog";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -63,6 +64,8 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
   const [showEntityCreate, setShowEntityCreate] = useState(false);
   const [newEntityName, setNewEntityName] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [adjustmentNote, setAdjustmentNote] = useState("");
 
   const fetchAccounts = useCallback(async () => {
     try {
@@ -102,6 +105,7 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
       entity_id: entities.length > 0 ? entities[0].id : ""
     });
     setEditingId(null);
+    setAdjustmentNote("");
   };
 
   const handleCreateEntity = async () => {
@@ -128,6 +132,8 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
         label: formData.label,
         amount: parseFloat(formData.amount),
         entity_id: formData.entity_id,
+        note: adjustmentNote || undefined,
+        trigger: "manual_adjustment",
       };
 
       if (editingId) {
@@ -162,7 +168,12 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
   const handleDelete = async (id) => {
     if (!window.confirm("Delete this bank account?")) return;
     try {
-      await axios.delete(`${API}/bank-accounts/${id}`);
+      await axios.delete(`${API}/bank-accounts/${id}`, {
+        params: {
+          trigger: "manual_adjustment",
+          note: adjustmentNote || undefined,
+        },
+      });
       toast.success("Account deleted");
       fetchAccounts();
       onDataChange?.();
@@ -273,6 +284,7 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
   };
 
   return (
+    <>
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
@@ -298,9 +310,16 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs text-zinc-500 uppercase tracking-wider mb-1">Total Cash Now</p>
-                <p className="text-2xl font-mono text-zinc-50 font-light tracking-tight" data-testid="treasury-total">
+                <button
+                  type="button"
+                  onClick={() => setHistoryOpen(true)}
+                  className="text-left"
+                  data-testid="treasury-total"
+                >
+                <p className="text-2xl font-mono text-zinc-50 font-light tracking-tight hover:text-zinc-200 transition-colors">
                   {formatCurrency(totalBalance)}
                 </p>
+                </button>
               </div>
               <div className="text-right">
                 <p className="text-xs text-zinc-600">{accounts.length} account{accounts.length !== 1 ? 's' : ''}</p>
@@ -509,6 +528,18 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                 </div>
               </div>
 
+              <div>
+                <Label className="text-xs text-zinc-500 mb-1.5 block">Adjustment Note (optional)</Label>
+                <input
+                  type="text"
+                  placeholder="Reason for manual change"
+                  value={adjustmentNote}
+                  onChange={(e) => setAdjustmentNote(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 placeholder-zinc-500"
+                  data-testid="account-note-input"
+                />
+              </div>
+
               <button
                 type="submit"
                 disabled={loading || !formData.label || !formData.amount || !formData.entity_id}
@@ -656,5 +687,7 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
         </div>
       </SheetContent>
     </Sheet>
+    <CashPositionHistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} />
+    </>
   );
 };

@@ -157,11 +157,63 @@ class BankAccountCreate(BaseModel):
     entity_id: str
     label: str
     amount: float
+    note: Optional[str] = None
+    trigger: Literal["manual_adjustment", "import", "system_recalc"] = "manual_adjustment"
 
 class BankAccountUpdate(BaseModel):
     entity_id: Optional[str] = None
     label: Optional[str] = None
     amount: Optional[float] = None
+    note: Optional[str] = None
+    trigger: Literal["manual_adjustment", "import", "system_recalc"] = "manual_adjustment"
+
+
+class CashBalanceSnapshotAccount(BaseModel):
+    account_id: str
+    account_name: str
+    entity: str
+    balance_chf: float
+    movement_chf: float
+
+
+class CashBalanceSnapshot(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    snapshot_type: Literal["daily_cash_position"] = "daily_cash_position"
+    date: str
+    total_cash_chf: float
+    accounts: List[CashBalanceSnapshotAccount]
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_by: str
+    trigger: Literal["manual_adjustment", "import", "system_recalc"]
+    note: Optional[str] = None
+
+
+class BankAccountAuditLog(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    account_id: str
+    previous_balance_chf: float
+    new_balance_chf: float
+    delta_chf: float
+    changed_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    changed_by: str
+    note: Optional[str] = None
+    trigger: Literal["manual_adjustment", "import", "system_recalc"] = "manual_adjustment"
+
+
+class CashPositionDayEntry(BaseModel):
+    date: str
+    total_cash_chf: float
+    movement_chf: Optional[float] = None
+    created_at: str
+    created_by: str
+    trigger: Literal["manual_adjustment", "import", "system_recalc"]
+    note: Optional[str] = None
+    changed_accounts: List[CashBalanceSnapshotAccount]
+
+
+class CashPositionHistoryResponse(BaseModel):
+    days: List[CashPositionDayEntry]
+    account_audit_log: List[BankAccountAuditLog]
 
 # ============== TREASURY DEBT VIEW MODELS ==============
 class DebtConsolidationItem(BaseModel):
@@ -984,6 +1036,87 @@ async def delete_entity(entity_id: str):
         raise HTTPException(status_code=404, detail="Entity not found")
     return {"message": "Entity deleted"}
 
+# ============== TREASURY SNAPSHOT HELPERS ==============
+def resolve_actor_label(user: Optional[dict]) -> str:
+    if not user:
+        return "system"
+    return user.get("email") or user.get("name") or user.get("id") or "system"
+
+
+async def capture_cash_balance_snapshot(
+    *,
+    trigger: Literal["manual_adjustment", "import", "system_recalc"],
+    created_by: str,
+    note: Optional[str] = None,
+) -> None:
+    accounts = await db.bank_accounts.find({}, {"_id": 0}).to_list(2000)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    today_str = now_iso[:10]
+
+    entities = await db.entities.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(2000)
+    entity_map = {e["id"]: e["name"] for e in entities}
+
+    previous = await db.cash_balance_snapshots.find_one(
+        {"snapshot_type": "daily_cash_position"},
+        {"_id": 0},
+        sort=[("created_at", -1)],
+    )
+    prev_accounts = {
+        a.get("account_id"): float(a.get("balance_chf", 0.0))
+        for a in (previous.get("accounts", []) if previous else [])
+    }
+
+    snapshot_accounts: List[CashBalanceSnapshotAccount] = []
+    total_cash = 0.0
+    for account in accounts:
+        account_id = account.get("id")
+        amount = round(float(account.get("amount", 0.0)), 2)
+        previous_amount = prev_accounts.get(account_id, 0.0)
+        movement = round(amount - previous_amount, 2)
+        snapshot_accounts.append(
+            CashBalanceSnapshotAccount(
+                account_id=account_id,
+                account_name=account.get("label", ""),
+                entity=account.get("entity") or entity_map.get(account.get("entity_id"), ""),
+                balance_chf=amount,
+                movement_chf=movement,
+            )
+        )
+        total_cash += amount
+
+    snapshot = CashBalanceSnapshot(
+        date=today_str,
+        total_cash_chf=round(total_cash, 2),
+        accounts=snapshot_accounts,
+        created_at=now_iso,
+        created_by=created_by,
+        trigger=trigger,
+        note=(note or "").strip() or None,
+    )
+    await db.cash_balance_snapshots.insert_one(snapshot.model_dump())
+
+
+async def insert_bank_account_audit_log(
+    *,
+    account_id: str,
+    previous_balance_chf: float,
+    new_balance_chf: float,
+    changed_by: str,
+    note: Optional[str],
+    trigger: Literal["manual_adjustment", "import", "system_recalc"],
+) -> None:
+    row = BankAccountAuditLog(
+        account_id=account_id,
+        previous_balance_chf=round(float(previous_balance_chf), 2),
+        new_balance_chf=round(float(new_balance_chf), 2),
+        delta_chf=round(float(new_balance_chf) - float(previous_balance_chf), 2),
+        changed_by=changed_by,
+        note=(note or "").strip() or None,
+        trigger=trigger,
+    )
+    await db.bank_account_audit_log.insert_one(row.model_dump())
+
+
 # ============== BANK ACCOUNT ROUTES ==============
 @api_router.get("/bank-accounts", response_model=List[BankAccount])
 async def get_bank_accounts(entity_id: Optional[str] = None):
@@ -992,16 +1125,30 @@ async def get_bank_accounts(entity_id: Optional[str] = None):
     return accounts
 
 @api_router.post("/bank-accounts", response_model=BankAccount)
-async def create_bank_account(account: BankAccountCreate):
+async def create_bank_account(account: BankAccountCreate, user: dict = Depends(get_optional_user)):
     entity = await db.entities.find_one({"id": account.entity_id})
     if not entity:
         raise HTTPException(status_code=400, detail="Entity not found")
-    account_obj = BankAccount(**account.model_dump())
+    payload = account.model_dump()
+    note = payload.pop("note", None)
+    trigger = payload.pop("trigger", "manual_adjustment")
+    account_obj = BankAccount(**payload)
+    account_obj.entity = entity.get("name", "")
     await db.bank_accounts.insert_one(account_obj.model_dump())
+    actor = resolve_actor_label(user)
+    await insert_bank_account_audit_log(
+        account_id=account_obj.id,
+        previous_balance_chf=0.0,
+        new_balance_chf=account_obj.amount,
+        changed_by=actor,
+        note=note,
+        trigger=trigger,
+    )
+    await capture_cash_balance_snapshot(trigger=trigger, created_by=actor, note=note)
     return account_obj
 
 @api_router.put("/bank-accounts/{account_id}", response_model=BankAccount)
-async def update_bank_account(account_id: str, update: BankAccountUpdate):
+async def update_bank_account(account_id: str, update: BankAccountUpdate, user: dict = Depends(get_optional_user)):
     update_data = {k: v for k, v in update.model_dump().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="No valid update data")
@@ -1010,8 +1157,18 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate):
     if not existing:
         raise HTTPException(status_code=404, detail="Bank account not found")
 
+    note = update_data.pop("note", None)
+    trigger = update_data.pop("trigger", "manual_adjustment")
+    old_amount = existing.get("amount", 0.0)
+    new_amount = old_amount
+
+    if "entity_id" in update_data:
+        next_entity = await db.entities.find_one({"id": update_data["entity_id"]}, {"_id": 0, "name": 1})
+        if not next_entity:
+            raise HTTPException(status_code=400, detail="Entity not found")
+        update_data["entity"] = next_entity.get("name", "")
+
     if "amount" in update_data:
-        old_amount = existing.get("amount")
         new_amount = update_data["amount"]
         if old_amount is not None and new_amount != old_amount:
             update_data["last_movement"] = new_amount - old_amount
@@ -1023,14 +1180,128 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate):
     )
     if not result:
         raise HTTPException(status_code=404, detail="Bank account not found")
+    if abs(float(new_amount) - float(old_amount)) > 0.009:
+        actor = resolve_actor_label(user)
+        await insert_bank_account_audit_log(
+            account_id=account_id,
+            previous_balance_chf=float(old_amount),
+            new_balance_chf=float(new_amount),
+            changed_by=actor,
+            note=note,
+            trigger=trigger,
+        )
+    await capture_cash_balance_snapshot(
+        trigger=trigger,
+        created_by=resolve_actor_label(user),
+        note=note,
+    )
     return result
 
 @api_router.delete("/bank-accounts/{account_id}")
-async def delete_bank_account(account_id: str):
+async def delete_bank_account(
+    account_id: str,
+    note: Optional[str] = Query(default=None),
+    trigger: Literal["manual_adjustment", "import", "system_recalc"] = Query(default="manual_adjustment"),
+    user: dict = Depends(get_optional_user),
+):
+    existing = await db.bank_accounts.find_one({"id": account_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Bank account not found")
     result = await db.bank_accounts.delete_one({"id": account_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Bank account not found")
+    actor = resolve_actor_label(user)
+    await insert_bank_account_audit_log(
+        account_id=account_id,
+        previous_balance_chf=float(existing.get("amount", 0.0)),
+        new_balance_chf=0.0,
+        changed_by=actor,
+        note=note,
+        trigger=trigger,
+    )
+    await capture_cash_balance_snapshot(trigger=trigger, created_by=actor, note=note)
     return {"message": "Bank account deleted"}
+
+
+@api_router.get("/treasury/cash-position-history", response_model=CashPositionHistoryResponse)
+async def get_cash_position_history(
+    entity_id: Optional[str] = None,
+    account_id: Optional[str] = None,
+    limit_days: int = 60,
+):
+    docs = await db.cash_balance_snapshots.find(
+        {"snapshot_type": "daily_cash_position"},
+        {"_id": 0},
+    ).sort("created_at", -1).to_list(2000)
+    if not docs:
+        return CashPositionHistoryResponse(days=[], account_audit_log=[])
+
+    day_latest: Dict[str, dict] = {}
+    for row in docs:
+        day_key = row.get("date")
+        if not day_key:
+            continue
+        if day_key not in day_latest:
+            day_latest[day_key] = row
+
+    selected_days = sorted(day_latest.values(), key=lambda d: d["date"], reverse=True)
+    if limit_days > 0:
+        selected_days = selected_days[:max(1, min(limit_days, 365))]
+    selected_days = list(reversed(selected_days))
+
+    prev_total: Optional[float] = None
+    prev_day_accounts: Dict[str, float] = {}
+    day_entries: List[CashPositionDayEntry] = []
+    for row in selected_days:
+        accounts = row.get("accounts", [])
+        if entity_id:
+            accounts = [a for a in accounts if a.get("entity") == entity_id]
+        if account_id:
+            accounts = [a for a in accounts if a.get("account_id") == account_id]
+
+        current_account_map = {
+            a.get("account_id", ""): round(float(a.get("balance_chf", 0.0)), 2)
+            for a in accounts
+            if a.get("account_id")
+        }
+        changed_accounts = [
+            CashBalanceSnapshotAccount(
+                account_id=a.get("account_id", ""),
+                account_name=a.get("account_name", ""),
+                entity=a.get("entity", ""),
+                balance_chf=round(float(a.get("balance_chf", 0.0)), 2),
+                movement_chf=round(
+                    float(a.get("balance_chf", 0.0)) - float(prev_day_accounts.get(a.get("account_id", ""), 0.0)),
+                    2,
+                ),
+            )
+            for a in accounts
+            if abs(float(a.get("balance_chf", 0.0)) - float(prev_day_accounts.get(a.get("account_id", ""), 0.0))) > 0.009
+        ]
+        day_total = round(float(row.get("total_cash_chf", 0.0)), 2)
+        day_entries.append(
+            CashPositionDayEntry(
+                date=row.get("date"),
+                total_cash_chf=day_total,
+                movement_chf=None if prev_total is None else round(day_total - prev_total, 2),
+                created_at=row.get("created_at"),
+                created_by=row.get("created_by", "system"),
+                trigger=row.get("trigger", "system_recalc"),
+                note=row.get("note"),
+                changed_accounts=changed_accounts,
+            )
+        )
+        prev_total = day_total
+        prev_day_accounts = current_account_map
+
+    audit_query: Dict[str, Any] = {}
+    if account_id:
+        audit_query["account_id"] = account_id
+    audit_rows_raw = await db.bank_account_audit_log.find(
+        audit_query, {"_id": 0}
+    ).sort("changed_at", -1).to_list(5000)
+    audit_rows = [BankAccountAuditLog(**row) for row in audit_rows_raw]
+    return CashPositionHistoryResponse(days=day_entries, account_audit_log=audit_rows)
 
 @api_router.get("/treasury/debts", response_model=List[DebtConsolidationItem])
 async def get_treasury_debts(entity_id: Optional[str] = None):
@@ -3337,7 +3608,13 @@ async def seed_admin():
     await db.actual_import_rows.create_index([("batch_id", 1), ("status", 1)])
     await db.flow_occurrence_events.create_index([("id", 1)], unique=True)
     await db.flow_occurrence_events.create_index([("flow_id", 1), ("month", 1), ("timestamp", -1)])
-    await db.cash_balance_snapshots.create_index([("entity_id", 1), ("month", 1)], unique=True)
+    await db.cash_balance_snapshots.create_index(
+        [("entity_id", 1), ("month", 1)],
+        unique=True,
+        partialFilterExpression={"month": {"$type": "string"}, "entity_id": {"$type": "string"}},
+    )
+    await db.cash_balance_snapshots.create_index([("snapshot_type", 1), ("date", -1), ("created_at", -1)])
+    await db.bank_account_audit_log.create_index([("account_id", 1), ("changed_at", -1)])
 
 app.include_router(api_router)
 
