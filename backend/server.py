@@ -52,6 +52,30 @@ def create_access_token(user_id: str, email: str) -> str:
     payload = {"sub": user_id, "email": email, "exp": datetime.now(timezone.utc) + timedelta(days=7), "type": "access"}
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
+def should_use_secure_cookies(request: Optional[Request] = None) -> bool:
+    """
+    Determine whether auth cookies should be Secure.
+    Priority:
+      1) COOKIE_SECURE env override (true/false)
+      2) Development-ish environment defaults to insecure cookies
+      3) Request URL hint (localhost/http => insecure)
+      4) Safe default = secure cookies enabled
+    """
+    override = os.environ.get("COOKIE_SECURE")
+    if override is not None:
+        return override.strip().lower() in {"1", "true", "yes", "on"}
+
+    app_env = os.environ.get("ENV", os.environ.get("APP_ENV", "")).strip().lower()
+    if app_env in {"dev", "development", "local", "test"}:
+        return False
+
+    if request is not None:
+        host = (request.url.hostname or "").strip().lower()
+        if request.url.scheme != "https" and host in {"localhost", "127.0.0.1"}:
+            return False
+
+    return True
+
 async def get_current_user(request: Request) -> dict:
     token = request.cookies.get("access_token")
     if not token:
@@ -3582,15 +3606,16 @@ async def root():
 
 # ============== AUTH ENDPOINTS ==============
 @api_router.post("/auth/login")
-async def login(req: LoginRequest, response: Response):
+async def login(req: LoginRequest, response: Response, request: Request):
     email = req.email.strip().lower()
     user = await db.users.find_one({"email": email}, {"_id": 0})
     if not user or not verify_password(req.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     token = create_access_token(user["id"], user["email"])
+    secure_cookie = should_use_secure_cookies(request)
     response.set_cookie(
         key="access_token", value=token, httponly=True,
-        secure=True, samesite="lax", max_age=604800, path="/"
+        secure=secure_cookie, samesite="lax", max_age=604800, path="/"
     )
     return {"id": user["id"], "email": user["email"], "name": user.get("name", "")}
 
