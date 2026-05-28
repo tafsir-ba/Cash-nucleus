@@ -3618,12 +3618,10 @@ async def seed_admin():
             "created_at": datetime.now(timezone.utc).isoformat()
         })
         logging.info(f"Admin user seeded: {admin_email}")
-    elif not verify_password(admin_password, existing["password_hash"]):
-        await db.users.update_one(
-            {"email": admin_email},
-            {"$set": {"password_hash": hash_password(admin_password)}}
-        )
-        logging.info(f"Admin password updated: {admin_email}")
+    else:
+        # Safety: do not rotate existing admin credentials on startup.
+        # Changing ADMIN_PASSWORD in env should not silently overwrite real users.
+        logging.info(f"Admin user already exists, skipping password reset: {admin_email}")
     await db.users.create_index("email", unique=True)
     await db.actual_import_batches.create_index([("id", 1)], unique=True)
     await db.actual_import_batches.create_index([("entity_id", 1), ("created_at", -1)])
