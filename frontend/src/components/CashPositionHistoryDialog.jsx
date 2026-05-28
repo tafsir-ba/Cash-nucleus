@@ -39,6 +39,7 @@ const fmtMovement = (delta) => {
 export const CashPositionHistoryDialog = ({ open, onOpenChange }) => {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState({ days: [], account_audit_log: [] });
+  const [entities, setEntities] = useState([]);
   const [entityFilter, setEntityFilter] = useState("all");
   const [accountFilter, setAccountFilter] = useState("all");
   const [expandedDate, setExpandedDate] = useState(null);
@@ -60,11 +61,18 @@ export const CashPositionHistoryDialog = ({ open, onOpenChange }) => {
     run();
   }, [open, entityFilter, accountFilter]);
 
-  const entities = useMemo(() => {
-    const names = new Set();
-    data.days.forEach((d) => d.changed_accounts?.forEach((a) => names.add(a.entity)));
-    return [...names].filter(Boolean).sort((a, b) => a.localeCompare(b));
-  }, [data.days]);
+  useEffect(() => {
+    if (!open) return;
+    const loadEntities = async () => {
+      try {
+        const response = await axios.get(`${API}/entities`);
+        setEntities(Array.isArray(response.data) ? response.data : []);
+      } catch {
+        setEntities([]);
+      }
+    };
+    loadEntities();
+  }, [open]);
 
   const accountOptions = useMemo(() => {
     const map = new Map();
@@ -98,9 +106,9 @@ export const CashPositionHistoryDialog = ({ open, onOpenChange }) => {
             className="bg-zinc-900 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200"
           >
             <option value="all">All entities</option>
-            {entities.map((name) => (
-              <option key={name} value={name}>
-                {name}
+            {entities.map((entity) => (
+              <option key={entity.id} value={entity.id}>
+                {entity.name}
               </option>
             ))}
           </select>

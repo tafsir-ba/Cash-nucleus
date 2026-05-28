@@ -171,6 +171,7 @@ class BankAccountUpdate(BaseModel):
 class CashBalanceSnapshotAccount(BaseModel):
     account_id: str
     account_name: str
+    entity_id: Optional[str] = None
     entity: str
     balance_chf: float
     movement_chf: float
@@ -1077,6 +1078,7 @@ async def capture_cash_balance_snapshot(
             CashBalanceSnapshotAccount(
                 account_id=account_id,
                 account_name=account.get("label", ""),
+                entity_id=account.get("entity_id"),
                 entity=account.get("entity") or entity_map.get(account.get("entity_id"), ""),
                 balance_chf=amount,
                 movement_chf=movement,
@@ -1149,7 +1151,11 @@ async def create_bank_account(account: BankAccountCreate, user: dict = Depends(g
 
 @api_router.put("/bank-accounts/{account_id}", response_model=BankAccount)
 async def update_bank_account(account_id: str, update: BankAccountUpdate, user: dict = Depends(get_optional_user)):
-    update_data = {k: v for k, v in update.model_dump().items() if v is not None}
+    raw_update = update.model_dump(exclude_none=True)
+    note = raw_update.pop("note", None)
+    trigger = raw_update.pop("trigger", "manual_adjustment")
+    mutable_fields = {"entity_id", "label", "amount"}
+    update_data = {k: v for k, v in raw_update.items() if k in mutable_fields}
     if not update_data:
         raise HTTPException(status_code=400, detail="No valid update data")
 
@@ -1157,21 +1163,29 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate, user: 
     if not existing:
         raise HTTPException(status_code=404, detail="Bank account not found")
 
-    note = update_data.pop("note", None)
-    trigger = update_data.pop("trigger", "manual_adjustment")
     old_amount = existing.get("amount", 0.0)
     new_amount = old_amount
+    has_business_change = False
 
     if "entity_id" in update_data:
         next_entity = await db.entities.find_one({"id": update_data["entity_id"]}, {"_id": 0, "name": 1})
         if not next_entity:
             raise HTTPException(status_code=400, detail="Entity not found")
         update_data["entity"] = next_entity.get("name", "")
+        if update_data["entity_id"] != existing.get("entity_id"):
+            has_business_change = True
 
     if "amount" in update_data:
         new_amount = update_data["amount"]
         if old_amount is not None and new_amount != old_amount:
             update_data["last_movement"] = new_amount - old_amount
+            has_business_change = True
+
+    if "label" in update_data and update_data["label"] != existing.get("label"):
+        has_business_change = True
+
+    if not has_business_change:
+        raise HTTPException(status_code=400, detail="No business field changes detected")
 
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db.bank_accounts.find_one_and_update(
@@ -1249,13 +1263,23 @@ async def get_cash_position_history(
         selected_days = selected_days[:max(1, min(limit_days, 365))]
     selected_days = list(reversed(selected_days))
 
+    entity_name_filter: Optional[str] = None
+    if entity_id:
+        ent = await db.entities.find_one({"id": entity_id}, {"_id": 0, "name": 1})
+        if ent:
+            entity_name_filter = ent.get("name")
+
     prev_total: Optional[float] = None
     prev_day_accounts: Dict[str, float] = {}
     day_entries: List[CashPositionDayEntry] = []
     for row in selected_days:
         accounts = row.get("accounts", [])
         if entity_id:
-            accounts = [a for a in accounts if a.get("entity") == entity_id]
+            accounts = [
+                a
+                for a in accounts
+                if a.get("entity_id") == entity_id or (entity_name_filter and a.get("entity") == entity_name_filter)
+            ]
         if account_id:
             accounts = [a for a in accounts if a.get("account_id") == account_id]
 
@@ -1268,6 +1292,7 @@ async def get_cash_position_history(
             CashBalanceSnapshotAccount(
                 account_id=a.get("account_id", ""),
                 account_name=a.get("account_name", ""),
+                entity_id=a.get("entity_id"),
                 entity=a.get("entity", ""),
                 balance_chf=round(float(a.get("balance_chf", 0.0)), 2),
                 movement_chf=round(
@@ -1278,7 +1303,7 @@ async def get_cash_position_history(
             for a in accounts
             if abs(float(a.get("balance_chf", 0.0)) - float(prev_day_accounts.get(a.get("account_id", ""), 0.0))) > 0.009
         ]
-        day_total = round(float(row.get("total_cash_chf", 0.0)), 2)
+        day_total = round(sum(float(a.get("balance_chf", 0.0)) for a in accounts), 2)
         day_entries.append(
             CashPositionDayEntry(
                 date=row.get("date"),
