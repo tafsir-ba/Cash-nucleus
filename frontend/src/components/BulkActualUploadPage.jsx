@@ -519,9 +519,12 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     }
     setSimulating(true);
     try {
-      const params = { horizon: 12, scenario: "likely" };
-      if (entityId || batch?.entity_id) params.entity_id = entityId || batch.entity_id;
-      const res = await axios.post(`${API}/actual-imports/${batch.id}/simulate`, {}, { params });
+      // Do not pass page entity filter: preview must include all entities in included rows.
+      const res = await axios.post(
+        `${API}/actual-imports/${batch.id}/simulate`,
+        {},
+        { params: { horizon: 12, scenario: "likely" } },
+      );
       setSimulationResult(res.data);
       setSimulationOpen(true);
       if (res.data?.errors?.length) {
@@ -1532,7 +1535,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
           )}
           <div className="flex-1 min-h-0 overflow-auto p-3">
             {simulationResult?.matrix ? (
-              <CashFlowTable scenario="likely" horizon={12} selectedEntityId={entityId || batch?.entity_id || ""} entities={entities} previewMatrix={simulationResult.matrix} readOnly />
+              <CashFlowTable scenario="likely" horizon={12} entities={entities} previewMatrix={simulationResult.matrix} readOnly />
             ) : (
               <p className="text-sm text-zinc-500 p-4">No preview data.</p>
             )}

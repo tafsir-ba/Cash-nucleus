@@ -532,9 +532,12 @@ export const CashFlowTable = ({
   };
 
   if (!matrixData || (matrixData.revenue_rows.length === 0 && matrixData.expense_rows.length === 0)) {
+    const previewHint = previewMatrix
+      ? "Simulation preview has no cash flow lines for this filter. If the import mixes entities, re-run Simulate after deploy."
+      : "Add flows to see the cash flow table";
     return (
       <div className="surface-card p-6 text-center" data-testid="cashflow-table">
-        <p className="text-zinc-500 text-sm">Add flows to see the cash flow table</p>
+        <p className="text-zinc-500 text-sm">{previewHint}</p>
       </div>
     );
   }

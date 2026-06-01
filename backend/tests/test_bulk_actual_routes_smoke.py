@@ -165,3 +165,79 @@ def test_simulate_404_unknown_batch(client: TestClient):
 
 def test_matching_flows_requires_entity_id(client: TestClient):
     assert client.get("/api/actual-imports/matching-flows").status_code == 422
+
+def test_simulate_multi_entity_batch_returns_non_empty_matrix(client: TestClient):
+    """Included rows on different entities must not filter the matrix to one entity only."""
+    e1 = client.post("/api/entities", json={"name": f"SimA_{uuid.uuid4().hex[:6]}"})
+    e2 = client.post("/api/entities", json={"name": f"SimB_{uuid.uuid4().hex[:6]}"})
+    assert e1.status_code == 200 and e2.status_code == 200
+    id_a, id_b = e1.json()["id"], e2.json()["id"]
+
+    flow_a = client.post(
+        "/api/cash-flows",
+        json={
+            "label": "Sim Flow A",
+            "amount": -100,
+            "date": "2026-05-01",
+            "category": "Expense",
+            "certainty": "Materialized",
+            "recurrence": "none",
+            "entity_id": id_a,
+        },
+    )
+    flow_b = client.post(
+        "/api/cash-flows",
+        json={
+            "label": "Sim Flow B",
+            "amount": 200,
+            "date": "2026-05-01",
+            "category": "Revenue",
+            "certainty": "Materialized",
+            "recurrence": "none",
+            "entity_id": id_b,
+        },
+    )
+    assert flow_a.status_code == 200 and flow_b.status_code == 200
+    fid_a, fid_b = flow_a.json()["id"], flow_b.json()["id"]
+
+    csv = (
+        b"date,description,amount\n"
+        b"2026-05-10,Line entity A,-50\n"
+        b"2026-05-11,Line entity B,75\n"
+    )
+    parse = client.post(
+        "/api/actual-imports/parse",
+        data={"entity_id": id_a},
+        files={"file": ("multi.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert parse.status_code == 200, parse.text
+    batch_id = parse.json()["batch"]["id"]
+    rows = sorted(parse.json()["rows"], key=lambda r: r.get("row_index", 0))
+    assert len(rows) == 2
+
+    client.put(
+        f"/api/actual-imports/{batch_id}/rows/{rows[0]['id']}",
+        json={"entity_id": id_a, "selected_flow_id": fid_a, "include": True, "month": "2026-05"},
+    )
+    client.put(
+        f"/api/actual-imports/{batch_id}/rows/{rows[1]['id']}",
+        json={"entity_id": id_b, "selected_flow_id": fid_b, "include": True, "month": "2026-05"},
+    )
+
+    # Wrong filter: only entity A — matrix would miss entity B flows without the fix.
+    sim = client.post(
+        f"/api/actual-imports/{batch_id}/simulate",
+        params={"entity_id": id_a, "horizon": 12, "scenario": "likely"},
+        json={},
+    )
+    assert sim.status_code == 200, sim.text
+    matrix = sim.json().get("matrix") or {}
+    row_count = len(matrix.get("revenue_rows", [])) + len(matrix.get("expense_rows", []))
+    assert row_count > 0, matrix
+    flow_ids = {r.get("flow_id") for r in matrix.get("revenue_rows", []) + matrix.get("expense_rows", [])}
+    assert fid_a in flow_ids or fid_b in flow_ids
+
+    client.delete(f"/api/cash-flows/{fid_a}")
+    client.delete(f"/api/cash-flows/{fid_b}")
+    client.delete(f"/api/entities/{id_a}")
+    client.delete(f"/api/entities/{id_b}")

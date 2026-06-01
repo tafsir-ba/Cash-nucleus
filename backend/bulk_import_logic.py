@@ -245,6 +245,29 @@ async def apply_bulk_import_groups(
     return applied, failed, skipped, errors, batch_side_effects
 
 
+
+
+def preview_matrix_entity_id(
+    batch: dict,
+    valid_rows: List[dict],
+    entity_id: Optional[str] = None,
+) -> Optional[str]:
+    """Pick entity filter for simulation matrix.
+
+    When included rows span more than one entity, return None so the preview
+    includes all affected flows. A single-entity batch keeps that entity filter.
+    """
+    entity_ids = set()
+    for row in valid_rows:
+        eid = row.get("entity_id") or batch.get("entity_id")
+        if eid:
+            entity_ids.add(eid)
+    if len(entity_ids) > 1:
+        return None
+    if len(entity_ids) == 1:
+        return next(iter(entity_ids))
+    return entity_id or batch.get("entity_id")
+
 async def compute_bulk_import_preview(
     batch: dict,
     to_apply: List[dict],
@@ -345,7 +368,7 @@ async def compute_bulk_import_preview(
             )
         )
 
-    matrix_entity = entity_id or batch.get("entity_id")
+    matrix_entity = preview_matrix_entity_id(batch, valid_rows, entity_id)
     matrix = await get_projection_matrix(scenario=scenario, entity_id=matrix_entity, horizon=horizon)
 
     def patch_matrix_cells(row_list: List[dict]) -> None:
