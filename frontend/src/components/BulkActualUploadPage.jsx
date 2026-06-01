@@ -81,6 +81,11 @@ const flowBelongsToEntity = (flow, entityEff, entityList) => {
   return !!(ent?.name && flow.entity === ent.name);
 };
 
+const categoryOptionsForRow = (entityEff, globalCategories, perEntityMap) => {
+  const list = entityEff && perEntityMap[entityEff]?.length ? perEntityMap[entityEff] : globalCategories;
+  return list?.length ? list : globalCategories;
+};
+
 const sortFlowsForBulkImportRow = (flows, rowAmountNum) =>
   [...flows].sort((a, b) => {
     const aMatch = flowMatchesBulkImportDirection(a, rowAmountNum, a.entity_id) ? 1 : 0;
@@ -222,6 +227,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     setReviewSearch("");
   }, [batch?.id]);
   const [categories, setCategories] = useState(fallbackCategories);
+  const [categoriesByEntity, setCategoriesByEntity] = useState({});
   const [varianceActions, setVarianceActions] = useState(fallbackVarianceActions);
   const [selectedHistoryBatchId, setSelectedHistoryBatchId] = useState("none");
   // Review-table sort. `sortKey === null` means "file order" (same as row_index,
@@ -244,7 +250,14 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
   }, [entities, entityId]);
 
   const loadAllFlows = useCallback(async () => {
-    const scopeIds = [...new Set([entityId, batch?.entity_id].filter(Boolean))];
+    const scopeIds = [
+      ...new Set([
+        entityId,
+        batch?.entity_id,
+        ...rows.map((r) => r.entity_id),
+        ...entities.map((e) => e.id),
+      ].filter(Boolean)),
+    ];
     try {
       if (scopeIds.length === 0) {
         const res = await axios.get(`${API}/cash-flows`);
@@ -258,14 +271,21 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
         ),
       );
       const byId = new Map();
-      results.forEach((res) => {
-        (Array.isArray(res.data) ? res.data : []).forEach((f) => byId.set(f.id, f));
+      const catMap = {};
+      results.forEach((res, idx) => {
+        const body = res.data || {};
+        const flows = Array.isArray(body) ? body : body.flows || [];
+        const cats = body.categories || [];
+        flows.forEach((f) => byId.set(f.id, f));
+        const eid = scopeIds[idx];
+        if (eid && cats.length) catMap[eid] = cats;
       });
+      setCategoriesByEntity((prev) => ({ ...prev, ...catMap }));
       const merged = [...byId.values()];
       setAllFlows(merged);
       if (merged.length === 0) {
         toast.message(
-          "No cash flow lines found for this entity. Add lines in Cash Flow Table or use “New flow line for matching”.",
+          "No cash flow lines found for selected entities. Add lines in Cash Flow Table or use New flow line for matching.",
           { duration: 6000 },
         );
       }
@@ -273,7 +293,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
       setAllFlows([]);
       toast.error(err.response?.data?.detail || "Could not load cash flow lines for matching");
     }
-  }, [entityId, batch?.entity_id]);
+  }, [entityId, batch?.entity_id, rows, entities]);
 
   useEffect(() => {
     loadAllFlows();
@@ -1143,6 +1163,8 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                           value={rowEntityEffective}
                           onValueChange={(v) => {
                             const patch = { entity_id: v, selected_flow_id: null };
+                            const rowAmt = bulkImportAmountNumber(row, inspectAmountInput(row.amount));
+                            patch.category = rowAmt >= 0 ? REVENUE_CATEGORY : "Expense";
                             if (shouldBulkEdit(row.id)) {
                               setRows((prev) =>
                                 prev.map((r) => (multiEditRowIds.has(r.id) ? { ...r, ...patch } : r)),
@@ -1228,7 +1250,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {categories.map((c) => (
+                            {categoryOptionsForRow(rowEntityEffective, categories, categoriesByEntity).map((c) => (
                               <SelectItem key={c} value={c}>
                                 {c}
                               </SelectItem>
@@ -1270,7 +1292,10 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                           disabled={isNewLine}
                           onValueChange={(v) => {
                             const next = v === "none" ? null : v;
+                            const matchedFlow = next ? allFlows.find((f) => f.id === next) : null;
                             const payload = { selected_flow_id: next, classification: "existing_flow" };
+                            if (matchedFlow?.category) payload.category = matchedFlow.category;
+                            if (matchedFlow?.entity_id) payload.entity_id = matchedFlow.entity_id;
                             if (shouldBulkEdit(row.id)) {
                               setRows((prev) =>
                                 prev.map((r) => (multiEditRowIds.has(r.id) ? { ...r, ...payload } : r)),
@@ -1289,7 +1314,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                             <SelectItem value="none">Unmatched</SelectItem>
                             {flowOptions.map((f) => (
                               <SelectItem key={f.id} value={f.id}>
-                                {f.label}
+                                {f.label}{f.category ? ` - ${f.category}` : ""}
                               </SelectItem>
                             ))}
                           </SelectContent>

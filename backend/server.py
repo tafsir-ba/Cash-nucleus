@@ -883,6 +883,29 @@ async def validate_selected_flow_for_row(selected_flow_id: Optional[str], row_en
     return flow
 
 
+
+def _category_value(cat: Any) -> str:
+    if cat is None:
+        return Category.EXPENSE.value
+    if isinstance(cat, Category):
+        return cat.value
+    return str(cat)
+
+
+def category_from_flow(flow: dict) -> Category:
+    raw = _category_value(flow.get("category"))
+    try:
+        return Category(raw)
+    except ValueError:
+        amt = float(flow.get("amount", 0) or 0)
+        return Category.REVENUE if amt > 0 else Category.EXPENSE
+
+
+async def distinct_categories_for_entity(entity_id: str) -> List[str]:
+    flows = await fetch_entity_cash_flows_for_matching(entity_id)
+    return sorted({_category_value(f.get("category")) for f in flows})
+
+
 async def fetch_entity_cash_flows_for_matching(entity_id: Optional[str], limit: int = 5000) -> List[dict]:
     """Load cash flow lines for bulk-import matching (includes legacy rows missing entity_id)."""
     if not entity_id:
@@ -2147,12 +2170,16 @@ async def list_matching_flows_for_import(
     entity_id: str = Query(..., min_length=1),
     user: dict = Depends(get_current_user),
 ):
-    """Cash flow lines available for bulk-import Flow match dropdowns."""
+    """Cash flow lines and categories for bulk-import Flow match dropdowns."""
     ensure_bulk_actuals_enabled()
     entity_exists = await db.entities.find_one({"id": entity_id}, {"_id": 0, "id": 1})
     if not entity_exists:
         raise HTTPException(status_code=400, detail="entity_id does not exist")
-    return await fetch_entity_cash_flows_for_matching(entity_id)
+    flows = await fetch_entity_cash_flows_for_matching(entity_id)
+    return {
+        "flows": flows,
+        "categories": await distinct_categories_for_entity(entity_id),
+    }
 
 
 @api_router.post("/actual-imports/parse")
@@ -2271,10 +2298,10 @@ async def parse_actual_import(
         category = Category.REVENUE if parsed_amount > 0 else Category.EXPENSE
         match = best_flow_match(flows, description, parsed_amount, entity_id)
         selected_flow_id = match["flow_id"] if _auto_select_flow_match_score(match["score"], match.get("reason", "")) else None
-        matched_entity_id = entity_id
-        if not matched_entity_id and selected_flow_id:
-            matched = next((f for f in flows if f.get("id") == selected_flow_id), None)
-            matched_entity_id = matched.get("entity_id") if matched else None
+        matched_flow = next((f for f in flows if f.get("id") == selected_flow_id), None) if selected_flow_id else None
+        if matched_flow:
+            category = category_from_flow(matched_flow)
+        matched_entity_id = entity_id or (matched_flow.get("entity_id") if matched_flow else None)
         include = True
         status = "ready" if selected_flow_id else "warning"
 
@@ -2382,6 +2409,14 @@ async def update_actual_import_row(batch_id: str, row_id: str, update: ActualImp
         raise HTTPException(status_code=400, detail="Invalid classification")
     if patch.get("classification") == "new_flow":
         patch["selected_flow_id"] = None
+
+    if patch.get("selected_flow_id"):
+        flow_doc = await db.cash_flows.find_one({"id": patch["selected_flow_id"]}, {"_id": 0})
+        if flow_doc:
+            if "category" not in patch:
+                patch["category"] = category_from_flow(flow_doc)
+            if "entity_id" not in patch and flow_doc.get("entity_id"):
+                patch["entity_id"] = flow_doc["entity_id"]
 
     merged_class = patch["classification"] if "classification" in patch else row.get("classification", "existing_flow")
     row_entity_id = patch.get("entity_id", row.get("entity_id"))
@@ -2600,9 +2635,18 @@ async def update_settings(update: SettingsUpdate):
     return result
 
 @api_router.get("/meta/cash-flow")
-async def get_cash_flow_meta():
+async def get_cash_flow_meta(entity_id: Optional[str] = None):
+    global_cats = [c.value for c in Category]
+    if entity_id:
+        entity_exists = await db.entities.find_one({"id": entity_id}, {"_id": 0, "id": 1})
+        if not entity_exists:
+            raise HTTPException(status_code=400, detail="entity_id does not exist")
+        used = await distinct_categories_for_entity(entity_id)
+        categories = sorted(set(global_cats) | set(used), key=lambda c: (c not in global_cats, global_cats.index(c) if c in global_cats else 99, c))
+    else:
+        categories = global_cats
     return {
-        "categories": [c.value for c in Category],
+        "categories": categories,
         "variance_actions": [
             {"value": "actual_only", "label": "Actual only"},
             {"value": "carry_forward", "label": "Carry delta forward"},

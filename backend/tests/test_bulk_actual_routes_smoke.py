@@ -92,9 +92,12 @@ def test_openapi_registers_all_bulk_routes(client: TestClient):
 def test_matching_flows_returns_entity_lines(client: TestClient, entity_id: str, expense_flow_id: str):
     resp = client.get("/api/actual-imports/matching-flows", params={"entity_id": entity_id})
     assert resp.status_code == 200, resp.text
-    flows = resp.json()
+    body = resp.json()
+    flows = body["flows"] if isinstance(body, dict) else body
     assert isinstance(flows, list)
     assert any(f["id"] == expense_flow_id for f in flows)
+    if isinstance(body, dict):
+        assert "Expense" in body.get("categories", [])
 
 
 def test_parse_list_get_rows_update_simulate_rematch_apply_discard(
