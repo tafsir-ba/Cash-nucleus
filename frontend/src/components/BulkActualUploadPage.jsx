@@ -58,18 +58,28 @@ const bulkImportAmountNumber = (row, inspected) => {
   return Number.isFinite(n) ? n : 0;
 };
 
-/** %-linked flows may have amount 0 in the API; match bank debit/credit via category vs Revenue. */
+/** Bank debits/credits vs flow lines: use category when amount is zero or %-linked. */
 const flowMatchesBulkImportDirection = (flow, rowAmountNum, entityEff) => {
   if (flow.entity_id !== entityEff) return false;
-  const rowIsExpense = rowAmountNum < 0;
+  const rowIsRevenue = rowAmountNum > 0;
   if (flow.is_percentage) {
-    const flowIsExpense = flow.category !== REVENUE_CATEGORY;
-    return flowIsExpense === rowIsExpense;
+    const flowIsRevenue = flow.category === REVENUE_CATEGORY;
+    return flowIsRevenue === rowIsRevenue;
   }
   const a = typeof flow.amount === "number" ? flow.amount : parseFloat(flow.amount);
-  if (!Number.isFinite(a) || a === 0) return false;
-  return rowAmountNum >= 0 ? a > 0 : a < 0;
+  const byCategory = (flow.category === REVENUE_CATEGORY) === rowIsRevenue;
+  if (!Number.isFinite(a) || Math.abs(a) < 1e-9) return byCategory;
+  const byAmount = (a > 0) === rowIsRevenue;
+  return byAmount || byCategory;
 };
+
+const sortFlowsForBulkImportRow = (flows, rowAmountNum) =>
+  [...flows].sort((a, b) => {
+    const aMatch = flowMatchesBulkImportDirection(a, rowAmountNum, a.entity_id) ? 1 : 0;
+    const bMatch = flowMatchesBulkImportDirection(b, rowAmountNum, b.entity_id) ? 1 : 0;
+    if (aMatch !== bMatch) return bMatch - aMatch;
+    return (a.label || "").localeCompare(b.label || "", undefined, { sensitivity: "base" });
+  });
 
 const buildBulkRowReviewSearchText = (row, ctx) => {
   const {
@@ -374,6 +384,21 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
         });
         return next;
       });
+    }
+  };
+
+  const rematchBatch = async () => {
+    if (!batch) return;
+    setLoadingRows(true);
+    try {
+      const res = await axios.post(`${API}/actual-imports/${batch.id}/rematch`);
+      setBatch(res.data.batch || batch);
+      setRows(res.data.rows || []);
+      toast.success(`Re-matched ${res.data.rematched_rows ?? 0} row(s)`);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Rematch failed");
+    } finally {
+      setLoadingRows(false);
     }
   };
 
@@ -1016,9 +1041,8 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                   const scope = entityId || batch?.entity_id;
                   const inspected = inspectAmountInput(row.amount);
                   const amtNum = bulkImportAmountNumber(row, inspected);
-                  const flowOptions = allFlows.filter((f) =>
-                    flowMatchesBulkImportDirection(f, amtNum, rowEntityEffective),
-                  );
+                  const entityFlows = allFlows.filter((f) => f.entity_id === rowEntityEffective);
+                  const flowOptions = sortFlowsForBulkImportRow(entityFlows, amtNum);
                   const isSaving = !!persistingRows[row.id];
                   const classification = row.classification || "existing_flow";
                   const isNewLine = classification === "new_flow";
@@ -1292,6 +1316,15 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
               <button onClick={() => reloadRows()} className="btn-secondary text-sm" disabled={loadingRows}>
                 <ArrowClockwise size={14} className="inline mr-1" />
                 {loadingRows ? "Refreshing..." : "Refresh Review"}
+              </button>
+              <button
+                type="button"
+                onClick={rematchBatch}
+                disabled={loadingRows || applying || simulating || batch.status === "applied"}
+                className="btn-secondary text-sm"
+                data-testid="bulk-rematch-btn"
+              >
+                Re-match flows
               </button>
               <button
                 type="button"

@@ -21,6 +21,8 @@ import json
 import hashlib
 from dateutil import parser as date_parser
 
+from bulk_flow_match import best_flow_match, auto_select_flow_match_score as _auto_select_flow_match_score, flow_matches_import_direction
+
 from xlsx_simple import read_first_sheet_as_dict_rows
 
 ROOT_DIR = Path(__file__).parent
@@ -588,70 +590,6 @@ def parse_import_amount(raw_value: Any) -> Optional[float]:
     except ValueError:
         return None
 
-def best_flow_match(
-    flows: List[dict],
-    description: str,
-    amount: float,
-    entity_id: Optional[str] = None
-) -> Dict[str, Any]:
-    def tokens(text: str) -> set:
-        return {t for t in re.split(r"\W+", (text or "").lower()) if len(t) > 2}
-
-    desc_lower = (description or "").lower().strip()
-    desc_tokens = tokens(desc_lower)
-    amount_abs = abs(amount)
-    amount_sign = 1 if amount > 0 else -1
-    best: Dict[str, Any] = {"flow_id": None, "score": 0.0, "reason": "No close match"}
-
-    for flow in flows:
-        if entity_id and flow.get("entity_id") != entity_id:
-            continue
-        score = 0.0
-        reasons = []
-
-        flow_amount = float(flow.get("amount", 0))
-        flow_sign = 1 if flow_amount > 0 else -1
-        if flow_sign == amount_sign:
-            score += 0.4
-            reasons.append("direction")
-
-        flow_abs = abs(flow_amount)
-        if amount_abs > 0:
-            diff_ratio = abs(flow_abs - amount_abs) / amount_abs
-            if diff_ratio <= 0.05:
-                score += 0.35
-                reasons.append("amount-close")
-            elif diff_ratio <= 0.15:
-                score += 0.2
-                reasons.append("amount-near")
-
-        flow_label = (flow.get("label", "") or "").lower().strip()
-        flow_tokens = tokens(flow_label)
-        if flow_tokens and desc_tokens:
-            overlap = len(flow_tokens.intersection(desc_tokens))
-            union = len(flow_tokens.union(desc_tokens))
-            jaccard = (overlap / union) if union > 0 else 0
-            if jaccard >= 0.6:
-                score += 0.35
-                reasons.append("label-strong")
-            elif jaccard >= 0.35:
-                score += 0.22
-                reasons.append("label-medium")
-            elif overlap > 0:
-                score += 0.1
-                reasons.append("label-weak")
-        elif flow_label and flow_label in desc_lower:
-            score += 0.2
-            reasons.append("label-substring")
-
-        if score > best["score"]:
-            best = {
-                "flow_id": flow.get("id"),
-                "score": round(min(score, 0.99), 3),
-                "reason": ", ".join(reasons) if reasons else "weak",
-            }
-
-    return best
 
 def build_apply_fingerprint(
     rows: List[dict],
@@ -2288,7 +2226,7 @@ async def parse_actual_import(
 
         category = Category.REVENUE if parsed_amount > 0 else Category.EXPENSE
         match = best_flow_match(flows, description, parsed_amount, entity_id)
-        selected_flow_id = match["flow_id"] if match["score"] >= 0.7 else None
+        selected_flow_id = match["flow_id"] if _auto_select_flow_match_score(match["score"], match.get("reason", "")) else None
         matched_entity_id = entity_id
         if not matched_entity_id and selected_flow_id:
             matched = next((f for f in flows if f.get("id") == selected_flow_id), None)
@@ -2511,6 +2449,50 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
         "duplicate_conflicts": 0,
         "errors": errors[:50],
     }
+
+
+@api_router.post("/actual-imports/{batch_id}/rematch")
+async def rematch_actual_import_batch(batch_id: str, user: dict = Depends(get_current_user)):
+    """Re-run flow matching for all rows in a draft batch (e.g. after adding cash flow lines)."""
+    ensure_bulk_actuals_enabled()
+    batch = await db.actual_import_batches.find_one({"id": batch_id}, {"_id": 0})
+    if not batch:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+    if batch.get("status") in {"applied", "discarded"}:
+        raise HTTPException(status_code=400, detail="Cannot rematch a closed batch")
+
+    entity_id = batch.get("entity_id")
+    flow_query = {"entity_id": entity_id} if entity_id else {}
+    flows = await db.cash_flows.find(flow_query, {"_id": 0}).to_list(5000)
+
+    rows = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0}).sort("row_index", 1).to_list(100000)
+    updated = 0
+    for row in rows:
+        if row.get("classification") == "new_flow":
+            continue
+        if row.get("selected_flow_id") and row.get("status") == "applied":
+            continue
+        description = row.get("description") or ""
+        amount = float(row.get("amount", 0))
+        row_entity = row.get("entity_id") or entity_id
+        match = best_flow_match(flows, description, amount, row_entity)
+        selected = match["flow_id"] if _auto_select_flow_match_score(match["score"], match.get("reason", "")) else None
+        patch = {
+            "suggested_flow_id": match["flow_id"],
+            "match_score": match["score"],
+            "match_reason": match["reason"],
+            "selected_flow_id": selected,
+            "status": "ready" if selected else "warning",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.actual_import_rows.update_one({"id": row["id"]}, {"$set": patch})
+        updated += 1
+
+    await recalculate_import_batch_counts(batch_id)
+    rows_doc = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0}).sort("row_index", 1).to_list(5000)
+    batch_doc = await db.actual_import_batches.find_one({"id": batch_id}, {"_id": 0})
+    return {"batch": batch_doc, "rows": rows_doc, "rematched_rows": updated}
+
 
 @api_router.post("/actual-imports/{batch_id}/simulate", response_model=ActualImportSimulateResponse)
 async def simulate_actual_import(
