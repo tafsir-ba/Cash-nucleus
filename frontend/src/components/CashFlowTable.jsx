@@ -18,6 +18,14 @@ const formatCompact = (amount) => {
   return amount.toFixed(0);
 };
 
+
+const monthKeyToLabel = (monthKey) => {
+  if (!monthKey) return "";
+  const [y, m] = monthKey.split("-");
+  const d = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
+  return d.toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+};
+
 const formatCHF = (amount) => {
   return new Intl.NumberFormat('de-CH', {
     minimumFractionDigits: 2, maximumFractionDigits: 2,
@@ -208,18 +216,32 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
   const [showHistory, setShowHistory] = useState(false);
   const [historyRefresh, setHistoryRefresh] = useState(0);
 
+  const [recordMonth, setRecordMonth] = useState("");
+
   useEffect(() => {
     if (cellInfo && open) {
-      const val = cellInfo.cell?.has_actual ? cellInfo.cell.actual : cellInfo.cell?.amount;
-      setActualVal(val !== undefined ? Math.abs(val).toString() : "");
+      setRecordMonth(cellInfo.month);
       setShowHistory(false);
     }
   }, [cellInfo, open]);
 
+  useEffect(() => {
+    if (!cellInfo || !open || !recordMonth) return;
+    const c =
+      cellInfo.rowCells?.[recordMonth] ??
+      (recordMonth === cellInfo.month ? cellInfo.cell : null);
+    const val = c?.has_actual ? c.actual : c?.amount;
+    setActualVal(val !== undefined ? Math.abs(val).toString() : "");
+  }, [recordMonth, cellInfo, open]);
+
   if (!cellInfo) return null;
 
-  const planned = cellInfo.cell?.has_actual ? cellInfo.cell.planned : cellInfo.cell?.amount;
+  const activeCell =
+    cellInfo.rowCells?.[recordMonth] ??
+    (recordMonth === cellInfo.month ? cellInfo.cell : null);
+  const planned = activeCell?.has_actual ? activeCell.planned : activeCell?.amount;
   const isRevenue = (planned || 0) > 0;
+  const monthMoved = recordMonth && recordMonth !== cellInfo.month;
   const plannedAbs = Math.abs(planned || 0);
   const inspectedActual = inspectAmountInput(actualVal);
   const actualAbs = inspectedActual.isValid ? inspectedActual.value : null;
@@ -251,19 +273,28 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
     try {
       const sign = isRevenue ? 1 : -1;
       const actualAmount = parsedActual.value * sign;
+      const targetMonth = recordMonth || cellInfo.month;
       const res = await axios.put(`${API}/flow-occurrences`, {
         flow_id: cellInfo.flowId,
-        month: cellInfo.month,
+        month: targetMonth,
         actual_amount: actualAmount,
         variance_action: action,
       });
-      
-      // Show detailed feedback
+
+      if (targetMonth !== cellInfo.month && cellInfo.cell?.has_actual) {
+        await axios.delete(
+          `${API}/flow-occurrences?flow_id=${cellInfo.flowId}&month=${cellInfo.month}`,
+        );
+      }
+
+      const monthLabel = monthKeyToLabel(targetMonth);
       if (action === "carry_forward" && res.data.carryover_info) {
         const ci = res.data.carryover_info;
-        toast.success(`Actual recorded. CHF ${formatCHF(ci.amount)} carried to ${ci.target_month}`);
+        toast.success(`Actual recorded for ${monthLabel}. CHF ${formatCHF(ci.amount)} carried to ${ci.target_month}`);
       } else if (action === "write_off") {
-        toast.success(`Actual recorded. CHF ${formatCHF(varianceAmount)} variance written off`);
+        toast.success(`Actual recorded for ${monthLabel}. CHF ${formatCHF(varianceAmount)} variance written off`);
+      } else if (monthMoved) {
+        toast.success(`Actual moved to ${monthLabel}`);
       } else {
         toast.success("Actual confirmed");
       }
@@ -280,7 +311,8 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
   const handleClear = async () => {
     setSaving(true);
     try {
-      await axios.delete(`${API}/flow-occurrences?flow_id=${cellInfo.flowId}&month=${cellInfo.month}`);
+      const targetMonth = recordMonth || cellInfo.month;
+      await axios.delete(`${API}/flow-occurrences?flow_id=${cellInfo.flowId}&month=${targetMonth}`);
       toast.success("Actual cleared — reverted to planned");
       onSave?.();
       onOpenChange(false);
@@ -292,19 +324,36 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
   };
 
   // Compute next month label for carry forward preview
-  const [y, m] = (cellInfo.month || "2026-01").split("-");
-  const nextMonth = new Date(parseInt(y), parseInt(m), 1).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+  const [y, m] = ((recordMonth || cellInfo.month) || "2026-01").split("-");
+  const nextMonthDate = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
+  nextMonthDate.setMonth(nextMonthDate.getMonth() + 1);
+  const nextMonth = nextMonthDate.toLocaleDateString("en-GB", { month: "short", year: "numeric" });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="bg-zinc-900 border-zinc-800 max-w-sm">
         <DialogHeader>
           <DialogTitle className="text-zinc-100 font-heading text-sm">Record Actual</DialogTitle>
-          <DialogDescription className="text-zinc-500">{cellInfo.label} — {cellInfo.monthLabel}</DialogDescription>
+          <DialogDescription className="text-zinc-500">{cellInfo.label}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
+          <div>
+            <Label className="text-xs text-zinc-500 mb-1 block">Month</Label>
+            <input
+              type="month"
+              value={recordMonth}
+              onChange={(e) => setRecordMonth(e.target.value)}
+              className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100"
+              data-testid="actual-month-input"
+            />
+            {monthMoved && (
+              <p className="text-[10px] text-amber-400/90 mt-1">
+                Saving moves this actual from {cellInfo.monthLabel} to {monthKeyToLabel(recordMonth)}.
+              </p>
+            )}
+          </div>
           <div className="flex items-center justify-between text-xs">
-            <span className="text-zinc-500">Planned</span>
+            <span className="text-zinc-500">Planned ({monthKeyToLabel(recordMonth) || cellInfo.monthLabel})</span>
             <span className="font-mono text-zinc-300">CHF {formatCHF(plannedAbs)}</span>
           </div>
           <div>
@@ -399,7 +448,7 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
                 <Check size={12} /> Confirm actual matches planned
               </button>
             )}
-            {cellInfo.cell?.has_actual && (
+            {activeCell?.has_actual && (
               <button onClick={handleClear} disabled={saving}
                 className="text-xs text-zinc-600 hover:text-zinc-400 mt-1" data-testid="actual-clear">
                 Clear actual (revert to planned)
