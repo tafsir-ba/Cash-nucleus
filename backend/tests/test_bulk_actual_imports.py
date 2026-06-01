@@ -152,8 +152,8 @@ def test_bulk_import_apply_records_occurrence_and_enforces_entity_scope(auth_ses
     auth_session.delete(f"{BASE_URL}/api/entities/{other_entity['id']}", timeout=20)
 
 
-def test_bulk_import_apply_addition_merges_with_existing_actual(auth_session, test_entity):
-    """Addition mode sums the import row onto the stored actual; override replaces it."""
+def test_bulk_import_apply_replaces_existing_actual(auth_session, test_entity):
+    """A later bulk import replaces the stored actual for the matched flow/month."""
     flow_resp = auth_session.post(
         f"{BASE_URL}/api/cash-flows",
         json={
@@ -218,7 +218,6 @@ def test_bulk_import_apply_addition_merges_with_existing_actual(auth_session, te
             "selected_flow_id": flow["id"],
             "include": True,
             "month": "2026-06",
-            "actual_merge_mode": "addition",
         },
         timeout=20,
     )
@@ -236,16 +235,14 @@ def test_bulk_import_apply_addition_merges_with_existing_actual(auth_session, te
         timeout=20,
     )
     assert occ_final.status_code == 200
-    assert round(float(occ_final.json()[0]["actual_amount"]), 2) == -700.0
+    assert round(float(occ_final.json()[0]["actual_amount"]), 2) == -200.0
 
 
-def test_bulk_import_within_batch_replace_then_addition_running_sum(auth_session, test_entity):
-    """Within a single batch, a Replace row followed by an Add-to-current row on the
-    same flow+month must produce a running sum: second row adds on top of the first.
+def test_bulk_import_within_batch_sums_matching_lines(auth_session, test_entity):
+    """Multiple lines matching the same flow/month are grouped and summed once.
 
     Mirrors the real-world case of two Swisscom expense lines on the same statement:
-    row 1 (-110.25, Replace) writes -110.25, then row 2 (-101.85, Add to current)
-    must read the just-written -110.25 and land on -212.10.
+    -110.25 and -101.85 must land as one final actual amount of -212.10.
     """
     flow_resp = auth_session.post(
         f"{BASE_URL}/api/cash-flows",
@@ -280,32 +277,27 @@ def test_bulk_import_within_batch_replace_then_addition_running_sum(auth_session
     rows = parse_resp.json()["rows"]
     assert len(rows) == 2
 
-    # Parser may not preserve CSV order in its response; sort by row_index so the
-    # first row really is the -110.25 Replace line.
+    # Parser may not preserve CSV order in its response; sort by row_index for deterministic updates.
     rows_sorted = sorted(rows, key=lambda r: r.get("row_index", 0))
     row_first, row_second = rows_sorted[0], rows_sorted[1]
 
-    # Row 1: Replace with -110.25
     upd1 = auth_session.put(
         f"{BASE_URL}/api/actual-imports/{batch_id}/rows/{row_first['id']}",
         json={
             "selected_flow_id": flow["id"],
             "include": True,
             "month": "2026-04",
-            "actual_merge_mode": "override",
         },
         timeout=20,
     )
     assert upd1.status_code == 200, upd1.text
 
-    # Row 2: Add to current with -101.85
     upd2 = auth_session.put(
         f"{BASE_URL}/api/actual-imports/{batch_id}/rows/{row_second['id']}",
         json={
             "selected_flow_id": flow["id"],
             "include": True,
             "month": "2026-04",
-            "actual_merge_mode": "addition",
         },
         timeout=20,
     )
@@ -333,7 +325,7 @@ def test_bulk_import_within_batch_replace_then_addition_running_sum(auth_session
 
 def test_bulk_import_emits_cell_history_events(auth_session, test_entity):
     """After a bulk apply, GET /flow-occurrences/{id}/history?month= returns one
-    event per applied row, with accurate before/after amounts, merge modes, and
+    event for the grouped apply, with accurate before/after amounts and
     the batch filename so a user can trace what the upload actually wrote."""
     flow_resp = auth_session.post(
         f"{BASE_URL}/api/cash-flows",
@@ -372,7 +364,7 @@ def test_bulk_import_emits_cell_history_events(auth_session, test_entity):
         f"{BASE_URL}/api/actual-imports/{batch_id}/rows/{row_first['id']}",
         json={
             "selected_flow_id": flow["id"], "include": True,
-            "month": "2026-08", "actual_merge_mode": "override",
+            "month": "2026-08",
         },
         timeout=20,
     )
@@ -380,7 +372,7 @@ def test_bulk_import_emits_cell_history_events(auth_session, test_entity):
         f"{BASE_URL}/api/actual-imports/{batch_id}/rows/{row_second['id']}",
         json={
             "selected_flow_id": flow["id"], "include": True,
-            "month": "2026-08", "actual_merge_mode": "addition",
+            "month": "2026-08",
         },
         timeout=20,
     )
@@ -401,28 +393,17 @@ def test_bulk_import_emits_cell_history_events(auth_session, test_entity):
     assert history_resp.status_code == 200, history_resp.text
     events = history_resp.json()
     assert isinstance(events, list)
-    # Two apply events for this cell (newest first).
+    # One apply event records the grouped sum for this flow/month.
     bulk_events = [e for e in events if e.get("source") == "bulk_import" and e.get("batch_id") == batch_id]
-    assert len(bulk_events) == 2, bulk_events
+    assert len(bulk_events) == 1, bulk_events
+    e = bulk_events[0]
 
-    # Oldest-first ordering for easier per-row assertions.
-    bulk_events_asc = sorted(bulk_events, key=lambda e: e["timestamp"])
-    e1, e2 = bulk_events_asc
-
-    # Row 1 (Replace -110.25): previous None (fresh cell), new -110.25.
-    assert e1["merge_mode"] == "override"
-    assert round(float(e1["input_amount"]), 2) == -110.25
-    assert e1["previous_actual_amount"] in (None, 0, 0.0)
-    assert round(float(e1["new_actual_amount"]), 2) == -110.25
-    assert e1["batch_filename"] == "swisscom_trace.csv"
-    assert e1["batch_row_id"] == row_first["id"]
-
-    # Row 2 (Add to current -101.85): previous must be -110.25 from row 1, new -212.10.
-    assert e2["merge_mode"] == "addition"
-    assert round(float(e2["input_amount"]), 2) == -101.85
-    assert round(float(e2["previous_actual_amount"]), 2) == -110.25
-    assert round(float(e2["new_actual_amount"]), 2) == -212.10
-    assert e2["batch_row_id"] == row_second["id"]
+    assert e["merge_mode"] == "override"
+    assert round(float(e["input_amount"]), 2) == -212.10
+    assert e["previous_actual_amount"] in (None, 0, 0.0)
+    assert round(float(e["new_actual_amount"]), 2) == -212.10
+    assert e["batch_filename"] == "swisscom_trace.csv"
+    assert e["batch_row_id"] == row_first["id"]
 
     # History is returned newest-first by default.
     assert events[0]["timestamp"] >= events[-1]["timestamp"]
@@ -563,7 +544,7 @@ def test_bulk_import_undo_emits_reverse_history_events(auth_session, test_entity
         f"{BASE_URL}/api/actual-imports/{batch_id}/rows/{row['id']}",
         json={
             "selected_flow_id": flow["id"], "include": True,
-            "month": "2026-11", "actual_merge_mode": "override",
+            "month": "2026-11",
         },
         timeout=20,
     )

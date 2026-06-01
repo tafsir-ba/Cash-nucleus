@@ -199,9 +199,8 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
   const [varianceActions, setVarianceActions] = useState(fallbackVarianceActions);
   const [selectedHistoryBatchId, setSelectedHistoryBatchId] = useState("none");
   // Review-table sort. `sortKey === null` means "file order" (same as row_index,
-  // which is the order the backend applies rows in). Sort is view-only: apply
-  // still runs in row_index order so within-batch Replace-then-Add semantics
-  // stay deterministic regardless of how the user arranges the table.
+  // which is the stable order used before the backend groups matching rows. Sort is
+  // view-only, so grouping/summing stays deterministic regardless of the table view.
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState("asc");
   const [newFlowOpen, setNewFlowOpen] = useState(false);
