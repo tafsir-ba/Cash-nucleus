@@ -24,11 +24,52 @@ fi
 
 cd "$APP_ROOT"
 echo "==> Pulling latest code"
-git pull --ff-only
+git fetch origin main
+git checkout main
+git pull --ff-only origin main
 echo "==> Git HEAD: $(git rev-parse --short HEAD) on $(git branch --show-current)"
 
+REQUIRED_OPENAPI_PATHS=(
+  '"/api/actual-imports/matching-flows"'
+  '"/api/actual-imports/{batch_id}/simulate"'
+  '"/api/actual-imports/{batch_id}/rematch"'
+)
+
+ensure_supervisor_config() {
+  echo "==> Writing supervisor config (directory=$BACKEND_DIR)"
+  mkdir -p /var/log/cashpilot
+  cat > "$SUPERVISOR_CONF" <<EOF
+[program:cashpilot-backend]
+command=${BACKEND_DIR}/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8001 --log-level info
+directory=${BACKEND_DIR}
+user=root
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+stderr_logfile=/var/log/cashpilot/backend.err.log
+stdout_logfile=/var/log/cashpilot/backend.out.log
+environment=PATH="${BACKEND_DIR}/venv/bin"
+EOF
+  supervisorctl reread
+  supervisorctl update
+}
+
+restart_backend_supervised() {
+  ensure_supervisor_config
+  echo "==> Stopping backend and clearing stale listeners on :8001"
+  supervisorctl stop "$SUPERVISOR_PROCESS" 2>/dev/null || true
+  sleep 2
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k 8001/tcp 2>/dev/null || true
+    sleep 1
+  fi
+  supervisorctl start "$SUPERVISOR_PROCESS"
+  supervisorctl status "$SUPERVISOR_PROCESS"
+}
+
 verify_bulk_actuals_api() {
-  echo "==> Verifying bulk actuals simulate API"
+  echo "==> Verifying bulk actuals API on live server"
   local py="$BACKEND_DIR/venv/bin/python"
 
   for f in bulk_import_logic.py bulk_flow_match.py; do
@@ -43,46 +84,60 @@ verify_bulk_actuals_api() {
     exit 1
   fi
 
-  echo "==> Checking deployed Python exposes simulate route"
+  echo "==> Checking checked-out code registers bulk routes"
   (
     cd "$BACKEND_DIR"
     MONGO_URL="${MONGO_URL:-mongodb://127.0.0.1:27017}" \
     DB_NAME="${DB_NAME:-cashpilot}" \
     JWT_SECRET="${JWT_SECRET:-deploy-check}" \
-    "$py" -c "from server import app; p='/api/actual-imports/{batch_id}/simulate'; assert p in app.openapi()['paths'], p"
+    "$py" -c "
+from server import app
+paths = app.openapi()['paths']
+required = [
+    '/api/actual-imports/matching-flows',
+    '/api/actual-imports/{batch_id}/simulate',
+    '/api/actual-imports/{batch_id}/rematch',
+]
+missing = [p for p in required if p not in paths]
+if missing:
+    raise SystemExit('missing routes in code: ' + ', '.join(missing))
+print('code routes OK:', ', '.join(required))
+"
   ) || {
-    echo "ERROR: Checked-out backend code does not register simulate route."
+    echo "ERROR: Checked-out backend code does not register required bulk routes."
     exit 1
   }
 
-  if [[ -f "$SUPERVISOR_CONF" ]]; then
-    echo "==> Supervisor command (must use $BACKEND_DIR/venv/bin/uvicorn):"
-    grep -E '^command=' "$SUPERVISOR_CONF" || true
-    if ! grep -q "$BACKEND_DIR/venv/bin/uvicorn" "$SUPERVISOR_CONF" 2>/dev/null; then
-      echo "WARNING: Supervisor may not be running the project venv from $BACKEND_DIR"
-    fi
-  fi
-
-  local attempt
-  for attempt in 1 2 3 4 5 6; do
+  local attempt openapi
+  for attempt in 1 2 3 4 5 6 8 10; do
     sleep 2
-    if curl -sf "http://127.0.0.1:8001/openapi.json" | grep -q '"/api/actual-imports/{batch_id}/simulate"'; then
-      echo "==> Bulk actuals simulate route OK (running server)"
+    if ! openapi="$(curl -sf "http://127.0.0.1:8001/openapi.json" 2>/dev/null)"; then
+      echo "==> Waiting for API on :8001 (attempt $attempt)..."
+      continue
+    fi
+    local missing_live=()
+    for needle in "${REQUIRED_OPENAPI_PATHS[@]}"; do
+      if ! grep -qF "$needle" <<<"$openapi"; then
+        missing_live+=("$needle")
+      fi
+    done
+    if [[ ${#missing_live[@]} -eq 0 ]]; then
+      echo "==> Live server bulk routes OK"
       return 0
     fi
-    echo "==> Waiting for API on :8001 (attempt $attempt/6)..."
+    echo "==> Live server missing routes (attempt $attempt): ${missing_live[*]}"
   done
 
-  echo "ERROR: Running backend on :8001 does not expose POST /api/actual-imports/{batch_id}/simulate."
-  echo "       Deployed code is correct but the live process is stale or wrong."
-  echo "       Fix supervisor to use: $BACKEND_DIR/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8001"
-  echo "       directory=$BACKEND_DIR"
-  echo "       Then: supervisorctl reread && supervisorctl update && supervisorctl restart $SUPERVISOR_PROCESS"
-  echo "       Routes under actual-imports in live OpenAPI:"
-  curl -sf "http://127.0.0.1:8001/openapi.json" 2>/dev/null | grep -o '"/api/actual-imports[^"]*"' | sort -u || echo "       (could not fetch openapi.json)"
+  echo "ERROR: Live backend on :8001 is not running code from $BACKEND_DIR"
+  echo "       Supervisor command should be:"
+  echo "       ${BACKEND_DIR}/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8001"
+  echo "       directory=${BACKEND_DIR}"
+  echo "       Registered actual-import paths on live server:"
+  curl -sf "http://127.0.0.1:8001/openapi.json" 2>/dev/null | grep -o '"/api/actual-imports[^"]*"' | sort -u || true
+  echo "       Process on :8001:"
+  ss -ltnp 2>/dev/null | grep 8001 || true
   exit 1
 }
-
 
 run_backend_tests() {
   echo "==> Running bulk route smoke tests (in-memory DB)"
@@ -110,8 +165,7 @@ deploy_backend() {
   python3 -c "from bulk_import_logic import apply_bulk_import_groups, compute_bulk_import_preview; print('bulk_import_logic import OK')"
   python3 -c "from bulk_flow_match import best_flow_match; print('bulk_flow_match import OK')"
   deactivate
-  supervisorctl restart "$SUPERVISOR_PROCESS"
-  supervisorctl status "$SUPERVISOR_PROCESS"
+  restart_backend_supervised
   verify_bulk_actuals_api
 }
 
