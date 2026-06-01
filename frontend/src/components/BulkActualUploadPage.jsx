@@ -40,6 +40,14 @@ const scoreLabel = (score) => {
   return "Low";
 };
 
+/** Included row still missing entity (new line) or flow match (existing line). */
+const isUnmatchedRow = (row, scope) => {
+  if (!row.include) return false;
+  const cls = row.classification || "existing_flow";
+  if (cls === "new_flow") return !(row.entity_id || scope);
+  return !row.selected_flow_id;
+};
+
 const REVENUE_CATEGORY = "Revenue";
 
 const bulkImportAmountNumber = (row, inspected) => {
