@@ -11,7 +11,7 @@ import {
 } from "../components/ui/dialog";
 import { Label } from "../components/ui/label";
 import { CashFlowTable } from "./CashFlowTable";
-import { inspectAmountInput}, formatAmountInput } from "./amountExpression";
+import { inspectAmountInput, formatAmountInput } from "./amountExpression";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
