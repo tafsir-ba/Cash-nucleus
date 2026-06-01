@@ -882,6 +882,37 @@ async def validate_selected_flow_for_row(selected_flow_id: Optional[str], row_en
         raise HTTPException(status_code=400, detail="Selected flow does not belong to the import entity scope")
     return flow
 
+
+async def fetch_entity_cash_flows_for_matching(entity_id: Optional[str], limit: int = 5000) -> List[dict]:
+    """Load cash flow lines for bulk-import matching (includes legacy rows missing entity_id)."""
+    if not entity_id:
+        raw = await db.cash_flows.find({}, {"_id": 0}).to_list(limit)
+    else:
+        raw = await db.cash_flows.find({"entity_id": entity_id}, {"_id": 0}).to_list(limit)
+        if not raw:
+            entity = await db.entities.find_one({"id": entity_id}, {"_id": 0})
+            if entity and entity.get("name"):
+                raw = await db.cash_flows.find(
+                    {
+                        "$or": [
+                            {"entity_id": entity_id},
+                            {
+                                "entity": entity["name"],
+                                "$or": [
+                                    {"entity_id": {"$exists": False}},
+                                    {"entity_id": None},
+                                    {"entity_id": ""},
+                                ],
+                            },
+                        ]
+                    },
+                    {"_id": 0},
+                ).to_list(limit)
+    result: List[dict] = []
+    for f in raw:
+        result.append(await get_flow_with_dynamic_amount(f))
+    return result
+
 # ============== HELPER: Calculate percentage-based amount dynamically ==============
 async def get_flow_with_dynamic_amount(flow: dict) -> dict:
     """For percentage-based linked flows, calculate amount from parent dynamically."""
@@ -1479,7 +1510,7 @@ async def update_treasury_debt(flow_id: str, update: TreasuryDebtUpdate):
 @api_router.get("/cash-flows")
 async def get_cash_flows(entity_id: Optional[str] = None):
     query = {"entity_id": entity_id} if entity_id else {}
-    flows = await db.cash_flows.find(query, {"_id": 0}).to_list(1000)
+    flows = await db.cash_flows.find(query, {"_id": 0}).to_list(5000)
     # Calculate dynamic amounts for percentage-based flows
     result = []
     for f in flows:
@@ -2110,6 +2141,20 @@ async def recalculate_import_batch_counts(batch_id: str):
         }},
     )
 
+
+@api_router.get("/actual-imports/matching-flows")
+async def list_matching_flows_for_import(
+    entity_id: str = Query(..., min_length=1),
+    user: dict = Depends(get_current_user),
+):
+    """Cash flow lines available for bulk-import Flow match dropdowns."""
+    ensure_bulk_actuals_enabled()
+    entity_exists = await db.entities.find_one({"id": entity_id}, {"_id": 0, "id": 1})
+    if not entity_exists:
+        raise HTTPException(status_code=400, detail="entity_id does not exist")
+    return await fetch_entity_cash_flows_for_matching(entity_id)
+
+
 @api_router.post("/actual-imports/parse")
 async def parse_actual_import(
     file: UploadFile = File(...),
@@ -2191,8 +2236,7 @@ async def parse_actual_import(
         if not entity_exists:
             raise HTTPException(status_code=400, detail="entity_id does not exist")
 
-    flow_query = {"entity_id": entity_id} if entity_id else {}
-    flows = await db.cash_flows.find(flow_query, {"_id": 0}).to_list(5000)
+    flows = await fetch_entity_cash_flows_for_matching(entity_id)
 
     batch = ActualImportBatch(
         filename=filename,
@@ -2462,8 +2506,7 @@ async def rematch_actual_import_batch(batch_id: str, user: dict = Depends(get_cu
         raise HTTPException(status_code=400, detail="Cannot rematch a closed batch")
 
     entity_id = batch.get("entity_id")
-    flow_query = {"entity_id": entity_id} if entity_id else {}
-    flows = await db.cash_flows.find(flow_query, {"_id": 0}).to_list(5000)
+    flows = await fetch_entity_cash_flows_for_matching(entity_id)
 
     rows = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0}).sort("row_index", 1).to_list(100000)
     updated = 0

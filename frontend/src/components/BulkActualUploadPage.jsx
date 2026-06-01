@@ -73,6 +73,14 @@ const flowMatchesBulkImportDirection = (flow, rowAmountNum, entityEff) => {
   return byAmount || byCategory;
 };
 
+
+const flowBelongsToEntity = (flow, entityEff, entityList) => {
+  if (!entityEff) return true;
+  if (flow.entity_id === entityEff) return true;
+  const ent = entityList.find((e) => e.id === entityEff);
+  return !!(ent?.name && flow.entity === ent.name);
+};
+
 const sortFlowsForBulkImportRow = (flows, rowAmountNum) =>
   [...flows].sort((a, b) => {
     const aMatch = flowMatchesBulkImportDirection(a, rowAmountNum, a.entity_id) ? 1 : 0;
@@ -235,12 +243,37 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     }
   }, [entities, entityId]);
 
-  const loadAllFlows = useCallback(() => {
-    axios
-      .get(`${API}/cash-flows`)
-      .then((res) => setAllFlows(Array.isArray(res.data) ? res.data : []))
-      .catch(() => setAllFlows([]));
-  }, []);
+  const loadAllFlows = useCallback(async () => {
+    const scopeIds = [...new Set([entityId, batch?.entity_id].filter(Boolean))];
+    try {
+      if (scopeIds.length === 0) {
+        const res = await axios.get(`${API}/cash-flows`);
+        const list = Array.isArray(res.data) ? res.data : [];
+        setAllFlows(list);
+        return;
+      }
+      const results = await Promise.all(
+        scopeIds.map((id) =>
+          axios.get(`${API}/actual-imports/matching-flows`, { params: { entity_id: id } }),
+        ),
+      );
+      const byId = new Map();
+      results.forEach((res) => {
+        (Array.isArray(res.data) ? res.data : []).forEach((f) => byId.set(f.id, f));
+      });
+      const merged = [...byId.values()];
+      setAllFlows(merged);
+      if (merged.length === 0) {
+        toast.message(
+          "No cash flow lines found for this entity. Add lines in Cash Flow Table or use “New flow line for matching”.",
+          { duration: 6000 },
+        );
+      }
+    } catch (err) {
+      setAllFlows([]);
+      toast.error(err.response?.data?.detail || "Could not load cash flow lines for matching");
+    }
+  }, [entityId, batch?.entity_id]);
 
   useEffect(() => {
     loadAllFlows();
@@ -305,6 +338,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
       setApplyReviewOpen(false);
       setApplyReviewItems([]);
       await fetchBatchHistory(entityId);
+      await loadAllFlows();
       toast.success(`Parsed ${res.data.batch.total_rows} rows`);
     } catch (err) {
       toast.error(err.response?.data?.detail || "Failed to parse file");
@@ -426,6 +460,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
   const openBatch = async (batchId) => {
     setSelectedHistoryBatchId(batchId);
     await reloadRows(batchId);
+    await loadAllFlows();
     setApplyResult(null);
     setApplyReviewOpen(false);
     setApplyReviewItems([]);
@@ -451,7 +486,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     try {
       const params = { horizon: 12, scenario: "likely" };
       if (entityId || batch?.entity_id) params.entity_id = entityId || batch.entity_id;
-      const res = await axios.post(`${API}/actual-imports/${batch.id}/simulate`, null, { params });
+      const res = await axios.post(`${API}/actual-imports/${batch.id}/simulate`, {}, { params });
       setSimulationResult(res.data);
       setSimulationOpen(true);
       if (res.data?.errors?.length) {
@@ -865,6 +900,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
             <span className="text-zinc-500">Included: <span className="text-emerald-400">{summary.included}</span></span>
             <span className="text-zinc-500">Discarded: <span className="text-zinc-400">{summary.discarded}</span></span>
             <span className="text-zinc-500">Unmatched: <span className="text-amber-400">{summary.unmatched}</span></span>
+            <span className="text-zinc-500">Flows loaded: <span className="text-zinc-300">{allFlows.filter((f) => flowBelongsToEntity(f, entityId || batch?.entity_id, entities)).length}</span></span>
             {batch.id && (
               <span className="text-zinc-500">Batch ID: <span className="text-zinc-400 font-mono">{batch.id.slice(0, 8)}…</span></span>
             )}
@@ -1041,7 +1077,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                   const scope = entityId || batch?.entity_id;
                   const inspected = inspectAmountInput(row.amount);
                   const amtNum = bulkImportAmountNumber(row, inspected);
-                  const entityFlows = allFlows.filter((f) => f.entity_id === rowEntityEffective);
+                  const entityFlows = allFlows.filter((f) => flowBelongsToEntity(f, rowEntityEffective, entities));
                   const flowOptions = sortFlowsForBulkImportRow(entityFlows, amtNum);
                   const isSaving = !!persistingRows[row.id];
                   const classification = row.classification || "existing_flow";

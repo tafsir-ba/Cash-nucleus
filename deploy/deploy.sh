@@ -12,6 +12,7 @@ APP_ROOT="/opt/cashpilot"
 BACKEND_DIR="$APP_ROOT/backend"
 FRONTEND_DIR="$APP_ROOT/frontend"
 SUPERVISOR_PROCESS="cashpilot-backend"
+SUPERVISOR_CONF="/etc/supervisor/conf.d/cashpilot.conf"
 
 echo "==> Deploy mode: $MODE"
 echo "==> App root: $APP_ROOT"
@@ -24,21 +25,62 @@ fi
 cd "$APP_ROOT"
 echo "==> Pulling latest code"
 git pull --ff-only
+echo "==> Git HEAD: $(git rev-parse --short HEAD) on $(git branch --show-current)"
 
 verify_bulk_actuals_api() {
   echo "==> Verifying bulk actuals simulate API"
-  sleep 2
-  if [[ ! -f "$BACKEND_DIR/bulk_import_logic.py" ]]; then
-    echo "ERROR: missing $BACKEND_DIR/bulk_import_logic.py (git pull incomplete?)"
+  local py="$BACKEND_DIR/venv/bin/python"
+
+  for f in bulk_import_logic.py bulk_flow_match.py; do
+    if [[ ! -f "$BACKEND_DIR/$f" ]]; then
+      echo "ERROR: missing $BACKEND_DIR/$f (git pull incomplete?)"
+      exit 1
+    fi
+  done
+
+  if [[ ! -x "$py" ]]; then
+    echo "ERROR: $py not found"
     exit 1
   fi
-  if ! curl -sf "http://127.0.0.1:8001/openapi.json" | grep -q '"/api/actual-imports/{batch_id}/simulate"'; then
-    echo "ERROR: Running backend does not expose POST /api/actual-imports/{batch_id}/simulate."
-    echo "       Simulate in the UI returns 404 until the backend is redeployed."
-    echo "       Run: bash deploy/deploy.sh backend   (not frontend-only)"
+
+  echo "==> Checking deployed Python exposes simulate route"
+  (
+    cd "$BACKEND_DIR"
+    MONGO_URL="${MONGO_URL:-mongodb://127.0.0.1:27017}" \
+    DB_NAME="${DB_NAME:-cashpilot}" \
+    JWT_SECRET="${JWT_SECRET:-deploy-check}" \
+    "$py" -c "from server import app; p='/api/actual-imports/{batch_id}/simulate'; assert p in app.openapi()['paths'], p"
+  ) || {
+    echo "ERROR: Checked-out backend code does not register simulate route."
     exit 1
+  }
+
+  if [[ -f "$SUPERVISOR_CONF" ]]; then
+    echo "==> Supervisor command (must use $BACKEND_DIR/venv/bin/uvicorn):"
+    grep -E '^command=' "$SUPERVISOR_CONF" || true
+    if ! grep -q "$BACKEND_DIR/venv/bin/uvicorn" "$SUPERVISOR_CONF" 2>/dev/null; then
+      echo "WARNING: Supervisor may not be running the project venv from $BACKEND_DIR"
+    fi
   fi
-  echo "==> Bulk actuals simulate route OK"
+
+  local attempt
+  for attempt in 1 2 3 4 5 6; do
+    sleep 2
+    if curl -sf "http://127.0.0.1:8001/openapi.json" | grep -q '"/api/actual-imports/{batch_id}/simulate"'; then
+      echo "==> Bulk actuals simulate route OK (running server)"
+      return 0
+    fi
+    echo "==> Waiting for API on :8001 (attempt $attempt/6)..."
+  done
+
+  echo "ERROR: Running backend on :8001 does not expose POST /api/actual-imports/{batch_id}/simulate."
+  echo "       Deployed code is correct but the live process is stale or wrong."
+  echo "       Fix supervisor to use: $BACKEND_DIR/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8001"
+  echo "       directory=$BACKEND_DIR"
+  echo "       Then: supervisorctl reread && supervisorctl update && supervisorctl restart $SUPERVISOR_PROCESS"
+  echo "       Routes under actual-imports in live OpenAPI:"
+  curl -sf "http://127.0.0.1:8001/openapi.json" 2>/dev/null | grep -o '"/api/actual-imports[^"]*"' | sort -u || echo "       (could not fetch openapi.json)"
+  exit 1
 }
 
 deploy_backend() {
@@ -51,6 +93,7 @@ deploy_backend() {
   source venv/bin/activate
   pip install -r requirements.prod.txt
   python3 -c "from bulk_import_logic import apply_bulk_import_groups, compute_bulk_import_preview; print('bulk_import_logic import OK')"
+  python3 -c "from bulk_flow_match import best_flow_match; print('bulk_flow_match import OK')"
   deactivate
   supervisorctl restart "$SUPERVISOR_PROCESS"
   supervisorctl status "$SUPERVISOR_PROCESS"
