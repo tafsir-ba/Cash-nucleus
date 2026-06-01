@@ -6,7 +6,7 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Dict, Any, Literal
+from typing import List, Optional, Dict, Any, Literal, Tuple
 import uuid
 from datetime import datetime, timezone, date, timedelta
 from dateutil.relativedelta import relativedelta
@@ -240,6 +240,22 @@ class CashPositionHistoryResponse(BaseModel):
     days: List[CashPositionDayEntry]
     account_audit_log: List[BankAccountAuditLog]
 
+
+class ActualImportPreviewChange(BaseModel):
+    flow_id: Optional[str] = None
+    flow_label: str
+    month: str
+    current_actual: Optional[float] = None
+    preview_actual: float
+    import_row_count: int = 1
+    is_new_flow: bool = False
+
+
+class ActualImportSimulateResponse(BaseModel):
+    changes: List[ActualImportPreviewChange]
+    errors: List[dict] = []
+    matrix: Optional[dict] = None
+
 # ============== TREASURY DEBT VIEW MODELS ==============
 class DebtConsolidationItem(BaseModel):
     creditor: str
@@ -450,8 +466,6 @@ class ActualImportRow(BaseModel):
     error: Optional[str] = None
     # existing_flow: map to selected_flow_id. new_flow: apply creates a new cash flow line from this row, then records the actual.
     classification: str = "existing_flow"
-    # Per row: override replaces actual for that flow/month; addition adds this row's amount onto current actual.
-    actual_merge_mode: Literal["override", "addition"] = "override"
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -487,13 +501,10 @@ class ActualImportRowUpdate(BaseModel):
     selected_flow_id: Optional[str] = None
     variance_action: Optional[str] = None
     classification: Optional[Literal["existing_flow", "new_flow"]] = None
-    actual_merge_mode: Optional[Literal["override", "addition"]] = None
 
 class ActualImportApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     idempotency_key: Optional[str] = None
-    # Fallback when a row has no actual_merge_mode (legacy rows); prefer per-row on ActualImportRow.
-    actual_merge_mode: Literal["override", "addition"] = "override"
 
 
 # ============== UNDO SYSTEM ==============
@@ -653,7 +664,6 @@ def build_apply_fingerprint(
         cls = row.get("classification") or "existing_flow"
         # new_flow: fingerprint must stay stable after apply stores selected_flow_id on the row.
         flow_fp = None if cls == "new_flow" else row.get("selected_flow_id")
-        row_merge = row.get("actual_merge_mode") or "override"
         items.append({
             "row_id": row.get("id"),
             "flow_id": flow_fp,
@@ -661,7 +671,6 @@ def build_apply_fingerprint(
             "amount": round(float(row.get("amount", 0)), 2),
             "variance_action": row.get("variance_action", "actual_only"),
             "classification": cls,
-            "actual_merge_mode": row_merge,
         })
     payload = {
         "rows": sorted(items, key=lambda x: x["row_id"]),
@@ -669,6 +678,84 @@ def build_apply_fingerprint(
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def bulk_import_group_key(row: dict, batch: dict) -> tuple:
+    classification = row.get("classification", "existing_flow")
+    month = row.get("month")
+    if classification == "new_flow":
+        entity = row.get("entity_id") or batch.get("entity_id")
+        raw_cat = row.get("category", Category.EXPENSE.value)
+        cat = raw_cat.value if isinstance(raw_cat, Category) else str(raw_cat)
+        return ("new_flow", entity, cat, month)
+    return ("existing_flow", row.get("selected_flow_id"), month)
+
+
+def aggregate_bulk_import_groups(to_apply: List[dict], batch: dict) -> List[dict]:
+    groups: Dict[tuple, dict] = {}
+    for row in sorted(to_apply, key=lambda r: r.get("row_index", 0)):
+        key = bulk_import_group_key(row, batch)
+        if key not in groups:
+            groups[key] = {
+                "key": key,
+                "rows": [],
+                "amount_sum": 0.0,
+                "variance_action": row.get("variance_action", "actual_only"),
+            }
+        group = groups[key]
+        group["rows"].append(row)
+        group["amount_sum"] = round(group["amount_sum"] + float(row.get("amount", 0)), 2)
+        group["variance_action"] = row.get("variance_action", "actual_only")
+    return list(groups.values())
+
+
+def validate_bulk_import_row_for_apply(row: dict, batch: dict) -> Optional[str]:
+    classification = row.get("classification", "existing_flow")
+    month = row.get("month")
+    amount = row.get("amount")
+    entity_for_row = row.get("entity_id") or batch.get("entity_id")
+
+    if not month or amount is None:
+        return "Row missing month or amount"
+    if not is_valid_month_key(str(month)):
+        return "Row has invalid month format (expected YYYY-MM)"
+    try:
+        amount_value = float(amount)
+    except Exception:
+        return "Row has invalid amount"
+    if not math.isfinite(amount_value):
+        return "Row has invalid amount"
+
+    if classification == "new_flow":
+        if not entity_for_row:
+            return "New line rows require entity scope (set entity on batch or row)"
+        return None
+
+    if not row.get("selected_flow_id"):
+        return "Row missing selected_flow_id (pick a flow or switch target to New line)"
+    return None
+
+
+async def resolve_bulk_import_group_flow(
+    group: dict,
+    batch: dict,
+    *,
+    create_new_flows: bool,
+) -> Tuple[Optional[str], Optional[str], Optional["CashFlow"]]:
+    key = group["key"]
+    if key[0] == "existing_flow":
+        return key[1], None, None
+
+    entity_id = key[1]
+    if not entity_id:
+        return None, "New line rows require entity scope (set entity on batch or row)", None
+
+    if not create_new_flows:
+        return None, None, None
+
+    leader = group["rows"][0]
+    flow_obj = build_cash_flow_from_import_row(leader, entity_id, group["amount_sum"])
+    return flow_obj.id, None, flow_obj
 
 
 def build_cash_flow_from_import_row(row: dict, entity_id: str, amount_value: float) -> CashFlow:
@@ -2228,7 +2315,6 @@ async def parse_actual_import(
             match_score=match["score"],
             match_reason=match["reason"],
             classification="existing_flow",
-            actual_merge_mode="override",
         )
         created_rows.append(import_row.model_dump())
 
@@ -2312,9 +2398,6 @@ async def update_actual_import_row(batch_id: str, row_id: str, update: ActualImp
         raise HTTPException(status_code=400, detail="Invalid variance_action")
     if "classification" in patch and patch["classification"] not in {"existing_flow", "new_flow"}:
         raise HTTPException(status_code=400, detail="Invalid classification")
-    if "actual_merge_mode" in patch and patch["actual_merge_mode"] not in {"override", "addition"}:
-        raise HTTPException(status_code=400, detail="Invalid actual_merge_mode")
-
     if patch.get("classification") == "new_flow":
         patch["selected_flow_id"] = None
 
@@ -2387,169 +2470,15 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
     errors = []
     batch_side_effects = []
 
-    # Several bank lines may map to the same flow + month; each row has its own actual_merge_mode
-    # (Replace vs Add to current). Rows are applied in file order.
+    from bulk_import_logic import apply_bulk_import_groups
 
-    for row in to_apply:
-        row_id = row["id"]
-        classification = row.get("classification", "existing_flow")
-        month = row.get("month")
-        amount = row.get("amount")
-        variance_action = row.get("variance_action", "actual_only")
-        entity_for_row = row.get("entity_id") or batch.get("entity_id")
+    applied, failed, skipped, errors, batch_side_effects = await apply_bulk_import_groups(
+        batch=batch,
+        batch_id=batch_id,
+        to_apply=to_apply,
+        user=user,
+    )
 
-        if not month or amount is None:
-            failed += 1
-            msg = "Row missing month or amount"
-            errors.append({"row_id": row_id, "error": msg})
-            await db.actual_import_rows.update_one(
-                {"id": row_id},
-                {"$set": {"status": "failed", "error": msg, "updated_at": datetime.now(timezone.utc).isoformat()}},
-            )
-            continue
-        if not is_valid_month_key(str(month)):
-            failed += 1
-            msg = "Row has invalid month format (expected YYYY-MM)"
-            errors.append({"row_id": row_id, "error": msg})
-            await db.actual_import_rows.update_one(
-                {"id": row_id},
-                {"$set": {"status": "failed", "error": msg, "updated_at": datetime.now(timezone.utc).isoformat()}},
-            )
-            continue
-        try:
-            amount_value = float(amount)
-        except Exception:
-            amount_value = float("nan")
-        if not math.isfinite(amount_value):
-            failed += 1
-            msg = "Row has invalid amount"
-            errors.append({"row_id": row_id, "error": msg})
-            await db.actual_import_rows.update_one(
-                {"id": row_id},
-                {"$set": {"status": "failed", "error": msg, "updated_at": datetime.now(timezone.utc).isoformat()}},
-            )
-            continue
-
-        flow_id: Optional[str] = row.get("selected_flow_id")
-        if classification == "new_flow":
-            if not entity_for_row:
-                failed += 1
-                msg = "New line rows require entity scope (set entity on batch or row)"
-                errors.append({"row_id": row_id, "error": msg})
-                await db.actual_import_rows.update_one(
-                    {"id": row_id},
-                    {"$set": {"status": "failed", "error": msg, "updated_at": datetime.now(timezone.utc).isoformat()}},
-                )
-                continue
-            flow_id = None
-        elif not flow_id:
-            failed += 1
-            msg = "Row missing selected_flow_id (pick a flow or switch target to New line)"
-            errors.append({"row_id": row_id, "error": msg})
-            await db.actual_import_rows.update_one(
-                {"id": row_id},
-                {"$set": {"status": "failed", "error": msg, "updated_at": datetime.now(timezone.utc).isoformat()}},
-            )
-            continue
-
-        created_flow_id: Optional[str] = None
-        try:
-            if classification == "new_flow":
-                flow_obj = build_cash_flow_from_import_row(row, entity_for_row, amount_value)
-                await db.cash_flows.insert_one(flow_obj.model_dump())
-                flow_id = flow_obj.id
-                created_flow_id = flow_id
-                await validate_selected_flow_for_row(flow_id, entity_for_row, batch.get("entity_id"))
-            else:
-                await validate_selected_flow_for_row(flow_id, row.get("entity_id"), batch.get("entity_id"))
-
-            desired_variance_action = None if variance_action == "actual_only" else variance_action
-            prev_occurrence = await db.flow_occurrences.find_one(
-                {"flow_id": flow_id, "month": month},
-                {"_id": 0},
-            )
-            existing_amount = prev_occurrence.get("actual_amount") if prev_occurrence else None
-            existing_variance_action = prev_occurrence.get("variance_action") if prev_occurrence else None
-
-            base_existing = float(existing_amount) if existing_amount is not None else 0.0
-            row_merge = row.get("actual_merge_mode") or payload.actual_merge_mode
-            if row_merge == "addition":
-                final_amount = base_existing + amount_value
-            else:
-                final_amount = amount_value
-
-            if (
-                prev_occurrence
-                and existing_amount is not None
-                and round(float(existing_amount), 2) == round(float(final_amount), 2)
-                and existing_variance_action == desired_variance_action
-            ):
-                skipped += 1
-                if created_flow_id:
-                    await db.cash_flows.delete_many({"parent_id": created_flow_id})
-                    await db.cash_flows.delete_one({"id": created_flow_id})
-                await db.actual_import_rows.update_one(
-                    {"id": row_id},
-                    {"$set": {"status": "skipped", "error": None, "updated_at": datetime.now(timezone.utc).isoformat()}},
-                )
-                continue
-
-            existing_carryovers = await db.cash_flows.find({
-                "carryover_from": flow_id,
-                "carryover_month": month
-            }, {"_id": 0}).to_list(100)
-
-            occ_update = FlowOccurrenceUpdate(
-                flow_id=flow_id,
-                month=month,
-                actual_amount=float(final_amount),
-                variance_action=desired_variance_action,
-            )
-            occ_result = await upsert_flow_occurrence(
-                occ_update,
-                suppress_undo=True,
-                event_meta={
-                    "action": "set",
-                    "source": "bulk_import",
-                    "batch_id": batch_id,
-                    "batch_filename": batch.get("filename"),
-                    "batch_row_id": row_id,
-                    "input_amount": amount_value,
-                    "merge_mode": row_merge,
-                    "actor_id": user.get("id"),
-                    "actor_email": user.get("email"),
-                },
-            )
-            applied += 1
-            row_effects: Dict[str, Any] = {
-                "flow_id": flow_id,
-                "month": month,
-                "previous_occurrence": prev_occurrence,
-                "deleted_carryovers": existing_carryovers,
-                "created_carryover_ids": occ_result.get("created_carryover_ids", []),
-            }
-            if created_flow_id:
-                row_effects["created_flow_id"] = created_flow_id
-            batch_side_effects.append(row_effects)
-            row_set: Dict[str, Any] = {
-                "status": "applied",
-                "error": None,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-            if classification == "new_flow":
-                row_set["selected_flow_id"] = flow_id
-            await db.actual_import_rows.update_one({"id": row_id}, {"$set": row_set})
-        except Exception as exc:
-            if created_flow_id:
-                await db.cash_flows.delete_many({"parent_id": created_flow_id})
-                await db.cash_flows.delete_one({"id": created_flow_id})
-            failed += 1
-            msg = str(exc)
-            errors.append({"row_id": row_id, "error": msg})
-            await db.actual_import_rows.update_one(
-                {"id": row_id},
-                {"$set": {"status": "failed", "error": msg, "updated_at": datetime.now(timezone.utc).isoformat()}},
-            )
 
     if applied > 0:
         await push_undo(
@@ -2582,6 +2511,38 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
         "duplicate_conflicts": 0,
         "errors": errors[:50],
     }
+
+@api_router.post("/actual-imports/{batch_id}/simulate", response_model=ActualImportSimulateResponse)
+async def simulate_actual_import(
+    batch_id: str,
+    entity_id: Optional[str] = None,
+    horizon: int = Query(default=12, ge=12, le=36),
+    scenario: str = Query(default="likely"),
+    user: dict = Depends(get_current_user),
+):
+    ensure_bulk_actuals_enabled()
+    batch = await db.actual_import_batches.find_one({"id": batch_id}, {"_id": 0})
+    if not batch:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+
+    rows = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0}).sort("row_index", 1).to_list(100000)
+    to_apply = [r for r in rows if r.get("include", True)]
+    if not to_apply:
+        raise HTTPException(status_code=400, detail="No included rows to simulate")
+
+    if horizon not in [12, 24, 36]:
+        horizon = 12
+
+    from bulk_import_logic import compute_bulk_import_preview
+
+    return await compute_bulk_import_preview(
+        batch,
+        to_apply,
+        entity_id=entity_id or batch.get("entity_id"),
+        horizon=horizon,
+        scenario=scenario,
+    )
+
 
 @api_router.post("/actual-imports/{batch_id}/discard")
 async def discard_actual_import(batch_id: str, user: dict = Depends(get_current_user)):

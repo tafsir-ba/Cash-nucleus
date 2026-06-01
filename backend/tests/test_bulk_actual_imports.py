@@ -649,3 +649,64 @@ def test_bulk_import_new_flow_creates_cash_flow_and_actual(auth_session, test_en
     assert round(float(occs[0]["actual_amount"]), 2) == -333.5
 
     auth_session.delete(f"{BASE_URL}/api/cash-flows/{match['id']}?delete_linked=true", timeout=20)
+
+
+def test_bulk_import_simulate_returns_matrix_preview(auth_session, test_entity):
+    flow_resp = auth_session.post(
+        f"{BASE_URL}/api/cash-flows",
+        json={
+            "label": "TEST Bulk Simulate",
+            "amount": -1000,
+            "date": "2026-12-01",
+            "category": "Expense",
+            "certainty": "Materialized",
+            "recurrence": "none",
+            "entity_id": test_entity["id"],
+        },
+        timeout=20,
+    )
+    assert flow_resp.status_code == 200
+    flow = flow_resp.json()
+
+    csv_bytes = (
+        b"date,description,amount\n"
+        b"2026-12-05,Line A,-110.25\n"
+        b"2026-12-18,Line B,-101.85\n"
+    )
+    files = {"file": ("sim.csv", io.BytesIO(csv_bytes), "text/csv")}
+    parse_resp = auth_session.post(
+        f"{BASE_URL}/api/actual-imports/parse",
+        data={"entity_id": test_entity["id"]},
+        files=files,
+        timeout=20,
+    )
+    assert parse_resp.status_code == 200, parse_resp.text
+    batch_id = parse_resp.json()["batch"]["id"]
+    rows_sorted = sorted(parse_resp.json()["rows"], key=lambda r: r.get("row_index", 0))
+    for row in rows_sorted:
+        auth_session.put(
+            f"{BASE_URL}/api/actual-imports/{batch_id}/rows/{row['id']}",
+            json={"selected_flow_id": flow["id"], "include": True, "month": "2026-12"},
+            timeout=20,
+        )
+
+    sim_resp = auth_session.post(
+        f"{BASE_URL}/api/actual-imports/{batch_id}/simulate",
+        params={"entity_id": test_entity["id"], "horizon": 12},
+        timeout=30,
+    )
+    assert sim_resp.status_code == 200, sim_resp.text
+    data = sim_resp.json()
+    assert data.get("matrix") is not None
+    assert len(data.get("changes", [])) >= 1
+    change = next(c for c in data["changes"] if c.get("flow_id") == flow["id"])
+    assert round(float(change["preview_actual"]), 2) == -212.10
+    assert change.get("import_row_count") == 2
+
+    occ_resp = auth_session.get(
+        f"{BASE_URL}/api/flow-occurrences",
+        params={"flow_id": flow["id"], "month": "2026-12"},
+        timeout=20,
+    )
+    assert occ_resp.status_code == 200
+    assert len(occ_resp.json()) == 0

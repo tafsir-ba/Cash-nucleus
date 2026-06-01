@@ -10,7 +10,8 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "../components/ui/dialog";
 import { Label } from "../components/ui/label";
-import { inspectAmountInput, formatAmountInput } from "./amountExpression";
+import { CashFlowTable } from "./CashFlowTable";
+import { inspectAmountInput}, formatAmountInput } from "./amountExpression";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -19,11 +20,6 @@ const fallbackVarianceActions = [
   { value: "actual_only", label: "Actual only" },
   { value: "carry_forward", label: "Carry delta forward" },
   { value: "write_off", label: "Write off delta" },
-];
-
-const mergeModeOptions = [
-  { value: "override", label: "Replace" },
-  { value: "addition", label: "Add to current" },
 ];
 
 const sortColumnLabels = {
@@ -35,7 +31,6 @@ const sortColumnLabels = {
   classification: "Actual target",
   flow: "Flow match",
   confidence: "Confidence",
-  merge: "Amount vs actual",
   variance: "Variance mode",
 };
 
@@ -43,35 +38,6 @@ const scoreLabel = (score) => {
   if (score >= 0.8) return "High";
   if (score >= 0.6) return "Medium";
   return "Low";
-};
-
-/** Included row still missing entity (new line) or flow match (existing line). */
-const isUnmatchedRow = (row, scope) => {
-  if (!row.include) return false;
-  const cls = row.classification || "existing_flow";
-  if (cls === "new_flow") return !(row.entity_id || scope);
-  return !row.selected_flow_id;
-};
-
-/**
- * Rows that should indent "Amount vs actual" (addition under replace), in table order.
- * Same `selected_flow_id` groups rows; without a flow, each row is its own group.
- */
-const mergeModeAddIndentRowIds = (rowsInOrder) => {
-  const ids = new Set();
-  const seenReplaceInFlow = new Map();
-  for (const row of rowsInOrder) {
-    const flowKey = row.selected_flow_id
-      ? String(row.selected_flow_id)
-      : `__row__${row.id}`;
-    const mode = row.actual_merge_mode || "override";
-    if (mode === "override") {
-      seenReplaceInFlow.set(flowKey, true);
-    } else if (mode === "addition" && seenReplaceInFlow.get(flowKey) === true) {
-      ids.add(row.id);
-    }
-  }
-  return ids;
 };
 
 const REVENUE_CATEGORY = "Revenue";
@@ -97,10 +63,6 @@ const flowMatchesBulkImportDirection = (flow, rowAmountNum, entityEff) => {
   return rowAmountNum >= 0 ? a > 0 : a < 0;
 };
 
-const mergeModeLabelLookup = Object.fromEntries(
-  mergeModeOptions.map((m) => [m.value, m.label]),
-);
-
 const buildBulkRowReviewSearchText = (row, ctx) => {
   const {
     entityNameById,
@@ -113,7 +75,6 @@ const buildBulkRowReviewSearchText = (row, ctx) => {
   const flowLabel = row.selected_flow_id
     ? flowLabelById[row.selected_flow_id] || ""
     : "Unmatched";
-  const mergeMode = row.actual_merge_mode || "override";
   const varianceKey = row.variance_action || "actual_only";
   const parts = [
     String((row.row_index ?? 0) + 1),
@@ -128,8 +89,6 @@ const buildBulkRowReviewSearchText = (row, ctx) => {
     flowLabel,
     scoreLabel(row.match_score),
     String(row.match_score ?? ""),
-    mergeMode,
-    mergeModeLabelLookup[mergeMode] || "",
     varianceKey,
     varianceLabelByValue[varianceKey] || "",
     row.error || "",
@@ -219,6 +178,9 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
   const [allFlows, setAllFlows] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [simulating, setSimulating] = useState(false);
+  const [simulationOpen, setSimulationOpen] = useState(false);
+  const [simulationResult, setSimulationResult] = useState(null);
   const [discarding, setDiscarding] = useState(false);
   const [loadingRows, setLoadingRows] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -448,6 +410,30 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     return true;
   };
 
+  const runSimulation = async () => {
+    if (!batch) return;
+    for (const row of rows) {
+      if (!applyAmountExpression(row)) return;
+    }
+    setSimulating(true);
+    try {
+      const params = { horizon: 12, scenario: "likely" };
+      if (entityId || batch?.entity_id) params.entity_id = entityId || batch.entity_id;
+      const res = await axios.post(`${API}/actual-imports/${batch.id}/simulate`, null, { params });
+      setSimulationResult(res.data);
+      setSimulationOpen(true);
+      if (res.data?.errors?.length) {
+        toast.message(`Simulation ready with ${res.data.errors.length} row issue(s). Review before applying.`, { duration: 5000 });
+      } else {
+        toast.success("Simulation ready — preview the cash flow table before applying.");
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Simulation failed");
+    } finally {
+      setSimulating(false);
+    }
+  };
+
   const applyRows = async () => {
     if (!batch) return;
     for (const row of rows) {
@@ -647,8 +633,6 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
         return (flowLabelById[row.selected_flow_id] || "").toLowerCase();
       case "confidence":
         return typeof row.match_score === "number" ? row.match_score : -1;
-      case "merge":
-        return row.actual_merge_mode || "override";
       case "variance":
         return row.variance_action || "actual_only";
       default:
@@ -694,10 +678,6 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, rowFilter, entityId, batch?.entity_id, sortKey, sortDir, entityNameById, flowLabelById, reviewSearch, varianceLabelByValue]);
 
-  const mergeAddIndentIds = useMemo(
-    () => mergeModeAddIndentRowIds(visibleRows),
-    [visibleRows],
-  );
 
   const bulkSetIncludeForVisible = async (includeVal) => {
     if (!batch || visibleRows.length === 0) return;
@@ -875,17 +855,17 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
           </div>
 
           <div className="px-4 py-2 border-b border-zinc-800 text-[11px] text-zinc-600">
-            <span className="text-zinc-500">Amount vs actual (per row):</span>{" "}
-            <span className="text-zinc-400">Replace</span> sets this line’s amount as the new actual for that flow/month.{" "}
-            <span className="text-zinc-400">Add to current</span> adds this line on top of what is already stored (and on top of earlier lines in this batch for the same flow/month).{" "}
-            <span className="text-zinc-500">Sorting columns reorders this review table only — rows always apply in their original file order (the <span className="text-zinc-400">#</span> column).</span>
+            <span className="text-zinc-500">Apply logic:</span>{" "}
+            Each line sets the actual for its matched flow and month. Multiple included lines on the same flow/month are{" "}
+            <span className="text-zinc-400">summed</span> into one actual (replacing any prior actual for that cell).{" "}
+            <span className="text-zinc-500">Use <span className="text-zinc-400">Simulate</span> to preview the cash flow table before committing.</span>
           </div>
 
           <div className="px-4 py-2 border-b border-zinc-800 text-[11px] text-zinc-500">
             <span className="text-zinc-400">Use</span> includes or excludes a line from the final <span className="text-zinc-400">Update Actuals</span> run.{" "}
             <span className="text-zinc-400">Multi</span> groups rows for bulk field edits: with two or more <span className="text-zinc-400">Multi</span> rows, changing{" "}
             <span className="text-zinc-400">Entity</span>, <span className="text-zinc-400">Month</span>, <span className="text-zinc-400">Category</span>,{" "}
-            <span className="text-zinc-400">Actual target</span>, <span className="text-zinc-400">Flow match</span>, <span className="text-zinc-400">Amount vs actual</span>, or{" "}
+            <span className="text-zinc-400">Actual target</span>, <span className="text-zinc-400">Flow match</span>, or{" "}
             <span className="text-zinc-400">Variance</span> on <span className="text-zinc-300">any row that has Multi checked</span> (while two or more rows have Multi) updates every Multi-checked row. Description and amount stay per line.
           </div>
 
@@ -1019,7 +999,6 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                   <SortHeader label="Actual target"    sortKey="classification" activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-classification" />
                   <SortHeader label="Flow Match"       sortKey="flow"          activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-flow" />
                   <SortHeader label="Confidence"       sortKey="confidence"    activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-confidence" />
-                  <SortHeader label="Amount vs actual" sortKey="merge"         activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-merge" />
                   <SortHeader label="Variance Mode"    sortKey="variance"      activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-variance" />
                 </tr>
               </thead>
@@ -1039,7 +1018,6 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                   const isInMultiGroup =
                     !!row.multi_edit && multiEditRowsOrdered.length > 1;
                   const isUnmatched = isUnmatchedRow(row, scope);
-                  const indentMergeAdd = mergeAddIndentIds.has(row.id);
                   return (
                     <tr
                       key={row.id}
@@ -1260,49 +1238,6 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                           {isSaving ? "Saving..." : row.error || row.status}
                         </div>
                       </td>
-                      <td
-                        className={`px-2 py-2 align-top ${
-                          indentMergeAdd
-                            ? "pl-3 border-l-2 border-l-sky-500/35 bg-sky-950/20"
-                            : ""
-                        }`}
-                        title={
-                          indentMergeAdd
-                            ? "Add to current: stacks on the Replace row above (same flow match)"
-                            : undefined
-                        }
-                      >
-                        <Select
-                          value={row.actual_merge_mode || "override"}
-                          onValueChange={(v) => {
-                            if (shouldBulkEdit(row.id)) {
-                              setRows((prev) =>
-                                prev.map((r) =>
-                                  multiEditRowIds.has(r.id) ? { ...r, actual_merge_mode: v } : r,
-                                ),
-                              );
-                              persistFromAnchorRow(row.id, { actual_merge_mode: v });
-                            } else {
-                              updateRowLocal(row.id, { actual_merge_mode: v });
-                              persistRowPatch(row.id, { actual_merge_mode: v });
-                            }
-                          }}
-                        >
-                          <SelectTrigger
-                            className="w-[140px] max-w-full bg-zinc-950 border-zinc-800 h-[30px]"
-                            data-testid={`bulk-row-merge-${row.id}`}
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {mergeModeOptions.map((m) => (
-                              <SelectItem key={m.value} value={m.value}>
-                                {m.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </td>
                       <td className="px-2 py-2 align-top">
                         <Select
                           value={row.variance_action || "actual_only"}
@@ -1351,7 +1286,16 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                 <ArrowClockwise size={14} className="inline mr-1" />
                 {loadingRows ? "Refreshing..." : "Refresh Review"}
               </button>
-              <button onClick={applyRows} disabled={applying} className="btn-primary text-sm" data-testid="bulk-apply-btn">
+              <button
+                type="button"
+                onClick={runSimulation}
+                disabled={simulating || applying || summary.included === 0}
+                className="btn-secondary text-sm"
+                data-testid="bulk-simulate-btn"
+              >
+                {simulating ? "Simulating..." : "Simulate"}
+              </button>
+              <button onClick={applyRows} disabled={applying || simulating} className="btn-primary text-sm" data-testid="bulk-apply-btn">
                 {applying ? "Applying..." : "Update Actuals"}
               </button>
             </div>
@@ -1369,6 +1313,43 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
           )}
         </>
       )}
+
+
+      <Dialog open={simulationOpen} onOpenChange={setSimulationOpen}>
+        <DialogContent className="bg-zinc-950 border-zinc-800 max-w-[96vw] w-full max-h-[92vh] flex flex-col p-0 overflow-hidden" data-testid="bulk-simulation-dialog">
+          <DialogHeader className="px-5 pt-5 pb-3 border-b border-zinc-800 shrink-0">
+            <DialogTitle className="text-zinc-100 font-heading text-sm tracking-wide uppercase">Import simulation preview</DialogTitle>
+            <DialogDescription className="text-xs text-zinc-500">
+              Cash flow table after applying included rows (grouped sums per flow/month). Nothing is saved until you run Update Actuals.
+            </DialogDescription>
+          </DialogHeader>
+          {simulationResult?.changes?.length > 0 && (
+            <div className="px-5 py-2 border-b border-zinc-800 max-h-32 overflow-y-auto shrink-0">
+              <p className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Summary</p>
+              <ul className="text-xs text-zinc-400 space-y-0.5">
+                {simulationResult.changes.map((c, i) => (
+                  <li key={`${c.flow_label}-${c.month}-${i}`}>
+                    <span className="text-zinc-300">{c.flow_label}</span> · {c.month} → <span className="font-mono text-cyan-300">CHF {Number(c.preview_actual).toLocaleString("de-CH")}</span>
+                    {c.import_row_count > 1 && <span className="text-zinc-600"> ({c.import_row_count} lines summed)</span>}
+                    {c.is_new_flow && <span className="text-amber-400/80"> · new line</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="flex-1 min-h-0 overflow-auto p-3">
+            {simulationResult?.matrix ? (
+              <CashFlowTable scenario="likely" horizon={12} selectedEntityId={entityId || batch?.entity_id || ""} entities={entities} previewMatrix={simulationResult.matrix} readOnly />
+            ) : (
+              <p className="text-sm text-zinc-500 p-4">No preview data.</p>
+            )}
+          </div>
+          <DialogFooter className="px-5 py-3 border-t border-zinc-800 shrink-0 gap-2">
+            <button type="button" className="btn-secondary text-sm" onClick={() => setSimulationOpen(false)}>Close</button>
+            <button type="button" className="btn-primary text-sm" onClick={() => { setSimulationOpen(false); applyRows(); }} disabled={applying} data-testid="bulk-simulate-apply">Update Actuals</button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={applyReviewOpen} onOpenChange={setApplyReviewOpen}>
         <DialogContent className="bg-zinc-900 border-zinc-800 max-w-3xl max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden" data-testid="bulk-apply-review-dialog">

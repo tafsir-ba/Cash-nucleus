@@ -440,8 +440,17 @@ const calendarMonthStartKey = () => {
   return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}`;
 };
 
-export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChange, refreshKey, entities }) => {
-  const [matrixData, setMatrixData] = useState(null);
+export const CashFlowTable = ({
+  scenario,
+  selectedEntityId,
+  horizon,
+  onDataChange,
+  refreshKey,
+  entities,
+  previewMatrix = null,
+  readOnly = false,
+}) => {
+  const [matrixData, setMatrixData] = useState(previewMatrix);
   const [loading, setLoading] = useState(false);
   const [editingFlow, setEditingFlow] = useState(null);
   const [actualCell, setActualCell] = useState(null);
@@ -452,6 +461,7 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
   const [relockSaving, setRelockSaving] = useState(false);
 
   const fetchMatrix = useCallback(async () => {
+    if (previewMatrix) return;
     setLoading(true);
     try {
       const params = { scenario, horizon };
@@ -467,11 +477,19 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
     } finally {
       setLoading(false);
     }
-  }, [scenario, selectedEntityId, horizon]);
+  }, [scenario, selectedEntityId, horizon, previewMatrix]);
 
-  useEffect(() => { fetchMatrix(); }, [fetchMatrix, refreshKey]);
+  useEffect(() => {
+    if (previewMatrix) {
+      setMatrixData(previewMatrix);
+      setLoading(false);
+      return;
+    }
+    fetchMatrix();
+  }, [fetchMatrix, refreshKey, previewMatrix]);
 
   const handleRowClick = (row) => {
+    if (readOnly) return;
     axios.get(`${API}/cash-flows`).then(res => {
       const original = res.data.find(f => f.id === row.flow_id);
       if (original) setEditingFlow(original);
@@ -479,6 +497,7 @@ export const CashFlowTable = ({ scenario, selectedEntityId, horizon, onDataChang
   };
 
   const handleCellClick = (row, month, cell) => {
+    if (readOnly) return;
     setActualCell({
       flowId: row.flow_id, label: row.label,
       month: month.key, monthLabel: month.label, cell,
