@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { toast } from "sonner";
 import { format } from "date-fns";
@@ -84,6 +84,18 @@ const flowBelongsToEntity = (flow, entityEff, entityList) => {
 const categoryOptionsForRow = (entityEff, globalCategories, perEntityMap) => {
   const list = entityEff && perEntityMap[entityEff]?.length ? perEntityMap[entityEff] : globalCategories;
   return list?.length ? list : globalCategories;
+};
+
+
+/** Apply one boolean field to every visible row between anchor and target (inclusive). */
+const applyDragRangeToRows = (rows, visibleRows, anchorRowId, targetRowId, field, value) => {
+  const order = visibleRows.map((r) => r.id);
+  const a = order.indexOf(anchorRowId);
+  const b = order.indexOf(targetRowId);
+  if (a === -1 || b === -1) return rows;
+  const [lo, hi] = a < b ? [a, b] : [b, a];
+  const inRange = new Set(order.slice(lo, hi + 1));
+  return rows.map((row) => (inRange.has(row.id) ? { ...row, [field]: value } : row));
 };
 
 const sortFlowsForBulkImportRow = (flows, rowAmountNum) =>
@@ -242,6 +254,9 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
   const [newFlowMonth, setNewFlowMonth] = useState(() => format(new Date(), "yyyy-MM"));
   const [newFlowApplyAll, setNewFlowApplyAll] = useState(false);
   const [creatingFlow, setCreatingFlow] = useState(false);
+  const rowDragSelectRef = useRef(null);
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
 
   useEffect(() => {
     if (!entityId && entities.length > 0) {
@@ -802,6 +817,68 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
     }
   };
 
+
+  const persistRowsField = async (targetRows, field, value) => {
+    if (!batch || targetRows.length === 0) return;
+    setPersistingRows((prev) => {
+      const next = { ...prev };
+      targetRows.forEach((r) => { next[r.id] = true; });
+      return next;
+    });
+    try {
+      const patch = field === "include" ? { include: value } : { multi_edit: value };
+      const responses = await Promise.all(
+        targetRows.map((r) => axios.put(`${API}/actual-imports/${batch.id}/rows/${r.id}`, patch)),
+      );
+      setRows((prev) => {
+        const byId = {};
+        responses.forEach((res) => { if (res.data?.id) byId[res.data.id] = res.data; });
+        return prev.map((row) => (byId[row.id] ? { ...row, ...byId[row.id] } : row));
+      });
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to save row selection");
+    } finally {
+      setPersistingRows((prev) => {
+        const next = { ...prev };
+        targetRows.forEach((r) => { delete next[r.id]; });
+        return next;
+      });
+    }
+  };
+
+  const finishRowDragSelect = useCallback(async () => {
+    const drag = rowDragSelectRef.current;
+    if (!drag || !batch) return;
+    rowDragSelectRef.current = null;
+    const order = visibleRows.map((r) => r.id);
+    const a = order.indexOf(drag.anchorRowId);
+    const b = order.indexOf(drag.lastRowId);
+    if (a === -1 || b === -1) return;
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    const rangeIds = new Set(order.slice(lo, hi + 1));
+    const targets = rowsRef.current.filter((r) => rangeIds.has(r.id));
+    await persistRowsField(targets, drag.field, drag.value);
+  }, [batch, visibleRows]);
+
+  const beginRowDragSelect = (field, rowId, currentOn) => {
+    const value = !currentOn;
+    rowDragSelectRef.current = { field, anchorRowId: rowId, lastRowId: rowId, value };
+    setRows((prev) => applyDragRangeToRows(prev, visibleRows, rowId, rowId, field, value));
+  };
+
+  const extendRowDragSelect = (field, rowId) => {
+    const drag = rowDragSelectRef.current;
+    if (!drag || drag.field !== field) return;
+    drag.lastRowId = rowId;
+    setRows((prev) => applyDragRangeToRows(prev, visibleRows, drag.anchorRowId, rowId, field, drag.value));
+  };
+
+  useEffect(() => {
+    const onMouseUp = () => { finishRowDragSelect(); };
+    window.addEventListener("mouseup", onMouseUp);
+    return () => window.removeEventListener("mouseup", onMouseUp);
+  }, [finishRowDragSelect]);
+
   const bulkSetMultiForVisible = async (multiVal) => {
     if (!batch || visibleRows.length === 0) return;
     const targets = visibleRows;
@@ -951,7 +1028,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
 
           <div className="px-4 py-2 border-b border-zinc-800 text-[11px] text-zinc-500">
             <span className="text-zinc-400">Use</span> includes or excludes a line from the final <span className="text-zinc-400">Update Actuals</span> run.{" "}
-            <span className="text-zinc-400">Multi</span> groups rows for bulk field edits: with two or more <span className="text-zinc-400">Multi</span> rows, changing{" "}
+            <span className="text-zinc-400">Multi</span> (click or drag in the Multi column) groups rows for bulk field edits: with two or more <span className="text-zinc-400">Multi</span> rows, changing{" "}
             <span className="text-zinc-400">Entity</span>, <span className="text-zinc-400">Month</span>, <span className="text-zinc-400">Category</span>,{" "}
             <span className="text-zinc-400">Actual target</span>, <span className="text-zinc-400">Flow match</span>, or{" "}
             <span className="text-zinc-400">Variance</span> on <span className="text-zinc-300">any row that has Multi checked</span> (while two or more rows have Multi) updates every Multi-checked row. Description and amount stay per line.
@@ -1024,7 +1101,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                   </th>
                   <th className="align-top text-left px-2 py-2 text-zinc-500">
                     <div className="flex flex-col gap-1.5 min-w-[4.75rem]">
-                      <span>Use</span>
+                      <span title="Click or drag down rows to toggle">Use</span>
                       <div className="flex flex-wrap gap-1">
                         <button
                           type="button"
@@ -1054,7 +1131,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                     title="Bulk-edit group: check Multi on rows that receive the same field changes when you edit Entity, Month, etc. on any Multi-checked row"
                   >
                     <div className="flex flex-col gap-1.5 min-w-[4.75rem]">
-                      <span>Multi</span>
+                      <span title="Click or drag down rows to bulk-edit together">Multi</span>
                       <div className="flex flex-wrap gap-1">
                         <button
                           type="button"
@@ -1135,27 +1212,42 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                       >
                         {(row.row_index ?? 0) + 1}
                       </td>
-                      <td className="px-2 py-2 align-top">
+                      <td
+                        className="px-2 py-2 align-top select-none"
+                        onMouseDown={(e) => {
+                          if (e.button !== 0) return;
+                          e.preventDefault();
+                          beginRowDragSelect("include", row.id, !!row.include);
+                        }}
+                        onMouseEnter={() => extendRowDragSelect("include", row.id)}
+                      >
                         <input
                           type="checkbox"
+                          className="pointer-events-none"
+                          readOnly
                           checked={!!row.include}
-                          onChange={(e) => {
-                            updateRowLocal(row.id, { include: e.target.checked });
-                            persistRowPatch(row.id, { include: e.target.checked });
-                          }}
+                          tabIndex={-1}
+                          aria-label={`Include row ${(row.row_index ?? 0) + 1} in apply`}
                         />
                       </td>
-                      <td className="px-2 py-2 align-top">
+                      <td
+                        className="px-2 py-2 align-top select-none"
+                        onMouseDown={(e) => {
+                          if (e.button !== 0) return;
+                          e.preventDefault();
+                          beginRowDragSelect("multi_edit", row.id, !!row.multi_edit);
+                        }}
+                        onMouseEnter={() => extendRowDragSelect("multi_edit", row.id)}
+                        title="Click or drag to toggle Multi (bulk field edits)"
+                      >
                         <input
                           type="checkbox"
+                          className="pointer-events-none"
+                          readOnly
                           checked={!!row.multi_edit}
-                          onChange={(e) => {
-                            const v = e.target.checked;
-                            updateRowLocal(row.id, { multi_edit: v });
-                            persistRowPatch(row.id, { multi_edit: v });
-                          }}
-                          title="Include in Multi bulk field edits"
+                          tabIndex={-1}
                           data-testid={`bulk-row-multi-${row.id}`}
+                          aria-label={`Multi-edit row ${(row.row_index ?? 0) + 1}`}
                         />
                       </td>
                       <td className="px-2 py-2 align-top">
