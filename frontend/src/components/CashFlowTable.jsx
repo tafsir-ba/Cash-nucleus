@@ -222,17 +222,23 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
     if (cellInfo && open) {
       setRecordMonth(cellInfo.month);
       setShowHistory(false);
+      const c = cellInfo.cell;
+      const val = c?.has_actual ? c.actual : c?.amount;
+      setActualVal(val !== undefined ? Math.abs(val).toString() : "");
     }
   }, [cellInfo, open]);
 
-  useEffect(() => {
-    if (!cellInfo || !open || !recordMonth) return;
+  const handleRecordMonthChange = (newMonth) => {
+    setRecordMonth(newMonth);
+    if (!cellInfo) return;
     const c =
-      cellInfo.rowCells?.[recordMonth] ??
-      (recordMonth === cellInfo.month ? cellInfo.cell : null);
-    const val = c?.has_actual ? c.actual : c?.amount;
-    setActualVal(val !== undefined ? Math.abs(val).toString() : "");
-  }, [recordMonth, cellInfo, open]);
+      cellInfo.rowCells?.[newMonth] ??
+      (newMonth === cellInfo.month ? cellInfo.cell : null);
+    // Only replace the amount when the target month already has a saved actual.
+    if (c?.has_actual) {
+      setActualVal(Math.abs(c.actual).toString());
+    }
+  };
 
   if (!cellInfo) return null;
 
@@ -342,7 +348,7 @@ const ActualInputDialog = ({ cellInfo, open, onOpenChange, onSave }) => {
             <input
               type="month"
               value={recordMonth}
-              onChange={(e) => setRecordMonth(e.target.value)}
+              onChange={(e) => handleRecordMonthChange(e.target.value)}
               className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100"
               data-testid="actual-month-input"
             />
