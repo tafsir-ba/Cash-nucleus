@@ -56,7 +56,7 @@ case "$MODE" in
     deploy_backend
     ;;
   frontend)
-    echo "WARNING: frontend-only deploy does not update the API. Simulate needs: bash deploy/deploy.sh backend"
+    echo "WARNING: frontend-only deploy does not restart the API. Simulate needs: bash deploy/deploy.sh backend"
     deploy_frontend
     ;;
   *)
