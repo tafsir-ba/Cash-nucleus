@@ -163,6 +163,22 @@ class TestBankAccountCRUD:
         updated = response.json()
         assert updated["amount"] == 15000.00
         assert updated.get("last_movement") == pytest.approx(4999.5)
+
+        # Category flag (factoring / receivables financing)
+        assert account.get("is_receivables_financing") is False
+        response = requests.put(f"{BASE_URL}/api/bank-accounts/{account_id}", json={
+            "is_receivables_financing": True,
+        })
+        assert response.status_code == 200
+        categorized = response.json()
+        assert categorized.get("is_receivables_financing") is True
+        assert categorized.get("amount") == 15000.00
+
+        response = requests.put(f"{BASE_URL}/api/bank-accounts/{account_id}", json={
+            "is_receivables_financing": False,
+        })
+        assert response.status_code == 200
+        assert response.json().get("is_receivables_financing") is False
         
         # Delete
         response = requests.delete(f"{BASE_URL}/api/bank-accounts/{account_id}")

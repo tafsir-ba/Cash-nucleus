@@ -304,16 +304,18 @@ export const BankAccountsDialog = ({ open, onOpenChange, onDataChange, entities,
               </div>
             </div>
 
-            <label className="flex items-center gap-2 text-xs text-zinc-400">
-              <input
-                type="checkbox"
-                checked={!!formData.is_receivables_financing}
-                onChange={(e) => setFormData({ ...formData, is_receivables_financing: e.target.checked })}
-                className="h-4 w-4 accent-emerald-500 cursor-pointer"
-                data-testid="account-is-receivables-input"
-              />
-              Factoring / Receivables Financing
-            </label>
+            {editingId && (
+              <label className="flex items-center gap-2 text-xs text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={!!formData.is_receivables_financing}
+                  onChange={(e) => setFormData({ ...formData, is_receivables_financing: e.target.checked })}
+                  className="h-4 w-4 accent-emerald-500 cursor-pointer"
+                  data-testid="account-is-receivables-input"
+                />
+                Factoring / Receivables Financing
+              </label>
+            )}
 
             <button
               type="submit"

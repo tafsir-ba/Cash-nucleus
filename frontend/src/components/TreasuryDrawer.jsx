@@ -186,22 +186,6 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
     }
   };
 
-  const handleCategoryToggle = async (account, checked) => {
-    try {
-      await axios.put(`${API}/bank-accounts/${account.id}`, {
-        is_receivables_financing: checked,
-        trigger: "manual_adjustment",
-        note: checked
-          ? "Marked as factoring/receivables financing"
-          : "Removed from factoring/receivables financing",
-      });
-      fetchAccounts();
-      onDataChange?.();
-    } catch (error) {
-      toast.error("Failed to update category");
-    }
-  };
-
   const totalBalance = cashNow ?? accounts.reduce((sum, acc) => sum + acc.amount, 0);
   const totalDebt = debts.reduce((sum, debt) => sum + debt.total_debt_chf, 0);
 
@@ -270,9 +254,8 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
             <SortHeader field="label">Account</SortHeader>
             <SortHeader field="amount">Balance</SortHeader>
             <SortHeader field="last_movement">Movement</SortHeader>
-            <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-center py-3 px-3">Factoring</th>
             <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-right py-3 px-3">Share</th>
-            <th className="py-3 px-2 w-16"></th>
+            <th className="py-3 px-2 w-20"></th>
           </tr>
         </thead>
         <tbody>
@@ -306,16 +289,6 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                   data-testid={`treasury-movement-${account.id}`}
                 >
                   {formatMovement(account.last_movement)}
-                </td>
-                <td className="py-2.5 px-3 text-center">
-                  <input
-                    type="checkbox"
-                    checked={!!account.is_receivables_financing}
-                    onChange={(e) => handleCategoryToggle(account, e.target.checked)}
-                    className="h-4 w-4 accent-emerald-500 cursor-pointer"
-                    aria-label={`Mark ${account.label} as factoring`}
-                    data-testid={`account-receivables-checkbox-${account.id}`}
-                  />
                 </td>
                 <td className="py-2.5 px-3 text-xs text-zinc-500 text-right tabular-nums">
                   {share.toFixed(1)}%
@@ -586,16 +559,18 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                 </div>
               </div>
 
-              <label className="flex items-center gap-2 text-xs text-zinc-400">
-                <input
-                  type="checkbox"
-                  checked={!!formData.is_receivables_financing}
-                  onChange={(e) => setFormData({ ...formData, is_receivables_financing: e.target.checked })}
-                  className="h-4 w-4 accent-emerald-500 cursor-pointer"
-                  data-testid="account-is-receivables-input"
-                />
-                Factoring / Receivables Financing
-              </label>
+              {editingId && (
+                <label className="flex items-center gap-2 text-xs text-zinc-400">
+                  <input
+                    type="checkbox"
+                    checked={!!formData.is_receivables_financing}
+                    onChange={(e) => setFormData({ ...formData, is_receivables_financing: e.target.checked })}
+                    className="h-4 w-4 accent-emerald-500 cursor-pointer"
+                    data-testid="account-is-receivables-input"
+                  />
+                  Factoring / Receivables Financing
+                </label>
+              )}
 
               <div>
                 <Label className="text-xs text-zinc-500 mb-1.5 block">Adjustment Note (optional)</Label>
