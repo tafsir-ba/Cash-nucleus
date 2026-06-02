@@ -60,6 +60,7 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
     label: "",
     amount: "",
     entity_id: "",
+    is_receivables_financing: false,
   });
   const [showEntityCreate, setShowEntityCreate] = useState(false);
   const [newEntityName, setNewEntityName] = useState("");
@@ -102,7 +103,8 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
     setFormData({
       label: "",
       amount: "",
-      entity_id: entities.length > 0 ? entities[0].id : ""
+      entity_id: entities.length > 0 ? entities[0].id : "",
+      is_receivables_financing: false,
     });
     setEditingId(null);
     setAdjustmentNote("");
@@ -132,6 +134,7 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
         label: formData.label,
         amount: parseFloat(formData.amount),
         entity_id: formData.entity_id,
+        is_receivables_financing: !!formData.is_receivables_financing,
         note: adjustmentNote || undefined,
         trigger: "manual_adjustment",
       };
@@ -161,6 +164,7 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
       label: account.label,
       amount: account.amount.toString(),
       entity_id: account.entity_id,
+      is_receivables_financing: !!account.is_receivables_financing,
     });
     setShowAddForm(true);
   };
@@ -179,6 +183,22 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
       onDataChange?.();
     } catch (error) {
       toast.error("Failed to delete account");
+    }
+  };
+
+  const handleCategoryToggle = async (account, checked) => {
+    try {
+      await axios.put(`${API}/bank-accounts/${account.id}`, {
+        is_receivables_financing: checked,
+        trigger: "manual_adjustment",
+        note: checked
+          ? "Marked as factoring/receivables financing"
+          : "Removed from factoring/receivables financing",
+      });
+      fetchAccounts();
+      onDataChange?.();
+    } catch (error) {
+      toast.error("Failed to update category");
     }
   };
 
@@ -226,6 +246,8 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
     }
     return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
   });
+  const standardAccounts = sortedAccounts.filter((a) => !a.is_receivables_financing);
+  const receivablesAccounts = sortedAccounts.filter((a) => a.is_receivables_financing);
 
   const SortHeader = ({ field, children }) => (
     <th
@@ -237,6 +259,91 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
         <CaretUpDown size={12} className={sortField === field ? 'text-zinc-300' : 'text-zinc-600'} />
       </span>
     </th>
+  );
+
+  const renderAccountsTable = (tableAccounts, testIdPrefix) => (
+    <div className="border border-zinc-800 rounded-lg overflow-hidden">
+      <table className="w-full" data-testid={`${testIdPrefix}-table`}>
+        <thead>
+          <tr className="border-b border-zinc-800 bg-zinc-900/50">
+            <SortHeader field="entity">Entity</SortHeader>
+            <SortHeader field="label">Account</SortHeader>
+            <SortHeader field="amount">Balance</SortHeader>
+            <SortHeader field="last_movement">Movement</SortHeader>
+            <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-center py-3 px-3">Factoring</th>
+            <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-right py-3 px-3">Share</th>
+            <th className="py-3 px-2 w-16"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {tableAccounts.map((account) => {
+            const share = totalBalance > 0 ? ((account.amount / totalBalance) * 100) : 0;
+            return (
+              <tr
+                key={account.id}
+                className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors"
+                data-testid={`treasury-row-${account.id}`}
+              >
+                <td className="py-2.5 px-3 text-xs text-zinc-500">
+                  {getEntityName(account.entity_id)}
+                </td>
+                <td className="py-2.5 px-3 text-sm text-zinc-200">
+                  {account.label}
+                </td>
+                <td className="py-2.5 px-3 text-sm font-mono text-zinc-100 tabular-nums">
+                  {formatCurrency(account.amount)}
+                </td>
+                <td
+                  className={`py-2.5 px-3 text-xs font-mono tabular-nums ${
+                    account.last_movement == null
+                      ? "text-zinc-600"
+                      : account.last_movement > 0
+                        ? "text-emerald-400"
+                        : account.last_movement < 0
+                          ? "text-rose-400"
+                          : "text-zinc-500"
+                  }`}
+                  data-testid={`treasury-movement-${account.id}`}
+                >
+                  {formatMovement(account.last_movement)}
+                </td>
+                <td className="py-2.5 px-3 text-center">
+                  <input
+                    type="checkbox"
+                    checked={!!account.is_receivables_financing}
+                    onChange={(e) => handleCategoryToggle(account, e.target.checked)}
+                    className="h-4 w-4 accent-emerald-500 cursor-pointer"
+                    aria-label={`Mark ${account.label} as factoring`}
+                    data-testid={`account-receivables-checkbox-${account.id}`}
+                  />
+                </td>
+                <td className="py-2.5 px-3 text-xs text-zinc-500 text-right tabular-nums">
+                  {share.toFixed(1)}%
+                </td>
+                <td className="py-2.5 px-2">
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => handleEdit(account)}
+                      className="p-1 text-zinc-600 hover:text-zinc-300 rounded transition-colors"
+                      data-testid={`edit-account-${account.id}`}
+                    >
+                      <PencilSimple size={14} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(account.id)}
+                      className="p-1 text-zinc-600 hover:text-rose-400 rounded transition-colors"
+                      data-testid={`delete-account-${account.id}`}
+                    >
+                      <Trash size={14} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 
   const startDebtEdit = (debt) => {
@@ -386,76 +493,27 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                 No bank accounts yet. Add one below.
               </div>
             ) : (
-              <div className="border border-zinc-800 rounded-lg overflow-hidden">
-                <table className="w-full" data-testid="treasury-table">
-                  <thead>
-                    <tr className="border-b border-zinc-800 bg-zinc-900/50">
-                      <SortHeader field="entity">Entity</SortHeader>
-                      <SortHeader field="label">Account</SortHeader>
-                      <SortHeader field="amount">Balance</SortHeader>
-                      <SortHeader field="last_movement">Movement</SortHeader>
-                      <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-right py-3 px-3">Share</th>
-                      <th className="py-3 px-2 w-16"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedAccounts.map((account) => {
-                      const share = totalBalance > 0 ? ((account.amount / totalBalance) * 100) : 0;
-                      return (
-                        <tr
-                          key={account.id}
-                          className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors"
-                          data-testid={`treasury-row-${account.id}`}
-                        >
-                          <td className="py-2.5 px-3 text-xs text-zinc-500">
-                            {getEntityName(account.entity_id)}
-                          </td>
-                          <td className="py-2.5 px-3 text-sm text-zinc-200">
-                            {account.label}
-                          </td>
-                          <td className="py-2.5 px-3 text-sm font-mono text-zinc-100 tabular-nums">
-                            {formatCurrency(account.amount)}
-                          </td>
-                          <td
-                            className={`py-2.5 px-3 text-xs font-mono tabular-nums ${
-                              account.last_movement == null
-                                ? "text-zinc-600"
-                                : account.last_movement > 0
-                                  ? "text-emerald-400"
-                                  : account.last_movement < 0
-                                    ? "text-rose-400"
-                                    : "text-zinc-500"
-                            }`}
-                            data-testid={`treasury-movement-${account.id}`}
-                          >
-                            {formatMovement(account.last_movement)}
-                          </td>
-                          <td className="py-2.5 px-3 text-xs text-zinc-500 text-right tabular-nums">
-                            {share.toFixed(1)}%
-                          </td>
-                          <td className="py-2.5 px-2">
-                            <div className="flex items-center gap-1">
-                              <button
-                                onClick={() => handleEdit(account)}
-                                className="p-1 text-zinc-600 hover:text-zinc-300 rounded transition-colors"
-                                data-testid={`edit-account-${account.id}`}
-                              >
-                                <PencilSimple size={14} />
-                              </button>
-                              <button
-                                onClick={() => handleDelete(account.id)}
-                                className="p-1 text-zinc-600 hover:text-rose-400 rounded transition-colors"
-                                data-testid={`delete-account-${account.id}`}
-                              >
-                                <Trash size={14} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div className="space-y-3">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-zinc-600 mb-1.5">Standard Accounts</p>
+                  {standardAccounts.length > 0 ? (
+                    renderAccountsTable(standardAccounts, "treasury-standard")
+                  ) : (
+                    <div className="border border-zinc-800 rounded-lg py-4 text-center text-xs text-zinc-600">
+                      No standard accounts.
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-emerald-400 mb-1.5">Factoring / Receivables Financing</p>
+                  {receivablesAccounts.length > 0 ? (
+                    renderAccountsTable(receivablesAccounts, "treasury-receivables")
+                  ) : (
+                    <div className="border border-emerald-900/50 rounded-lg py-4 text-center text-xs text-zinc-600 bg-emerald-950/10">
+                      No accounts assigned to this category yet.
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -527,6 +585,17 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                   />
                 </div>
               </div>
+
+              <label className="flex items-center gap-2 text-xs text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={!!formData.is_receivables_financing}
+                  onChange={(e) => setFormData({ ...formData, is_receivables_financing: e.target.checked })}
+                  className="h-4 w-4 accent-emerald-500 cursor-pointer"
+                  data-testid="account-is-receivables-input"
+                />
+                Factoring / Receivables Financing
+              </label>
 
               <div>
                 <Label className="text-xs text-zinc-500 mb-1.5 block">Adjustment Note (optional)</Label>

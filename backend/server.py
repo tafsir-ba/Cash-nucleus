@@ -175,6 +175,7 @@ class BankAccount(BaseModel):
     entity: str = ""
     label: str
     amount: float
+    is_receivables_financing: bool = False
     last_movement: Optional[float] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -183,6 +184,7 @@ class BankAccountCreate(BaseModel):
     entity_id: str
     label: str
     amount: float
+    is_receivables_financing: bool = False
     note: Optional[str] = None
     trigger: Literal["manual_adjustment", "import", "system_recalc"] = "manual_adjustment"
 
@@ -190,6 +192,7 @@ class BankAccountUpdate(BaseModel):
     entity_id: Optional[str] = None
     label: Optional[str] = None
     amount: Optional[float] = None
+    is_receivables_financing: Optional[bool] = None
     note: Optional[str] = None
     trigger: Literal["manual_adjustment", "import", "system_recalc"] = "manual_adjustment"
 
@@ -1257,7 +1260,7 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate, user: 
     raw_update = update.model_dump(exclude_none=True)
     note = raw_update.pop("note", None)
     trigger = raw_update.pop("trigger", "manual_adjustment")
-    mutable_fields = {"entity_id", "label", "amount"}
+    mutable_fields = {"entity_id", "label", "amount", "is_receivables_financing"}
     update_data = {k: v for k, v in raw_update.items() if k in mutable_fields}
     if not update_data:
         raise HTTPException(status_code=400, detail="No valid update data")
@@ -1285,6 +1288,8 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate, user: 
             has_business_change = True
 
     if "label" in update_data and update_data["label"] != existing.get("label"):
+        has_business_change = True
+    if "is_receivables_financing" in update_data and bool(update_data["is_receivables_financing"]) != bool(existing.get("is_receivables_financing", False)):
         has_business_change = True
 
     if not has_business_change:

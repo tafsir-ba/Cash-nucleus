@@ -49,6 +49,7 @@ export const BankAccountsDialog = ({ open, onOpenChange, onDataChange, entities,
     label: "",
     amount: "",
     entity_id: "",
+    is_receivables_financing: false,
   });
   const [showEntityCreate, setShowEntityCreate] = useState(false);
   const [newEntityName, setNewEntityName] = useState("");
@@ -79,7 +80,8 @@ export const BankAccountsDialog = ({ open, onOpenChange, onDataChange, entities,
     setFormData({ 
       label: "", 
       amount: "", 
-      entity_id: entities.length > 0 ? entities[0].id : "" 
+      entity_id: entities.length > 0 ? entities[0].id : "",
+      is_receivables_financing: false,
     });
     setEditingId(null);
   };
@@ -109,6 +111,7 @@ export const BankAccountsDialog = ({ open, onOpenChange, onDataChange, entities,
         label: formData.label,
         amount: parseFloat(formData.amount),
         entity_id: formData.entity_id,
+        is_receivables_financing: !!formData.is_receivables_financing,
       };
 
       if (editingId) {
@@ -136,6 +139,7 @@ export const BankAccountsDialog = ({ open, onOpenChange, onDataChange, entities,
       label: account.label,
       amount: account.amount.toString(),
       entity_id: account.entity_id,
+      is_receivables_financing: !!account.is_receivables_financing,
     });
   };
 
@@ -299,6 +303,17 @@ export const BankAccountsDialog = ({ open, onOpenChange, onDataChange, entities,
                 />
               </div>
             </div>
+
+            <label className="flex items-center gap-2 text-xs text-zinc-400">
+              <input
+                type="checkbox"
+                checked={!!formData.is_receivables_financing}
+                onChange={(e) => setFormData({ ...formData, is_receivables_financing: e.target.checked })}
+                className="h-4 w-4 accent-emerald-500 cursor-pointer"
+                data-testid="account-is-receivables-input"
+              />
+              Factoring / Receivables Financing
+            </label>
 
             <button
               type="submit"
