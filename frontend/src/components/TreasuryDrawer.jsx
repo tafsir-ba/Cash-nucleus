@@ -162,7 +162,9 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
 
   const handleSaveAccount = async (accountId, updates) => {
     const account = accounts.find((a) => a.id === accountId);
-    if (!account) return;
+    if (!account) {
+      throw new Error("Account not found");
+    }
 
     const payload = {
       label: updates.label ?? account.label,
@@ -173,10 +175,15 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
       trigger: updates.trigger || "manual_adjustment",
     };
 
-    await axios.put(`${API}/bank-accounts/${accountId}`, payload);
-    toast.success("Account updated");
-    fetchAccounts();
-    onDataChange?.();
+    try {
+      await axios.put(`${API}/bank-accounts/${accountId}`, payload);
+      toast.success("Account updated");
+      await fetchAccounts();
+      onDataChange?.();
+    } catch (error) {
+      const detail = error?.response?.data?.detail;
+      throw new Error(typeof detail === "string" ? detail : "Failed to save account");
+    }
   };
 
   const handleDelete = async (id) => {

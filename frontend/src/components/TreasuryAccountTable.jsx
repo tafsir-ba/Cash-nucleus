@@ -49,10 +49,15 @@ export const TreasuryAccountTable = ({
   const [dirtyIds, setDirtyIds] = useState(new Set());
   const inputRef = useRef(null);
   const editingCellRef = useRef(null);
+  const editValueRef = useRef("");
 
   useEffect(() => {
     editingCellRef.current = editingCell;
   }, [editingCell]);
+
+  useEffect(() => {
+    editValueRef.current = editValue;
+  }, [editValue]);
 
   useEffect(() => {
     if (editingCell && inputRef.current) {
@@ -158,8 +163,8 @@ export const TreasuryAccountTable = ({
         });
       }
       return true;
-    } catch {
-      toast.error("Failed to save account");
+    } catch (error) {
+      toast.error(error?.message || "Failed to save account");
       return false;
     } finally {
       setSavingIds((prev) => {
@@ -173,7 +178,7 @@ export const TreasuryAccountTable = ({
   const handleKeyDown = (e, account, field) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      saveField(account, field, editValue);
+      saveField(account, field, editValueRef.current);
     } else if (e.key === "Escape") {
       e.preventDefault();
       cancelEdit(account.id);
@@ -184,7 +189,7 @@ export const TreasuryAccountTable = ({
     setTimeout(() => {
       const current = editingCellRef.current;
       if (current?.accountId === account.id && current?.field === field) {
-        saveField(account, field, editValue);
+        saveField(account, field, editValueRef.current);
       }
     }, 150);
   };
@@ -206,7 +211,6 @@ export const TreasuryAccountTable = ({
           onKeyDown={(e) => {
             if (e.key === "Escape") cancelEdit(account.id);
           }}
-          onBlur={() => handleBlur(account, "entity_id")}
           className={`${inputClass} text-xs`}
           data-testid={`inline-entity-${account.id}`}
         >
@@ -221,7 +225,7 @@ export const TreasuryAccountTable = ({
         type="button"
         onClick={() => startEdit(account, "entity_id")}
         className="text-left w-full text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
-        data-testid={`cell-entity-${account.id}`}
+        data-testid={`edit-account-${account.id}`}
       >
         {getEntityName(account.entity_id)}
       </button>

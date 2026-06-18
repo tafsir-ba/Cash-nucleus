@@ -27,6 +27,10 @@ describe("evaluateBalanceInput", () => {
     expect(evaluateBalanceInput("abc")).toBeNull();
     expect(evaluateBalanceInput("/0", current)).toBeNull();
   });
+
+  it("treats leading-minus as absolute when no current balance is provided", () => {
+    expect(evaluateBalanceInput("-250")).toBe(-250);
+  });
 });
 
 describe("inspectBalanceInput", () => {
