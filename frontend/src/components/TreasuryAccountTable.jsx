@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Trash, CaretUpDown } from "@phosphor-icons/react";
 import { toast } from "sonner";
-import { Checkbox } from "./ui/checkbox";
 import {
   inspectBalanceInput,
   formatAmountInput,
@@ -38,9 +37,6 @@ export const TreasuryAccountTable = ({
   formatCurrency,
   formatMovement,
   getEntityName,
-  selectedIds = new Set(),
-  onSelectionChange,
-  onSelectAll,
 }) => {
   const [editingCell, setEditingCell] = useState(null);
   const [editValue, setEditValue] = useState("");
@@ -194,8 +190,6 @@ export const TreasuryAccountTable = ({
     }, 150);
   };
 
-  const allSelected = accounts.length > 0 && accounts.every((a) => selectedIds.has(a.id));
-
   const renderEntityCell = (account) => {
     const isEditing = editingCell?.accountId === account.id && editingCell?.field === "entity_id";
     if (isEditing) {
@@ -286,15 +280,6 @@ export const TreasuryAccountTable = ({
       <table className="w-full" data-testid={`${testIdPrefix}-table`}>
         <thead>
           <tr className="border-b border-zinc-800 bg-zinc-900/50">
-            <th className="py-3 px-2 w-8">
-              <Checkbox
-                checked={allSelected}
-                onCheckedChange={(checked) => onSelectAll?.(!!checked)}
-                aria-label="Select all accounts"
-                data-testid={`${testIdPrefix}-select-all`}
-                className="border-zinc-600 data-[state=checked]:bg-zinc-200 data-[state=checked]:text-zinc-900"
-              />
-            </th>
             <SortHeader field="entity" sortField={sortField} sortDir={sortDir} onSort={onSort}>Entity</SortHeader>
             <SortHeader field="label" sortField={sortField} sortDir={sortDir} onSort={onSort}>Account</SortHeader>
             <SortHeader field="amount" sortField={sortField} sortDir={sortDir} onSort={onSort}>{"Balance"}</SortHeader>
@@ -320,18 +305,7 @@ export const TreasuryAccountTable = ({
                 } ${isSaving ? "opacity-60" : ""}`}
                 data-testid={`treasury-row-${account.id}`}
                 data-unsaved={isDirty ? "true" : undefined}
-                data-selected={selectedIds.has(account.id) ? "true" : undefined}
               >
-                <td className="py-2.5 px-2">
-                  <Checkbox
-                    checked={selectedIds.has(account.id)}
-                    onCheckedChange={(checked) => onSelectionChange?.(account.id, !!checked)}
-                    aria-label={`Select ${account.label}`}
-                    data-testid={`select-account-${account.id}`}
-                    data-bulk-select="true"
-                    className="border-zinc-600 data-[state=checked]:bg-zinc-200 data-[state=checked]:text-zinc-900"
-                  />
-                </td>
                 <td className="py-2 px-3">{renderEntityCell(account)}</td>
                 <td className="py-2 px-3">
                   {renderTextCell(account, "label", account.label, "text-sm text-zinc-200")}

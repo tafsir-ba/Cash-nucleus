@@ -68,7 +68,6 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
   const [showAddForm, setShowAddForm] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [adjustmentNote, setAdjustmentNote] = useState("");
-  const [selectedAccountIds, setSelectedAccountIds] = useState(new Set());
 
   const fetchAccounts = useCallback(async () => {
     try {
@@ -193,36 +192,11 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
         params: { trigger: "manual_adjustment" },
       });
       toast.success("Account deleted");
-      setSelectedAccountIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
       fetchAccounts();
       onDataChange?.();
     } catch (error) {
       toast.error("Failed to delete account");
     }
-  };
-
-  const handleSelectionChange = (accountId, checked) => {
-    setSelectedAccountIds((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(accountId);
-      else next.delete(accountId);
-      return next;
-    });
-  };
-
-  const handleSelectAll = (tableAccounts, checked) => {
-    setSelectedAccountIds((prev) => {
-      const next = new Set(prev);
-      tableAccounts.forEach((a) => {
-        if (checked) next.add(a.id);
-        else next.delete(a.id);
-      });
-      return next;
-    });
   };
 
   const totalBalance = cashNow ?? accounts.reduce((sum, acc) => sum + acc.amount, 0);
@@ -283,8 +257,6 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
     formatCurrency,
     formatMovement,
     getEntityName,
-    selectedIds: selectedAccountIds,
-    onSelectionChange: handleSelectionChange,
   };
 
   const startDebtEdit = (debt) => {
@@ -441,7 +413,6 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                     <TreasuryAccountTable
                       accounts={standardAccounts}
                       testIdPrefix="treasury-standard"
-                      onSelectAll={(checked) => handleSelectAll(standardAccounts, checked)}
                       {...tableProps}
                     />
                   ) : (
@@ -456,7 +427,6 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                     <TreasuryAccountTable
                       accounts={receivablesAccounts}
                       testIdPrefix="treasury-receivables"
-                      onSelectAll={(checked) => handleSelectAll(receivablesAccounts, checked)}
                       {...tableProps}
                     />
                   ) : (
