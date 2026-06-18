@@ -9,6 +9,7 @@ node_modules/
 /node_modules
 /.pnp
 .pnp.js
+frontend/yarn.lock
 .yarn/install-state.gz
 .yarn/*
 !.yarn/patches
