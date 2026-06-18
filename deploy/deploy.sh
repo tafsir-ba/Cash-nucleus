@@ -26,6 +26,11 @@ cd "$APP_ROOT"
 echo "==> Pulling latest code"
 git fetch origin main
 git checkout main
+# Older deploys may leave an untracked yarn.lock; pull fails once it is tracked in git.
+if git status --porcelain frontend/yarn.lock 2>/dev/null | grep -q '^??'; then
+  echo "==> Removing untracked frontend/yarn.lock (using repository version)"
+  rm -f frontend/yarn.lock
+fi
 git pull --ff-only origin main
 echo "==> Git HEAD: $(git rev-parse --short HEAD) on $(git branch --show-current)"
 
