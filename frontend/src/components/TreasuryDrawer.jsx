@@ -128,7 +128,7 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
     e.preventDefault();
     if (!formData.label || !formData.amount || !formData.entity_id) return;
 
-    const parsed = inspectBalanceInput(formData.amount, 0);
+    const parsed = inspectBalanceInput(formData.amount);
     if (!parsed.isValid) {
       toast.error("Invalid balance expression");
       return;
@@ -495,15 +495,15 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                   <Label className="text-xs text-zinc-500 mb-1.5 block">Balance (CHF)</Label>
                   <input
                     type="text"
-                    placeholder="0 or 100+52 or +500"
+                    placeholder="-25 or =100-25"
                     value={formData.amount}
                     onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
                     className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 placeholder-zinc-500 font-mono"
                     data-testid="account-amount-input"
                   />
-                  {formData.amount && formatBalancePreview(formData.amount, 0, formatCurrency) && (
+                  {formData.amount && formatBalancePreview(formData.amount, null, formatCurrency) && (
                     <p className="mt-1 text-[10px] text-emerald-400/80 font-mono">
-                      {formatBalancePreview(formData.amount, 0, formatCurrency)}
+                      {formatBalancePreview(formData.amount, null, formatCurrency)}
                     </p>
                   )}
                 </div>

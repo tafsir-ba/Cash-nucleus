@@ -1,5 +1,6 @@
 const ALLOWED_EXPR = /^[\d+\-*/().,\s]+$/;
 const HAS_OPERATOR = /[+\-*/()]/;
+const PLAIN_BALANCE = /^[+-]?\d+(?:[.,]\d+)?$/;
 
 const roundToTwo = (value) => Math.round(value * 100) / 100;
 
@@ -34,54 +35,47 @@ export const inspectAmountInput = (rawInput) => {
   };
 };
 
-const RELATIVE_ADJUSTMENT = /^([+\-*\/])(.+)$/;
+const parsePlainBalance = (text) => {
+  const normalized = text.replace(/,/g, ".").replace(/\s/g, "");
+  if (!PLAIN_BALANCE.test(normalized)) return null;
+  const value = parseFloat(normalized);
+  if (!Number.isFinite(value)) return null;
+  return roundToTwo(value);
+};
 
-export const evaluateBalanceInput = (rawInput, currentBalance = null) => {
+export const evaluateBalanceInput = (rawInput) => {
   const text = String(rawInput ?? "").trim();
   if (!text) return null;
 
-  const relativeMatch = text.match(RELATIVE_ADJUSTMENT);
-  if (relativeMatch && currentBalance != null && Number.isFinite(currentBalance)) {
-    const [, op, operandExpr] = relativeMatch;
-    const operand = evaluateAmountExpression(operandExpr);
-    if (operand === null) return null;
-    switch (op) {
-      case "+":
-        return roundToTwo(currentBalance + operand);
-      case "-":
-        return roundToTwo(currentBalance - operand);
-      case "*":
-        return roundToTwo(currentBalance * operand);
-      case "/":
-        return operand === 0 ? null : roundToTwo(currentBalance / operand);
-      default:
-        return null;
-    }
+  if (text.startsWith("=")) {
+    const expr = text.slice(1).trim();
+    if (!expr) return null;
+    return evaluateAmountExpression(expr);
   }
 
-  return evaluateAmountExpression(text);
+  return parsePlainBalance(text);
 };
 
-export const inspectBalanceInput = (rawInput, currentBalance = null) => {
+export const inspectBalanceInput = (rawInput) => {
   const text = String(rawInput ?? "").trim();
-  const isRelative = RELATIVE_ADJUSTMENT.test(text) && currentBalance != null && Number.isFinite(currentBalance);
-  const hasExpression = isRelative || HAS_OPERATOR.test(text.replace(/\s+/g, ""));
-  const value = evaluateBalanceInput(text, currentBalance);
+  const isCalculation = text.startsWith("=");
+  const value = evaluateBalanceInput(text);
   return {
     text,
-    hasExpression,
-    isRelative,
+    hasExpression: isCalculation,
+    isCalculation,
     value,
     isValid: value !== null,
   };
 };
 
-export const formatBalancePreview = (rawInput, currentBalance, formatFn) => {
-  const inspected = inspectBalanceInput(rawInput, currentBalance);
-  if (!inspected.isValid || !inspected.hasExpression) return null;
+export const formatBalancePreview = (rawInput, _currentBalance, formatFn) => {
+  const text = String(rawInput ?? "").trim();
+  if (!text.startsWith("=")) return null;
+
+  const inspected = inspectBalanceInput(rawInput);
+  if (!inspected.isValid) return null;
+
   const formatted = formatFn ? formatFn(inspected.value) : formatAmountInput(inspected.value);
-  if (inspected.isRelative) {
-    return `${rawInput.trim()} → ${formatted}`;
-  }
-  return `${rawInput.trim()} = ${formatted}`;
+  return `${text} → ${formatted}`;
 };

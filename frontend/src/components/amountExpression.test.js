@@ -5,59 +5,62 @@ import {
 } from "./amountExpression";
 
 describe("evaluateBalanceInput", () => {
-  const current = 1663;
+  const current = 100;
 
-  it("evaluates absolute expressions", () => {
-    expect(evaluateBalanceInput("100+52")).toBe(152);
-    expect(evaluateBalanceInput("500-125")).toBe(375);
-    expect(evaluateBalanceInput("1000*1.077")).toBe(1077);
-    expect(evaluateBalanceInput("1200/4")).toBe(300);
-    expect(evaluateBalanceInput("(1000+250)-50")).toBe(1200);
+  it("treats plain input as the absolute balance value", () => {
+    expect(evaluateBalanceInput("-25")).toBe(-25);
+    expect(evaluateBalanceInput("-2931.94")).toBe(-2931.94);
+    expect(evaluateBalanceInput("100")).toBe(100);
+    expect(evaluateBalanceInput("-25", current)).toBe(-25);
   });
 
-  it("applies relative adjustments from current balance", () => {
-    expect(evaluateBalanceInput("+500", current)).toBe(2163);
-    expect(evaluateBalanceInput("-250", current)).toBe(1413);
-    expect(evaluateBalanceInput("*1.05", current)).toBe(1746.15);
-    expect(evaluateBalanceInput("/2", current)).toBe(831.5);
+  it("evaluates expressions only when prefixed with =", () => {
+    expect(evaluateBalanceInput("=100-25")).toBe(75);
+    expect(evaluateBalanceInput("=-25")).toBe(-25);
+    expect(evaluateBalanceInput("=-25-25")).toBe(-50);
+    expect(evaluateBalanceInput("=-25-35", current)).toBe(-60);
+    expect(evaluateBalanceInput("=1000*1.077")).toBe(1077);
+    expect(evaluateBalanceInput("=(1000+250)-50")).toBe(1200);
+  });
+
+  it("does not evaluate bare expressions without =", () => {
+    expect(evaluateBalanceInput("100+52")).toBeNull();
+    expect(evaluateBalanceInput("500-125")).toBeNull();
+  });
+
+  it("does not apply relative adjustments to the previous balance", () => {
+    expect(evaluateBalanceInput("+500", current)).toBe(500);
+    expect(evaluateBalanceInput("-250", current)).toBe(-250);
+    expect(evaluateBalanceInput("*1.05", current)).toBeNull();
+    expect(evaluateBalanceInput("/2", current)).toBeNull();
   });
 
   it("returns null for invalid input", () => {
     expect(evaluateBalanceInput("")).toBeNull();
     expect(evaluateBalanceInput("abc")).toBeNull();
-    expect(evaluateBalanceInput("/0", current)).toBeNull();
-  });
-
-  it("treats leading-minus as absolute when no current balance is provided", () => {
-    expect(evaluateBalanceInput("-250")).toBe(-250);
+    expect(evaluateBalanceInput("=")).toBeNull();
+    expect(evaluateBalanceInput("=/0")).toBeNull();
   });
 });
 
 describe("inspectBalanceInput", () => {
-  it("detects relative adjustments", () => {
-    const result = inspectBalanceInput("+500", 1663);
-    expect(result.isRelative).toBe(true);
-    expect(result.isValid).toBe(true);
-    expect(result.value).toBe(2163);
-    expect(result.hasExpression).toBe(true);
-  });
+  it("marks only =-prefixed input as a calculation", () => {
+    const calc = inspectBalanceInput("=-25-35", 100);
+    expect(calc.isCalculation).toBe(true);
+    expect(calc.hasExpression).toBe(true);
+    expect(calc.value).toBe(-60);
 
-  it("detects absolute expressions", () => {
-    const result = inspectBalanceInput("100+52");
-    expect(result.isRelative).toBe(false);
-    expect(result.isValid).toBe(true);
-    expect(result.value).toBe(152);
+    const plain = inspectBalanceInput("-25", 100);
+    expect(plain.isCalculation).toBe(false);
+    expect(plain.hasExpression).toBe(false);
+    expect(plain.value).toBe(-25);
   });
 });
 
 describe("formatBalancePreview", () => {
-  it("formats relative preview", () => {
-    const preview = formatBalancePreview("+500", 1663, (v) => `CHF ${v}`);
-    expect(preview).toBe("+500 → CHF 2163");
-  });
-
-  it("formats expression preview", () => {
-    const preview = formatBalancePreview("100+52", 0, (v) => String(v));
-    expect(preview).toBe("100+52 = 152");
+  it("shows preview only for =-prefixed calculations", () => {
+    expect(formatBalancePreview("-2931.94", 100, (v) => `CHF ${v}`)).toBeNull();
+    expect(formatBalancePreview("=-25-35", 100, (v) => `CHF ${v}`)).toBe("=-25-35 → CHF -60");
+    expect(formatBalancePreview("=100-25", 0, (v) => String(v))).toBe("=100-25 → 75");
   });
 });

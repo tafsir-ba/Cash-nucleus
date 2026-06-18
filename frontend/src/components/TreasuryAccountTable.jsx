@@ -103,7 +103,7 @@ export const TreasuryAccountTable = ({
         hasChange = true;
       }
     } else if (field === "amount") {
-      const inspected = inspectBalanceInput(rawValue, account.amount);
+      const inspected = inspectBalanceInput(rawValue);
       if (!inspected.isValid) {
         toast.error("Invalid balance expression");
         return false;
@@ -231,7 +231,7 @@ export const TreasuryAccountTable = ({
     if (isEditing) {
       const isAmount = field === "amount";
       const preview = isAmount
-        ? formatBalancePreview(editValue, account.amount, formatCurrency)
+        ? formatBalancePreview(editValue, null, formatCurrency)
         : null;
       return (
         <div>
