@@ -33,3 +33,55 @@ export const inspectAmountInput = (rawInput) => {
     isValid: value !== null,
   };
 };
+
+const RELATIVE_ADJUSTMENT = /^([+\-*\/])(.+)$/;
+
+export const evaluateBalanceInput = (rawInput, currentBalance = null) => {
+  const text = String(rawInput ?? "").trim();
+  if (!text) return null;
+
+  const relativeMatch = text.match(RELATIVE_ADJUSTMENT);
+  if (relativeMatch && currentBalance != null && Number.isFinite(currentBalance)) {
+    const [, op, operandExpr] = relativeMatch;
+    const operand = evaluateAmountExpression(operandExpr);
+    if (operand === null) return null;
+    switch (op) {
+      case "+":
+        return roundToTwo(currentBalance + operand);
+      case "-":
+        return roundToTwo(currentBalance - operand);
+      case "*":
+        return roundToTwo(currentBalance * operand);
+      case "/":
+        return operand === 0 ? null : roundToTwo(currentBalance / operand);
+      default:
+        return null;
+    }
+  }
+
+  return evaluateAmountExpression(text);
+};
+
+export const inspectBalanceInput = (rawInput, currentBalance = null) => {
+  const text = String(rawInput ?? "").trim();
+  const isRelative = RELATIVE_ADJUSTMENT.test(text) && currentBalance != null && Number.isFinite(currentBalance);
+  const hasExpression = isRelative || HAS_OPERATOR.test(text.replace(/\s+/g, ""));
+  const value = evaluateBalanceInput(text, currentBalance);
+  return {
+    text,
+    hasExpression,
+    isRelative,
+    value,
+    isValid: value !== null,
+  };
+};
+
+export const formatBalancePreview = (rawInput, currentBalance, formatFn) => {
+  const inspected = inspectBalanceInput(rawInput, currentBalance);
+  if (!inspected.isValid || !inspected.hasExpression) return null;
+  const formatted = formatFn ? formatFn(inspected.value) : formatAmountInput(inspected.value);
+  if (inspected.isRelative) {
+    return `${rawInput.trim()} → ${formatted}`;
+  }
+  return `${rawInput.trim()} = ${formatted}`;
+};

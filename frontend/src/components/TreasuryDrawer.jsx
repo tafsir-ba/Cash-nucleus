@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import { toast } from "sonner";
-import { Plus, Trash, PencilSimple, X, Bank, CaretUpDown } from "@phosphor-icons/react";
+import { Plus, Trash, PencilSimple, X, Bank } from "@phosphor-icons/react";
 import {
   Sheet,
   SheetContent,
@@ -18,6 +18,8 @@ import {
 } from "../components/ui/select";
 import { Label } from "../components/ui/label";
 import { CashPositionHistoryDialog } from "./CashPositionHistoryDialog";
+import { TreasuryAccountTable } from "./TreasuryAccountTable";
+import { inspectBalanceInput, formatAmountInput, formatBalancePreview } from "./amountExpression";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -53,7 +55,6 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
   const [loading, setLoading] = useState(false);
   const [debtEditingId, setDebtEditingId] = useState(null);
   const [debtForm, setDebtForm] = useState({ creditor: "", total_debt_chf: "" });
-  const [editingId, setEditingId] = useState(null);
   const [sortField, setSortField] = useState(null);
   const [sortDir, setSortDir] = useState('desc');
   const [formData, setFormData] = useState({
@@ -67,6 +68,7 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
   const [showAddForm, setShowAddForm] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [adjustmentNote, setAdjustmentNote] = useState("");
+  const [selectedAccountIds, setSelectedAccountIds] = useState(new Set());
 
   const fetchAccounts = useCallback(async () => {
     try {
@@ -106,7 +108,6 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
       entity_id: entities.length > 0 ? entities[0].id : "",
       is_receivables_financing: false,
     });
-    setEditingId(null);
     setAdjustmentNote("");
   };
 
@@ -128,24 +129,25 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
     e.preventDefault();
     if (!formData.label || !formData.amount || !formData.entity_id) return;
 
+    const parsed = inspectBalanceInput(formData.amount, 0);
+    if (!parsed.isValid) {
+      toast.error("Invalid balance expression");
+      return;
+    }
+
     setLoading(true);
     try {
       const payload = {
         label: formData.label,
-        amount: parseFloat(formData.amount),
+        amount: parsed.value,
         entity_id: formData.entity_id,
         is_receivables_financing: !!formData.is_receivables_financing,
         note: adjustmentNote || undefined,
         trigger: "manual_adjustment",
       };
 
-      if (editingId) {
-        await axios.put(`${API}/bank-accounts/${editingId}`, payload);
-        toast.success("Account updated");
-      } else {
-        await axios.post(`${API}/bank-accounts`, payload);
-        toast.success("Account added");
-      }
+      await axios.post(`${API}/bank-accounts`, payload);
+      toast.success("Account added");
 
       resetForm();
       setShowAddForm(false);
@@ -158,32 +160,62 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
     }
   };
 
-  const handleEdit = (account) => {
-    setEditingId(account.id);
-    setFormData({
-      label: account.label,
-      amount: account.amount.toString(),
-      entity_id: account.entity_id,
-      is_receivables_financing: !!account.is_receivables_financing,
-    });
-    setShowAddForm(true);
+  const handleSaveAccount = async (accountId, updates) => {
+    const account = accounts.find((a) => a.id === accountId);
+    if (!account) return;
+
+    const payload = {
+      label: updates.label ?? account.label,
+      amount: updates.amount ?? account.amount,
+      entity_id: updates.entity_id ?? account.entity_id,
+      is_receivables_financing: updates.is_receivables_financing ?? account.is_receivables_financing,
+      note: updates.note,
+      trigger: updates.trigger || "manual_adjustment",
+    };
+
+    await axios.put(`${API}/bank-accounts/${accountId}`, payload);
+    toast.success("Account updated");
+    fetchAccounts();
+    onDataChange?.();
   };
 
   const handleDelete = async (id) => {
     if (!window.confirm("Delete this bank account?")) return;
     try {
       await axios.delete(`${API}/bank-accounts/${id}`, {
-        params: {
-          trigger: "manual_adjustment",
-          note: adjustmentNote || undefined,
-        },
+        params: { trigger: "manual_adjustment" },
       });
       toast.success("Account deleted");
+      setSelectedAccountIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       fetchAccounts();
       onDataChange?.();
     } catch (error) {
       toast.error("Failed to delete account");
     }
+  };
+
+  const handleSelectionChange = (accountId, checked) => {
+    setSelectedAccountIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(accountId);
+      else next.delete(accountId);
+      return next;
+    });
+  };
+
+  const handleSelectAll = (tableAccounts, checked) => {
+    setSelectedAccountIds((prev) => {
+      const next = new Set(prev);
+      tableAccounts.forEach((a) => {
+        if (checked) next.add(a.id);
+        else next.delete(a.id);
+      });
+      return next;
+    });
   };
 
   const totalBalance = cashNow ?? accounts.reduce((sum, acc) => sum + acc.amount, 0);
@@ -233,91 +265,20 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
   const standardAccounts = sortedAccounts.filter((a) => !a.is_receivables_financing);
   const receivablesAccounts = sortedAccounts.filter((a) => a.is_receivables_financing);
 
-  const SortHeader = ({ field, children }) => (
-    <th
-      onClick={() => handleSort(field)}
-      className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-left py-3 px-3 cursor-pointer hover:text-zinc-300 transition-colors select-none"
-    >
-      <span className="flex items-center gap-1">
-        {children}
-        <CaretUpDown size={12} className={sortField === field ? 'text-zinc-300' : 'text-zinc-600'} />
-      </span>
-    </th>
-  );
-
-  const renderAccountsTable = (tableAccounts, testIdPrefix) => (
-    <div className="border border-zinc-800 rounded-lg overflow-hidden">
-      <table className="w-full" data-testid={`${testIdPrefix}-table`}>
-        <thead>
-          <tr className="border-b border-zinc-800 bg-zinc-900/50">
-            <SortHeader field="entity">Entity</SortHeader>
-            <SortHeader field="label">Account</SortHeader>
-            <SortHeader field="amount">Balance</SortHeader>
-            <SortHeader field="last_movement">Movement</SortHeader>
-            <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-right py-3 px-3">Share</th>
-            <th className="py-3 px-2 w-20"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {tableAccounts.map((account) => {
-            const share = totalBalance > 0 ? ((account.amount / totalBalance) * 100) : 0;
-            return (
-              <tr
-                key={account.id}
-                className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors"
-                data-testid={`treasury-row-${account.id}`}
-              >
-                <td className="py-2.5 px-3 text-xs text-zinc-500">
-                  {getEntityName(account.entity_id)}
-                </td>
-                <td className="py-2.5 px-3 text-sm text-zinc-200">
-                  {account.label}
-                </td>
-                <td className="py-2.5 px-3 text-sm font-mono text-zinc-100 tabular-nums">
-                  {formatCurrency(account.amount)}
-                </td>
-                <td
-                  className={`py-2.5 px-3 text-xs font-mono tabular-nums ${
-                    account.last_movement == null
-                      ? "text-zinc-600"
-                      : account.last_movement > 0
-                        ? "text-emerald-400"
-                        : account.last_movement < 0
-                          ? "text-rose-400"
-                          : "text-zinc-500"
-                  }`}
-                  data-testid={`treasury-movement-${account.id}`}
-                >
-                  {formatMovement(account.last_movement)}
-                </td>
-                <td className="py-2.5 px-3 text-xs text-zinc-500 text-right tabular-nums">
-                  {share.toFixed(1)}%
-                </td>
-                <td className="py-2.5 px-2">
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => handleEdit(account)}
-                      className="p-1 text-zinc-600 hover:text-zinc-300 rounded transition-colors"
-                      data-testid={`edit-account-${account.id}`}
-                    >
-                      <PencilSimple size={14} />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(account.id)}
-                      className="p-1 text-zinc-600 hover:text-rose-400 rounded transition-colors"
-                      data-testid={`delete-account-${account.id}`}
-                    >
-                      <Trash size={14} />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
+  const tableProps = {
+    entities,
+    totalBalance,
+    sortField,
+    sortDir,
+    onSort: handleSort,
+    onSaveAccount: handleSaveAccount,
+    onDeleteAccount: handleDelete,
+    formatCurrency,
+    formatMovement,
+    getEntityName,
+    selectedIds: selectedAccountIds,
+    onSelectionChange: handleSelectionChange,
+  };
 
   const startDebtEdit = (debt) => {
     setDebtEditingId(debt.source_flow_id);
@@ -470,7 +431,12 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                 <div>
                   <p className="text-[11px] uppercase tracking-wider text-zinc-600 mb-1.5">Standard Accounts</p>
                   {standardAccounts.length > 0 ? (
-                    renderAccountsTable(standardAccounts, "treasury-standard")
+                    <TreasuryAccountTable
+                      accounts={standardAccounts}
+                      testIdPrefix="treasury-standard"
+                      onSelectAll={(checked) => handleSelectAll(standardAccounts, checked)}
+                      {...tableProps}
+                    />
                   ) : (
                     <div className="border border-zinc-800 rounded-lg py-4 text-center text-xs text-zinc-600">
                       No standard accounts.
@@ -480,7 +446,12 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                 <div>
                   <p className="text-[11px] uppercase tracking-wider text-emerald-400 mb-1.5">Factoring / Receivables Financing</p>
                   {receivablesAccounts.length > 0 ? (
-                    renderAccountsTable(receivablesAccounts, "treasury-receivables")
+                    <TreasuryAccountTable
+                      accounts={receivablesAccounts}
+                      testIdPrefix="treasury-receivables"
+                      onSelectAll={(checked) => handleSelectAll(receivablesAccounts, checked)}
+                      {...tableProps}
+                    />
                   ) : (
                     <div className="border border-emerald-900/50 rounded-lg py-4 text-center text-xs text-zinc-600 bg-emerald-950/10">
                       No accounts assigned to this category yet.
@@ -491,14 +462,12 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
             )}
           </div>
 
-          {/* Add/Edit Form */}
+          {/* Add Account Form */}
           {(showAddForm || accounts.length === 0) && (
             <form onSubmit={handleSubmit} className="border border-zinc-800 rounded-lg p-4 space-y-3 bg-zinc-900/30" data-testid="treasury-form">
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-medium text-zinc-300">
-                  {editingId ? 'Edit Account' : 'New Account'}
-                </h3>
-                {(editingId || showAddForm) && accounts.length > 0 && (
+                <h3 className="text-sm font-medium text-zinc-300">New Account</h3>
+                {showAddForm && accounts.length > 0 && (
                   <button
                     type="button"
                     onClick={() => { resetForm(); setShowAddForm(false); }}
@@ -548,29 +517,31 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                 <div>
                   <Label className="text-xs text-zinc-500 mb-1.5 block">Balance (CHF)</Label>
                   <input
-                    type="number"
-                    placeholder="0"
-                    step="0.01"
+                    type="text"
+                    placeholder="0 or 100+52 or +500"
                     value={formData.amount}
                     onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
                     className="w-full bg-zinc-950 border border-zinc-800 text-sm rounded-md px-3 py-2 text-zinc-100 placeholder-zinc-500 font-mono"
                     data-testid="account-amount-input"
                   />
+                  {formData.amount && formatBalancePreview(formData.amount, 0, formatCurrency) && (
+                    <p className="mt-1 text-[10px] text-emerald-400/80 font-mono">
+                      {formatBalancePreview(formData.amount, 0, formatCurrency)}
+                    </p>
+                  )}
                 </div>
               </div>
 
-              {editingId && (
-                <label className="flex items-center gap-2 text-xs text-zinc-400">
-                  <input
-                    type="checkbox"
-                    checked={!!formData.is_receivables_financing}
-                    onChange={(e) => setFormData({ ...formData, is_receivables_financing: e.target.checked })}
-                    className="h-4 w-4 accent-emerald-500 cursor-pointer"
-                    data-testid="account-is-receivables-input"
-                  />
-                  Factoring / Receivables Financing
-                </label>
-              )}
+              <label className="flex items-center gap-2 text-xs text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={!!formData.is_receivables_financing}
+                  onChange={(e) => setFormData({ ...formData, is_receivables_financing: e.target.checked })}
+                  className="h-4 w-4 accent-emerald-500 cursor-pointer"
+                  data-testid="account-is-receivables-input"
+                />
+                Factoring / Receivables Financing
+              </label>
 
               <div>
                 <Label className="text-xs text-zinc-500 mb-1.5 block">Adjustment Note (optional)</Label>
@@ -590,11 +561,7 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                 className="btn-primary w-full flex items-center justify-center gap-2 text-sm py-2"
                 data-testid="save-account-btn"
               >
-                {editingId ? (
-                  <><PencilSimple size={14} /> Update Account</>
-                ) : (
-                  <><Plus size={14} weight="bold" /> Add Account</>
-                )}
+                <Plus size={14} weight="bold" /> Add Account
               </button>
             </form>
           )}
