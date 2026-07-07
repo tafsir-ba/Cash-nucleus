@@ -36,6 +36,16 @@ const fmtMovement = (delta) => {
   return base;
 };
 
+const parseSnapshotDate = (dateStr) => new Date(`${dateStr}T12:00:00`).getTime();
+
+const formatChartDate = (timestamp) => {
+  const d = new Date(timestamp);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
 export const CashPositionHistoryDialog = ({ open, onOpenChange }) => {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState({ days: [], account_audit_log: [] });
@@ -85,9 +95,26 @@ export const CashPositionHistoryDialog = ({ open, onOpenChange }) => {
   }, [data.days]);
 
   const chartData = useMemo(
-    () => data.days.map((d) => ({ date: d.date, total_cash_chf: d.total_cash_chf })),
+    () =>
+      data.days.map((d) => ({
+        date: d.date,
+        timestamp: parseSnapshotDate(d.date),
+        total_cash_chf: d.total_cash_chf,
+      })),
     [data.days],
   );
+
+  const chartXDomain = useMemo(() => {
+    if (!chartData.length) return ["auto", "auto"];
+    const timestamps = chartData.map((d) => d.timestamp);
+    const min = Math.min(...timestamps);
+    const max = Math.max(...timestamps);
+    if (min === max) {
+      const dayMs = 24 * 60 * 60 * 1000;
+      return [min - dayMs, max + dayMs];
+    }
+    return [min, max];
+  }, [chartData]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -130,15 +157,33 @@ export const CashPositionHistoryDialog = ({ open, onOpenChange }) => {
           <p className="text-xs uppercase tracking-wider text-zinc-500 mb-2">Daily Total Cash Position</p>
           <div className="h-[280px]">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
+              <LineChart data={chartData} margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                <XAxis dataKey="date" stroke="#71717a" tick={{ fontSize: 11 }} />
+                <XAxis
+                  dataKey="timestamp"
+                  type="number"
+                  scale="time"
+                  domain={chartXDomain}
+                  stroke="#71717a"
+                  tick={{ fontSize: 11 }}
+                  tickFormatter={formatChartDate}
+                  padding={{ left: 12, right: 12 }}
+                />
                 <YAxis stroke="#71717a" tick={{ fontSize: 11 }} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
                 <Tooltip
+                  labelFormatter={(timestamp) => formatChartDate(timestamp)}
                   formatter={(value) => formatCurrency(value)}
                   contentStyle={{ backgroundColor: "#09090b", border: "1px solid #3f3f46", color: "#f4f4f5" }}
                 />
-                <Line type="monotone" dataKey="total_cash_chf" stroke="#e4e4e7" strokeWidth={2} dot={false} />
+                <Line
+                  type="linear"
+                  dataKey="total_cash_chf"
+                  stroke="#e4e4e7"
+                  strokeWidth={2}
+                  dot={chartData.length <= 24}
+                  connectNulls
+                  isAnimationActive={false}
+                />
               </LineChart>
             </ResponsiveContainer>
           </div>
