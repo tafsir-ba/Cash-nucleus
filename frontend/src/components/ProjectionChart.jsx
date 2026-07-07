@@ -11,6 +11,11 @@ import {
   ReferenceArea,
   ReferenceDot,
 } from 'recharts';
+import {
+  buildProjectionChartData,
+  buildProjectionChartXDomain,
+  formatProjectionMonthTick,
+} from './projectionChart';
 
 const formatCurrency = (amount) => {
   if (Math.abs(amount) >= 1000000) return `${(amount / 1000000).toFixed(1)}M`;
@@ -58,13 +63,18 @@ export const ProjectionChart = ({ projection, selectedMonth, onMonthSelect, hasD
 
   const chartData = useMemo(() => {
     if (!months.length) return [];
-    if (pastSpan === 'all') return months;
-    const curKey = localCalendarMonthKey();
-    const curIdx = months.findIndex((m) => m.month === curKey);
-    const anchor = curIdx >= 0 ? curIdx : Math.max(0, months.length - 1);
-    const from = Math.max(0, anchor - pastSpan);
-    return months.slice(from);
+    let slice = months;
+    if (pastSpan !== 'all') {
+      const curKey = localCalendarMonthKey();
+      const curIdx = months.findIndex((m) => m.month === curKey);
+      const anchor = curIdx >= 0 ? curIdx : Math.max(0, months.length - 1);
+      const from = Math.max(0, anchor - pastSpan);
+      slice = months.slice(from);
+    }
+    return buildProjectionChartData(slice);
   }, [months, pastSpan]);
+
+  const chartXDomain = useMemo(() => buildProjectionChartXDomain(chartData), [chartData]);
 
   if (!projection || !hasData) {
     return (
@@ -101,9 +111,6 @@ export const ProjectionChart = ({ projection, selectedMonth, onMonthSelect, hasD
       onMonthSelect(data.activePayload[0].payload.month);
     }
   };
-
-  const tickInterval =
-    chartMonthCount <= 12 ? 0 : chartMonthCount <= 24 ? 1 : chartMonthCount <= 36 ? 2 : 3;
 
   return (
     <div className="chart-container" data-testid="chart-projection">
@@ -155,13 +162,17 @@ export const ProjectionChart = ({ projection, selectedMonth, onMonthSelect, hasD
             
             <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
             
-            <XAxis 
-              dataKey="month_label" 
+            <XAxis
+              dataKey="timestamp"
+              type="number"
+              scale="time"
+              domain={chartXDomain}
               stroke="#52525b"
               tick={{ fill: '#71717a', fontSize: 9, fontFamily: 'IBM Plex Mono' }}
               tickLine={{ stroke: '#3f3f46' }}
               axisLine={{ stroke: '#3f3f46' }}
-              interval={tickInterval}
+              tickFormatter={formatProjectionMonthTick}
+              padding={{ left: 12, right: 12 }}
             />
             
             <YAxis 
@@ -180,35 +191,36 @@ export const ProjectionChart = ({ projection, selectedMonth, onMonthSelect, hasD
             {yMin < 0 && <ReferenceLine y={0} stroke="#fb7185" strokeDasharray="5 5" strokeOpacity={0.5} />}
             
             {currentMonthData && (
-              <ReferenceLine 
-                x={currentMonthData.month_label}
-                stroke="#fafafa" 
+              <ReferenceLine
+                x={currentMonthData.timestamp}
+                stroke="#fafafa"
                 strokeDasharray="3 3"
                 strokeOpacity={0.5}
               />
             )}
-            
-            <Line 
-              type="monotone" 
-              dataKey="closing_cash" 
-              stroke="#fafafa" 
+
+            <Line
+              type="linear"
+              dataKey="closing_cash"
+              stroke="#fafafa"
               strokeWidth={2.5}
               dot={{ fill: '#fafafa', strokeWidth: 0, r: chartMonthCount > 18 ? 1 : 3 }}
               activeDot={{ fill: '#fafafa', stroke: '#18181b', strokeWidth: 2, r: 5 }}
-              connectNulls={true}
+              connectNulls
+              isAnimationActive={false}
             />
-            
+
             {firstDangerInChart && (
-              <ReferenceDot x={firstDangerInChart.month_label} y={firstDangerInChart.closing_cash} r={6} fill="#fb7185" stroke="#18181b" strokeWidth={2} />
+              <ReferenceDot x={firstDangerInChart.timestamp} y={firstDangerInChart.closing_cash} r={6} fill="#fb7185" stroke="#18181b" strokeWidth={2} />
             )}
-            
+
             {firstWatchInChart && !firstDangerInChart && (
-              <ReferenceDot x={firstWatchInChart.month_label} y={firstWatchInChart.closing_cash} r={5} fill="#fbbf24" stroke="#18181b" strokeWidth={2} />
+              <ReferenceDot x={firstWatchInChart.timestamp} y={firstWatchInChart.closing_cash} r={5} fill="#fbbf24" stroke="#18181b" strokeWidth={2} />
             )}
-            
+
             {lowestInChart && (!firstDangerInChart || lowestInChart.month !== firstDangerInChart.month) && (
               <ReferenceDot
-                x={lowestInChart.month_label}
+                x={lowestInChart.timestamp}
                 y={lowestInChart.closing_cash}
                 r={5}
                 fill={lowestInChart.closing_cash < 0 ? '#fb7185' : '#fbbf24'}
