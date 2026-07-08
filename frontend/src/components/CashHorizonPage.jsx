@@ -22,6 +22,8 @@ import {
   enrichAnalysisPayload,
   formatCHF,
   formatCHFCompact,
+  formatResolvedDateLabel,
+  parseAmountInput,
   quadrantToneClass,
   toDateInputValue,
 } from "./cashHorizon";
@@ -42,13 +44,6 @@ const TH =
   "text-left px-1.5 py-1 text-[10px] uppercase tracking-wider text-zinc-500 font-medium whitespace-nowrap";
 
 const TD = "px-1 py-0.5 align-middle";
-
-const formatResolvedColumn = (entry) => {
-  if (!entry?.resolved_date) return "—";
-  const d = new Date(`${String(entry.resolved_date).slice(0, 10)}T12:00:00`);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-};
 
 const emptyDraft = (quadrant) => ({
   quadrant,
@@ -96,8 +91,8 @@ const QuadrantPanel = ({
       toast.error("Label is required");
       return;
     }
-    const amount = Number(draft.amount);
-    if (!Number.isFinite(amount) || amount < 0) {
+    const amount = parseAmountInput(draft.amount);
+    if (amount == null) {
       toast.error("Enter a valid amount");
       return;
     }
@@ -136,120 +131,141 @@ const QuadrantPanel = ({
         </div>
       </div>
 
-      <div className="overflow-x-auto overflow-y-auto max-h-[380px] rounded border border-zinc-800/80">
-        <table className="w-full min-w-[720px] border-collapse">
-          <thead className="sticky top-0 z-10 bg-zinc-900/95 backdrop-blur-sm">
-            <tr className="border-b border-zinc-800">
-              <th className={`${TH} w-6`} aria-label="Reorder" />
-              <th className={`${TH} min-w-[140px]`}>Label</th>
-              <th className={`${TH} w-[88px]`}>Amount</th>
-              <th className={`${TH} w-[72px]`}>Type</th>
-              <th className={`${TH} w-[120px]`}>Date / Days</th>
-              <th className={`${TH} w-[96px]`}>Resolved</th>
-              <th className={`${TH} min-w-[100px]`}>Notes</th>
-              <th className={`${TH} w-8`} aria-label="Delete" />
-            </tr>
-          </thead>
-          <tbody>
-            {entries.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-2 py-3 text-center text-[11px] text-zinc-600">
-                  No entries yet — use the row below
-                </td>
+      <div className="rounded border border-zinc-800/80 overflow-hidden">
+        <div className="overflow-x-auto overflow-y-auto max-h-[340px]">
+          <table className="w-full min-w-[720px] border-collapse">
+            <thead className="sticky top-0 z-10 bg-zinc-900/95 backdrop-blur-sm">
+              <tr className="border-b border-zinc-800">
+                <th className={`${TH} w-6`} aria-label="Reorder" />
+                <th className={`${TH} min-w-[140px]`}>Label</th>
+                <th className={`${TH} w-[88px]`}>Amount</th>
+                <th className={`${TH} w-[72px]`}>Type</th>
+                <th className={`${TH} w-[120px]`}>Date / Days</th>
+                <th className={`${TH} w-[96px]`}>Resolved</th>
+                <th className={`${TH} min-w-[100px]`}>Notes</th>
+                <th className={`${TH} w-8`} aria-label="Delete" />
               </tr>
-            )}
-            {entries.map((entry) => (
-              <tr
-                key={entry.id}
-                draggable
-                onDragStart={() => setDragId(entry.id)}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={() => handleDrop(entry.id)}
-                className={`border-b border-zinc-800/50 hover:bg-zinc-900/40 ${savingId === entry.id ? "opacity-60" : ""}`}
-              >
-                <td className={TD}>
-                  <DotsSixVertical size={12} className="text-zinc-600 cursor-grab mx-auto" />
-                </td>
-                <td className={TD}>
-                  <input
-                    value={entry.label}
-                    onChange={(e) => onUpdateLocal(entry.id, { label: e.target.value })}
-                    onBlur={(e) => onSave(entry.id, { label: e.target.value })}
-                    className={CELL}
-                    placeholder="Label"
-                  />
-                </td>
-                <td className={TD}>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={entry.amount}
-                    onChange={(e) => onUpdateLocal(entry.id, { amount: Number(e.target.value) })}
-                    onBlur={(e) => onSave(entry.id, { amount: Number(e.target.value) })}
-                    className={`${CELL} font-mono text-right`}
-                  />
-                </td>
-                <td className={TD}>
-                  <select
-                    value={entry.timing_mode}
-                    onChange={(e) => {
-                      const patch = applyTimingModeChange(entry, e.target.value);
-                      onUpdateLocal(entry.id, patch);
-                      onSave(entry.id, patch);
-                    }}
-                    className={CELL}
-                  >
-                    <option value="date">Date</option>
-                    <option value="days">Days</option>
-                  </select>
-                </td>
-                <td className={TD}>
-                  {entry.timing_mode === "date" ? (
+            </thead>
+            <tbody>
+              {entries.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-2 py-3 text-center text-[11px] text-zinc-600">
+                    No entries yet — use the row below
+                  </td>
+                </tr>
+              )}
+              {entries.map((entry) => (
+                <tr
+                  key={entry.id}
+                  draggable
+                  onDragStart={() => setDragId(entry.id)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => handleDrop(entry.id)}
+                  className={`border-b border-zinc-800/50 hover:bg-zinc-900/40 ${savingId === entry.id ? "opacity-60" : ""}`}
+                >
+                  <td className={TD}>
+                    <DotsSixVertical size={12} className="text-zinc-600 cursor-grab mx-auto" />
+                  </td>
+                  <td className={TD}>
                     <input
-                      type="date"
-                      value={entry.expected_date || ""}
-                      onChange={(e) => onUpdateLocal(entry.id, { expected_date: e.target.value })}
-                      onBlur={(e) => onSave(entry.id, { expected_date: e.target.value })}
+                      value={entry.label}
+                      onChange={(e) => onUpdateLocal(entry.id, { label: e.target.value })}
+                      onBlur={(e) => onSave(entry.id, { label: e.target.value.trim() })}
                       className={CELL}
+                      placeholder="Label"
                     />
-                  ) : (
+                  </td>
+                  <td className={TD}>
                     <input
                       type="number"
                       min="0"
-                      value={entry.days_from_today ?? 0}
-                      onChange={(e) => onUpdateLocal(entry.id, { days_from_today: Number(e.target.value) })}
-                      onBlur={(e) => onSave(entry.id, { days_from_today: Number(e.target.value) })}
-                      className={`${CELL} font-mono`}
+                      step="1"
+                      value={entry.amount}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        if (raw === "") {
+                          onUpdateLocal(entry.id, { amount: "" });
+                          return;
+                        }
+                        const amount = parseAmountInput(raw);
+                        if (amount != null) onUpdateLocal(entry.id, { amount });
+                      }}
+                      onBlur={(e) => {
+                        const amount = parseAmountInput(e.target.value);
+                        if (amount == null) {
+                          toast.error("Enter a valid amount");
+                          return;
+                        }
+                        onSave(entry.id, { amount });
+                      }}
+                      className={`${CELL} font-mono text-right`}
                     />
-                  )}
-                </td>
-                <td className={`${TD} text-[11px] text-zinc-500 font-mono whitespace-nowrap`}>
-                  {formatResolvedColumn(entry)}
-                </td>
-                <td className={TD}>
-                  <input
-                    value={entry.notes || ""}
-                    onChange={(e) => onUpdateLocal(entry.id, { notes: e.target.value })}
-                    onBlur={(e) => onSave(entry.id, { notes: e.target.value })}
-                    className={`${CELL} text-zinc-400`}
-                    placeholder="—"
-                  />
-                </td>
-                <td className={TD}>
-                  <button
-                    type="button"
-                    onClick={() => onDelete(entry.id)}
-                    className="p-0.5 text-zinc-600 hover:text-rose-400 mx-auto block"
-                    title="Delete"
-                  >
-                    <Trash size={13} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-            <tr className="bg-zinc-950/60 border-t border-zinc-700/80">
-              <td className={TD} />
+                  </td>
+                  <td className={TD}>
+                    <select
+                      value={entry.timing_mode}
+                      onChange={(e) => {
+                        const patch = applyTimingModeChange(entry, e.target.value);
+                        onUpdateLocal(entry.id, patch);
+                        onSave(entry.id, patch);
+                      }}
+                      className={CELL}
+                    >
+                      <option value="date">Date</option>
+                      <option value="days">Days</option>
+                    </select>
+                  </td>
+                  <td className={TD}>
+                    {entry.timing_mode === "date" ? (
+                      <input
+                        type="date"
+                        value={entry.expected_date || ""}
+                        onChange={(e) => onUpdateLocal(entry.id, { expected_date: e.target.value })}
+                        onBlur={(e) => onSave(entry.id, { expected_date: e.target.value })}
+                        className={CELL}
+                      />
+                    ) : (
+                      <input
+                        type="number"
+                        min="0"
+                        value={entry.days_from_today ?? 0}
+                        onChange={(e) => onUpdateLocal(entry.id, { days_from_today: Number(e.target.value) })}
+                        onBlur={(e) => onSave(entry.id, { days_from_today: Number(e.target.value) })}
+                        className={`${CELL} font-mono`}
+                      />
+                    )}
+                  </td>
+                  <td className={`${TD} text-[11px] text-zinc-500 font-mono whitespace-nowrap`}>
+                    {formatResolvedDateLabel(entry)}
+                  </td>
+                  <td className={TD}>
+                    <input
+                      value={entry.notes || ""}
+                      onChange={(e) => onUpdateLocal(entry.id, { notes: e.target.value })}
+                      onBlur={(e) => onSave(entry.id, { notes: e.target.value })}
+                      className={`${CELL} text-zinc-400`}
+                      placeholder="—"
+                    />
+                  </td>
+                  <td className={TD}>
+                    <button
+                      type="button"
+                      onClick={() => onDelete(entry.id)}
+                      className="p-0.5 text-zinc-600 hover:text-rose-400 mx-auto block"
+                      title="Delete"
+                    >
+                      <Trash size={13} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <table className="w-full min-w-[720px] border-collapse bg-zinc-950/80 border-t border-zinc-700/80">
+          <tbody>
+            <tr>
+              <td className={`${TD} w-6`} />
               <td className={TD}>
                 <input
                   value={draft.label}
@@ -300,7 +316,7 @@ const QuadrantPanel = ({
                   />
                 )}
               </td>
-              <td className={`${TD} text-[10px] text-zinc-600`}>—</td>
+              <td className={`${TD} text-[10px] text-zinc-600 w-[96px]`}>—</td>
               <td className={TD}>
                 <input
                   value={draft.notes}
@@ -310,7 +326,7 @@ const QuadrantPanel = ({
                   placeholder="Notes"
                 />
               </td>
-              <td className={TD}>
+              <td className={`${TD} w-8`}>
                 <button
                   type="button"
                   onClick={submitDraft}
@@ -351,7 +367,7 @@ export const CashHorizonPage = () => {
     setError(null);
     try {
       const response = await axios.get(`${API}/cash-horizon`);
-      setAnalysis(response.data);
+      setAnalysis(enrichAnalysisPayload(response.data));
     } catch {
       setError("Unable to load Cash Horizon data.");
     } finally {

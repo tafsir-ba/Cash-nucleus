@@ -336,14 +336,17 @@ export const enrichAnalysisPayload = (payload) => {
   return { ...payload, timeline, cash_match_events };
 };
 
-export const formatResolvedDisplay = (entry) => {
-  if (!entry) return "—";
-  if (entry.timing_mode === "days" && entry.days_from_today != null) {
-    return `${entry.days_from_today} days`;
-  }
-  const d = asDate(entry.resolved_date || entry.expected_date);
+export const formatResolvedDateLabel = (entry) => {
+  if (!entry?.resolved_date) return "—";
+  const d = asDate(entry.resolved_date);
   if (!d) return "—";
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+};
+
+export const parseAmountInput = (raw) => {
+  if (raw === "" || raw == null) return null;
+  const n = Number(String(raw).replace(/'/g, ""));
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
 };
 
 export const quadrantToneClass = (quadrant) => {

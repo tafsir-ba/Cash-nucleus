@@ -1,7 +1,8 @@
 import {
   analyzeCashHorizon,
-  computeCheckpoints,
   enrichAnalysisPayload,
+  formatResolvedDateLabel,
+  parseAmountInput,
   resolveExpectedDate,
   toDateInputValue,
 } from "./cashHorizon";
@@ -103,5 +104,18 @@ describe("cashHorizon", () => {
     });
     expect(enriched.timeline[0].timestamp).toBeGreaterThan(0);
     expect(enriched.cash_match_events[0].timestamp).toBeGreaterThan(0);
+  });
+
+  it("formats resolved date labels and parses amounts safely", () => {
+    expect(
+      formatResolvedDateLabel({
+        resolved_date: "2027-01-04",
+        timing_mode: "days",
+        days_from_today: 180,
+      }),
+    ).toBe("4 Jan 2027");
+    expect(parseAmountInput("")).toBeNull();
+    expect(parseAmountInput("19000")).toBe(19000);
+    expect(parseAmountInput("-1")).toBeNull();
   });
 });
