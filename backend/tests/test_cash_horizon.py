@@ -4,8 +4,6 @@ from datetime import date
 from cash_horizon import (
     analyze_cash_horizon,
     resolve_expected_date,
-    compute_positions,
-    compute_checkpoints,
 )
 
 
@@ -59,18 +57,6 @@ def test_positions_and_checkpoints():
             "sort_order": 0,
         },
     ]
-    positions = compute_positions([{**e, "resolved_date": resolve_expected_date(
-        timing_mode=e["timing_mode"],
-        expected_date=e.get("expected_date"),
-        days_from_today=e.get("days_from_today"),
-        today=TODAY,
-    ).isoformat() if resolve_expected_date(
-        timing_mode=e["timing_mode"],
-        expected_date=e.get("expected_date"),
-        days_from_today=e.get("days_from_today"),
-        today=TODAY,
-    ) else None, **{k: v for k, v in e.items() if k != "timing_mode" or True}} for e in entries])
-    # simpler: use analyze
     analysis = analyze_cash_horizon(entries, today=TODAY)
     assert analysis["positions"]["confirmed_net_position"] == 4000
     assert analysis["positions"]["potential_net_position"] == 48000
