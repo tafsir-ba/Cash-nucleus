@@ -1,6 +1,7 @@
 import {
   analyzeCashHorizon,
   computeCheckpoints,
+  enrichAnalysisPayload,
   resolveExpectedDate,
   toDateInputValue,
 } from "./cashHorizon";
@@ -93,5 +94,14 @@ describe("cashHorizon", () => {
     );
     expect(analysis.checkpoints[0].confirmed_net).toBe(0);
     expect(analysis.checkpoints.find((c) => c.day_offset === 7).confirmed_net).toBe(-20000);
+  });
+
+  it("enriches API payloads missing chart timestamps", () => {
+    const enriched = enrichAnalysisPayload({
+      timeline: [{ date: "2026-08-01", confirmed_liquidity: 1000, combined_liquidity: 1000 }],
+      cash_match_events: [{ id: "1", date: "2026-08-01", amount: 1000, quadrant: "confirmed_inflow" }],
+    });
+    expect(enriched.timeline[0].timestamp).toBeGreaterThan(0);
+    expect(enriched.cash_match_events[0].timestamp).toBeGreaterThan(0);
   });
 });

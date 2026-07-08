@@ -107,3 +107,20 @@ def test_checkpoint_cumulative_logic():
     assert today_row["confirmed_net"] == 0
     assert seven_row["confirmed_net"] == -20000
     assert seven_row["is_negative_confirmed"] is True
+
+
+def test_timeline_and_events_include_timestamps():
+    entries = [
+        {
+            "id": "1",
+            "quadrant": "confirmed_inflow",
+            "label": "Invoice",
+            "amount": 1000,
+            "timing_mode": "date",
+            "expected_date": "2026-08-01",
+            "sort_order": 0,
+        }
+    ]
+    analysis = analyze_cash_horizon(entries, today=TODAY)
+    assert analysis["timeline"][0]["timestamp"] > 0
+    assert analysis["cash_match_events"][0]["timestamp"] > 0

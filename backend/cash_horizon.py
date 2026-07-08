@@ -196,9 +196,11 @@ def build_timeline_points(entries: List[Dict[str, Any]], today: Optional[date] =
         if quadrant.startswith("confirmed"):
             confirmed_running = round(confirmed_running + delta, 2)
         combined_running = round(combined_running + delta, 2)
+        resolved_dt = datetime(resolved.year, resolved.month, resolved.day, 12, 0, 0)
         points.append(
             {
                 "date": resolved.isoformat(),
+                "timestamp": int(resolved_dt.timestamp() * 1000),
                 "label": entry.get("label", ""),
                 "quadrant": quadrant,
                 "amount": amount,
@@ -207,9 +209,11 @@ def build_timeline_points(entries: List[Dict[str, Any]], today: Optional[date] =
             }
         )
     if not points:
+        anchor_dt = datetime(anchor.year, anchor.month, anchor.day, 12, 0, 0)
         points.append(
             {
                 "date": anchor.isoformat(),
+                "timestamp": int(anchor_dt.timestamp() * 1000),
                 "label": "Today",
                 "quadrant": "marker",
                 "amount": 0.0,
@@ -226,10 +230,12 @@ def build_cash_match_events(entries: List[Dict[str, Any]]) -> List[Dict[str, Any
         resolved = _as_date(entry.get("resolved_date"))
         if resolved is None:
             continue
+        resolved_dt = datetime(resolved.year, resolved.month, resolved.day, 12, 0, 0)
         events.append(
             {
                 "id": entry.get("id"),
                 "date": resolved.isoformat(),
+                "timestamp": int(resolved_dt.timestamp() * 1000),
                 "label": entry.get("label", ""),
                 "amount": float(entry.get("amount") or 0.0),
                 "quadrant": entry.get("quadrant"),
@@ -250,7 +256,9 @@ def generate_liquidity_summary(
     entries: List[Dict[str, Any]],
     positions: Dict[str, float],
     checkpoints: List[Dict[str, Any]],
+    today: Optional[date] = None,
 ) -> List[str]:
+    anchor = today or date.today()
     lines: List[str] = []
     confirmed_net = positions["confirmed_net_position"]
     potential_net = positions["potential_net_position"]
@@ -277,7 +285,10 @@ def generate_liquidity_summary(
     elif potential_net <= 0 and confirmed_net < 0:
         lines.append("Potential inflows are not currently expected to offset the confirmed shortfall.")
 
-    dated_entries = [e for e in entries if _as_date(e.get("resolved_date"))]
+    dated_entries = [
+        e for e in entries
+        if (resolved := _as_date(e.get("resolved_date"))) is not None and resolved >= anchor
+    ]
     if dated_entries:
         largest_inflow = max(
             (e for e in dated_entries if str(e.get("quadrant", "")).endswith("_inflow")),
@@ -337,6 +348,6 @@ def analyze_cash_horizon(
         "checkpoints": checkpoints,
         "timeline": build_timeline_points(normalized, anchor),
         "cash_match_events": build_cash_match_events(normalized),
-        "summary": generate_liquidity_summary(normalized, positions, checkpoints),
+        "summary": generate_liquidity_summary(normalized, positions, checkpoints, anchor),
         "entries": normalized,
     }

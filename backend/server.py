@@ -1554,6 +1554,25 @@ async def create_cash_horizon_entry(
     return CashHorizonAnalysisResponse(**analysis)
 
 
+@api_router.put("/cash-horizon/entries/reorder", response_model=CashHorizonAnalysisResponse)
+async def reorder_cash_horizon_entries(
+    payload: CashHorizonReorderRequest,
+    user: dict = Depends(get_optional_user),
+):
+    for item in payload.items:
+        await db.cash_horizon_entries.update_one(
+            {"id": item.id, "quadrant": payload.quadrant},
+            {
+                "$set": {
+                    "sort_order": item.sort_order,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+    analysis = analyze_cash_horizon(await _load_cash_horizon_entries())
+    return CashHorizonAnalysisResponse(**analysis)
+
+
 @api_router.put("/cash-horizon/entries/{entry_id}", response_model=CashHorizonAnalysisResponse)
 async def update_cash_horizon_entry(
     entry_id: str,
@@ -1592,25 +1611,6 @@ async def delete_cash_horizon_entry(entry_id: str, user: dict = Depends(get_opti
     result = await db.cash_horizon_entries.delete_one({"id": entry_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Entry not found")
-    analysis = analyze_cash_horizon(await _load_cash_horizon_entries())
-    return CashHorizonAnalysisResponse(**analysis)
-
-
-@api_router.put("/cash-horizon/entries/reorder", response_model=CashHorizonAnalysisResponse)
-async def reorder_cash_horizon_entries(
-    payload: CashHorizonReorderRequest,
-    user: dict = Depends(get_optional_user),
-):
-    for item in payload.items:
-        await db.cash_horizon_entries.update_one(
-            {"id": item.id, "quadrant": payload.quadrant},
-            {
-                "$set": {
-                    "sort_order": item.sort_order,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
-            },
-        )
     analysis = analyze_cash_horizon(await _load_cash_horizon_entries())
     return CashHorizonAnalysisResponse(**analysis)
 

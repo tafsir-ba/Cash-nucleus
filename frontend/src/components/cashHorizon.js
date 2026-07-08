@@ -230,10 +230,11 @@ export const buildCashMatchEvents = (entries) =>
     }))
     .sort((a, b) => a.timestamp - b.timestamp);
 
-export const generateLiquiditySummary = (entries, positions, checkpoints) => {
+export const generateLiquiditySummary = (entries, positions, checkpoints, today = startOfDay()) => {
   const lines = [];
   const { confirmed_net_position: confirmedNet, potential_net_position: potentialNet, combined_outlook: combined } =
     positions;
+  const todayTime = today.getTime();
 
   if (confirmedNet >= 0) {
     lines.push(`Confirmed liquidity is positive at ${formatCHF(confirmedNet)} based on scheduled confirmed inflows and outflows.`);
@@ -258,7 +259,10 @@ export const generateLiquiditySummary = (entries, positions, checkpoints) => {
     lines.push("Potential inflows are not currently expected to offset the confirmed shortfall.");
   }
 
-  const dated = entries.filter((e) => asDate(e.resolved_date));
+  const dated = entries.filter((e) => {
+    const d = asDate(e.resolved_date);
+    return d && d.getTime() >= todayTime;
+  });
   const inflows = dated.filter((e) => e.quadrant.endsWith("_inflow"));
   const outflows = dated.filter((e) => e.quadrant.endsWith("_outflow"));
   if (inflows.length) {
@@ -303,7 +307,7 @@ export const analyzeCashHorizon = (entries, today = startOfDay(), checkpointDays
     checkpoints,
     timeline: buildTimelinePoints(normalized, today),
     cash_match_events: buildCashMatchEvents(normalized),
-    summary: generateLiquiditySummary(normalized, positions, checkpoints),
+    summary: generateLiquiditySummary(normalized, positions, checkpoints, today),
   };
 };
 
@@ -317,6 +321,19 @@ export const buildLiquidityChartDomain = (timeline) => {
     return [min - monthMs, max + monthMs];
   }
   return [min, max];
+};
+
+export const enrichAnalysisPayload = (payload) => {
+  if (!payload) return payload;
+  const timeline = (payload.timeline || []).map((point) => ({
+    ...point,
+    timestamp: point.timestamp ?? (asDate(point.date)?.getTime() ?? null),
+  }));
+  const cash_match_events = (payload.cash_match_events || []).map((event) => ({
+    ...event,
+    timestamp: event.timestamp ?? (asDate(event.date)?.getTime() ?? null),
+  }));
+  return { ...payload, timeline, cash_match_events };
 };
 
 export const quadrantToneClass = (quadrant) => {

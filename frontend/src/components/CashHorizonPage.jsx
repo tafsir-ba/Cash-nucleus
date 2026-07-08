@@ -19,6 +19,7 @@ import {
   QUADRANTS,
   analyzeCashHorizon,
   buildLiquidityChartDomain,
+  enrichAnalysisPayload,
   formatCHF,
   formatCHFCompact,
   quadrantToneClass,
@@ -288,7 +289,7 @@ export const CashHorizonPage = () => {
   }, [load]);
 
   const applyAnalysis = (data) => {
-    setAnalysis(data);
+    setAnalysis(enrichAnalysisPayload(data));
   };
 
   const optimisticUpdate = (nextEntries) => {
@@ -481,7 +482,7 @@ export const CashHorizonPage = () => {
         <div className="surface-card p-4">
           <div className="flex items-center gap-2 mb-3">
             <Sparkle size={16} className="text-violet-400" />
-            <h3 className="text-sm font-medium text-zinc-100">Liquidity Summary</h3>
+            <h3 className="text-sm font-medium text-zinc-100">AI Liquidity Summary</h3>
           </div>
           <ul className="space-y-2 text-sm text-zinc-300 list-disc ml-5">
             {summary.map((line) => (
@@ -494,6 +495,10 @@ export const CashHorizonPage = () => {
       <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <div className="chart-container p-4">
           <h3 className="text-xs uppercase tracking-[0.15em] text-zinc-500 mb-3">Liquidity Timeline</h3>
+          <div className="flex flex-wrap gap-3 mb-2 text-[10px] text-zinc-500">
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400" />Confirmed Liquidity</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-zinc-100" />Confirmed + Potential</span>
+          </div>
           <div className="h-[260px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={analysis.timeline} margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
@@ -567,10 +572,10 @@ export const CashHorizonPage = () => {
               </ScatterChart>
             </ResponsiveContainer>
           </div>
-          <div className="flex flex-wrap gap-2 mt-3 text-[10px]">
-            {analysis.cash_match_events.map((event) => (
-              <span key={`${event.id}-${event.date}`} className={`px-2 py-1 rounded border ${quadrantToneClass(event.quadrant)}`}>
-                {event.label}
+          <div className="flex flex-wrap gap-3 mb-2 text-[10px] text-zinc-500">
+            {QUADRANTS.map(({ id, title }) => (
+              <span key={id} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${quadrantToneClass(id)}`}>
+                {title}
               </span>
             ))}
           </div>
