@@ -336,6 +336,16 @@ export const enrichAnalysisPayload = (payload) => {
   return { ...payload, timeline, cash_match_events };
 };
 
+export const formatResolvedDisplay = (entry) => {
+  if (!entry) return "—";
+  if (entry.timing_mode === "days" && entry.days_from_today != null) {
+    return `${entry.days_from_today} days`;
+  }
+  const d = asDate(entry.resolved_date || entry.expected_date);
+  if (!d) return "—";
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+};
+
 export const quadrantToneClass = (quadrant) => {
   if (quadrant === "confirmed_inflow") return "text-emerald-400 bg-emerald-500/10 border-emerald-500/20";
   if (quadrant === "confirmed_outflow") return "text-rose-400 bg-rose-500/10 border-rose-500/20";

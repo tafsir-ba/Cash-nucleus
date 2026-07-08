@@ -35,6 +35,21 @@ const toneBorder = {
   potential_outflow: "border-amber-500/30",
 };
 
+const CELL =
+  "w-full min-w-0 bg-zinc-950/80 border border-zinc-800/70 rounded px-1.5 py-0.5 text-xs text-zinc-100 focus:outline-none focus:border-zinc-600";
+
+const TH =
+  "text-left px-1.5 py-1 text-[10px] uppercase tracking-wider text-zinc-500 font-medium whitespace-nowrap";
+
+const TD = "px-1 py-0.5 align-middle";
+
+const formatResolvedColumn = (entry) => {
+  if (!entry?.resolved_date) return "—";
+  const d = new Date(`${String(entry.resolved_date).slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+};
+
 const emptyDraft = (quadrant) => ({
   quadrant,
   label: "",
@@ -98,156 +113,216 @@ const QuadrantPanel = ({
     setDraft(emptyDraft(quadrant));
   };
 
+  const handleDraftKeyDown = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      submitDraft();
+    }
+  };
+
+  const applyTimingModeChange = (entry, timing_mode) => ({
+    timing_mode,
+    expected_date: timing_mode === "date" ? entry.expected_date || toDateInputValue(new Date()) : entry.expected_date,
+    days_from_today: timing_mode === "days" ? entry.days_from_today ?? 30 : entry.days_from_today,
+  });
+
   return (
-    <div className={`rounded-lg border bg-zinc-900/30 p-4 ${toneBorder[quadrant]}`}>
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div>
-          <h3 className="text-sm font-medium text-zinc-100">{title}</h3>
-          <p className="text-lg font-mono text-zinc-50 mt-1">{formatCHF(totals?.total_amount || 0)}</p>
-          <p className="text-xs text-zinc-500">{totals?.entry_count || 0} items</p>
+    <div className={`rounded-lg border bg-zinc-900/20 p-2 ${toneBorder[quadrant]}`}>
+      <div className="flex items-baseline justify-between gap-2 px-1 mb-1.5">
+        <h3 className="text-xs font-medium text-zinc-200">{title}</h3>
+        <div className="text-right">
+          <p className="text-sm font-mono text-zinc-50 leading-tight">{formatCHF(totals?.total_amount || 0)}</p>
+          <p className="text-[10px] text-zinc-500">{totals?.entry_count || 0} items</p>
         </div>
       </div>
 
-      <div className="space-y-2 mb-3">
-        {entries.map((entry) => (
-          <div
-            key={entry.id}
-            draggable
-            onDragStart={() => setDragId(entry.id)}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={() => handleDrop(entry.id)}
-            className={`rounded-md border border-zinc-800 bg-zinc-950/70 p-2 space-y-2 ${
-              savingId === entry.id ? "opacity-70" : ""
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <DotsSixVertical size={14} className="text-zinc-600 shrink-0 cursor-grab" />
-              <input
-                value={entry.label}
-                onChange={(e) => onUpdateLocal(entry.id, { label: e.target.value })}
-                onBlur={(e) => onSave(entry.id, { label: e.target.value })}
-                className="flex-1 bg-transparent border-b border-zinc-800 text-sm text-zinc-100 focus:outline-none focus:border-zinc-500"
-                placeholder="Label"
-              />
-              <button
-                type="button"
-                onClick={() => onDelete(entry.id)}
-                className="p-1 text-zinc-500 hover:text-rose-400"
-                title="Delete entry"
-              >
-                <Trash size={14} />
-              </button>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <input
-                type="number"
-                min="0"
-                step="1"
-                value={entry.amount}
-                onChange={(e) => onUpdateLocal(entry.id, { amount: Number(e.target.value) })}
-                onBlur={(e) => onSave(entry.id, { amount: Number(e.target.value) })}
-                className="bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm font-mono text-zinc-100"
-                placeholder="Amount"
-              />
-              <select
-                value={entry.timing_mode}
-                onChange={(e) => {
-                  const timing_mode = e.target.value;
-                  const patch = {
-                    timing_mode,
-                    expected_date: timing_mode === "date" ? entry.expected_date || toDateInputValue(new Date()) : entry.expected_date,
-                    days_from_today: timing_mode === "days" ? entry.days_from_today ?? 30 : entry.days_from_today,
-                  };
-                  onUpdateLocal(entry.id, patch);
-                  onSave(entry.id, patch);
-                }}
-                className="bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm text-zinc-200"
-              >
-                <option value="date">Expected date</option>
-                <option value="days">Days from today</option>
-              </select>
-            </div>
-            {entry.timing_mode === "date" ? (
-              <input
-                type="date"
-                value={entry.expected_date || ""}
-                onChange={(e) => onUpdateLocal(entry.id, { expected_date: e.target.value })}
-                onBlur={(e) => onSave(entry.id, { expected_date: e.target.value })}
-                className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm text-zinc-200"
-              />
-            ) : (
-              <input
-                type="number"
-                min="0"
-                value={entry.days_from_today ?? 0}
-                onChange={(e) => onUpdateLocal(entry.id, { days_from_today: Number(e.target.value) })}
-                onBlur={(e) => onSave(entry.id, { days_from_today: Number(e.target.value) })}
-                className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm font-mono text-zinc-200"
-                placeholder="Days from today"
-              />
+      <div className="overflow-x-auto overflow-y-auto max-h-[380px] rounded border border-zinc-800/80">
+        <table className="w-full min-w-[720px] border-collapse">
+          <thead className="sticky top-0 z-10 bg-zinc-900/95 backdrop-blur-sm">
+            <tr className="border-b border-zinc-800">
+              <th className={`${TH} w-6`} aria-label="Reorder" />
+              <th className={`${TH} min-w-[140px]`}>Label</th>
+              <th className={`${TH} w-[88px]`}>Amount</th>
+              <th className={`${TH} w-[72px]`}>Type</th>
+              <th className={`${TH} w-[120px]`}>Date / Days</th>
+              <th className={`${TH} w-[96px]`}>Resolved</th>
+              <th className={`${TH} min-w-[100px]`}>Notes</th>
+              <th className={`${TH} w-8`} aria-label="Delete" />
+            </tr>
+          </thead>
+          <tbody>
+            {entries.length === 0 && (
+              <tr>
+                <td colSpan={8} className="px-2 py-3 text-center text-[11px] text-zinc-600">
+                  No entries yet — use the row below
+                </td>
+              </tr>
             )}
-            <input
-              value={entry.notes || ""}
-              onChange={(e) => onUpdateLocal(entry.id, { notes: e.target.value })}
-              onBlur={(e) => onSave(entry.id, { notes: e.target.value })}
-              className="w-full bg-transparent border-b border-zinc-800 text-xs text-zinc-400 focus:outline-none focus:border-zinc-600"
-              placeholder="Notes (optional)"
-            />
-            <p className="text-[10px] text-zinc-600 font-mono">Resolved: {entry.resolved_date || "—"}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="rounded-md border border-dashed border-zinc-700 p-3 space-y-2">
-        <p className="text-xs uppercase tracking-wider text-zinc-500">Add entry</p>
-        <input
-          value={draft.label}
-          onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))}
-          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm text-zinc-100"
-          placeholder="Label"
-        />
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <input
-            type="number"
-            min="0"
-            value={draft.amount}
-            onChange={(e) => setDraft((d) => ({ ...d, amount: e.target.value }))}
-            className="bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm font-mono text-zinc-100"
-            placeholder="Amount"
-          />
-          <select
-            value={draft.timing_mode}
-            onChange={(e) => setDraft((d) => ({ ...d, timing_mode: e.target.value }))}
-            className="bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm text-zinc-200"
-          >
-            <option value="date">Expected date</option>
-            <option value="days">Days from today</option>
-          </select>
-        </div>
-        {draft.timing_mode === "date" ? (
-          <input
-            type="date"
-            value={draft.expected_date}
-            onChange={(e) => setDraft((d) => ({ ...d, expected_date: e.target.value }))}
-            className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm text-zinc-200"
-          />
-        ) : (
-          <input
-            type="number"
-            min="0"
-            value={draft.days_from_today}
-            onChange={(e) => setDraft((d) => ({ ...d, days_from_today: Number(e.target.value) }))}
-            className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm font-mono text-zinc-200"
-          />
-        )}
-        <button
-          type="button"
-          onClick={submitDraft}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-zinc-100 text-zinc-900 text-xs font-medium hover:bg-white"
-        >
-          <Plus size={14} />
-          Add entry
-        </button>
+            {entries.map((entry) => (
+              <tr
+                key={entry.id}
+                draggable
+                onDragStart={() => setDragId(entry.id)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => handleDrop(entry.id)}
+                className={`border-b border-zinc-800/50 hover:bg-zinc-900/40 ${savingId === entry.id ? "opacity-60" : ""}`}
+              >
+                <td className={TD}>
+                  <DotsSixVertical size={12} className="text-zinc-600 cursor-grab mx-auto" />
+                </td>
+                <td className={TD}>
+                  <input
+                    value={entry.label}
+                    onChange={(e) => onUpdateLocal(entry.id, { label: e.target.value })}
+                    onBlur={(e) => onSave(entry.id, { label: e.target.value })}
+                    className={CELL}
+                    placeholder="Label"
+                  />
+                </td>
+                <td className={TD}>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={entry.amount}
+                    onChange={(e) => onUpdateLocal(entry.id, { amount: Number(e.target.value) })}
+                    onBlur={(e) => onSave(entry.id, { amount: Number(e.target.value) })}
+                    className={`${CELL} font-mono text-right`}
+                  />
+                </td>
+                <td className={TD}>
+                  <select
+                    value={entry.timing_mode}
+                    onChange={(e) => {
+                      const patch = applyTimingModeChange(entry, e.target.value);
+                      onUpdateLocal(entry.id, patch);
+                      onSave(entry.id, patch);
+                    }}
+                    className={CELL}
+                  >
+                    <option value="date">Date</option>
+                    <option value="days">Days</option>
+                  </select>
+                </td>
+                <td className={TD}>
+                  {entry.timing_mode === "date" ? (
+                    <input
+                      type="date"
+                      value={entry.expected_date || ""}
+                      onChange={(e) => onUpdateLocal(entry.id, { expected_date: e.target.value })}
+                      onBlur={(e) => onSave(entry.id, { expected_date: e.target.value })}
+                      className={CELL}
+                    />
+                  ) : (
+                    <input
+                      type="number"
+                      min="0"
+                      value={entry.days_from_today ?? 0}
+                      onChange={(e) => onUpdateLocal(entry.id, { days_from_today: Number(e.target.value) })}
+                      onBlur={(e) => onSave(entry.id, { days_from_today: Number(e.target.value) })}
+                      className={`${CELL} font-mono`}
+                    />
+                  )}
+                </td>
+                <td className={`${TD} text-[11px] text-zinc-500 font-mono whitespace-nowrap`}>
+                  {formatResolvedColumn(entry)}
+                </td>
+                <td className={TD}>
+                  <input
+                    value={entry.notes || ""}
+                    onChange={(e) => onUpdateLocal(entry.id, { notes: e.target.value })}
+                    onBlur={(e) => onSave(entry.id, { notes: e.target.value })}
+                    className={`${CELL} text-zinc-400`}
+                    placeholder="—"
+                  />
+                </td>
+                <td className={TD}>
+                  <button
+                    type="button"
+                    onClick={() => onDelete(entry.id)}
+                    className="p-0.5 text-zinc-600 hover:text-rose-400 mx-auto block"
+                    title="Delete"
+                  >
+                    <Trash size={13} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+            <tr className="bg-zinc-950/60 border-t border-zinc-700/80">
+              <td className={TD} />
+              <td className={TD}>
+                <input
+                  value={draft.label}
+                  onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))}
+                  onKeyDown={handleDraftKeyDown}
+                  className={CELL}
+                  placeholder="Label"
+                />
+              </td>
+              <td className={TD}>
+                <input
+                  type="number"
+                  min="0"
+                  value={draft.amount}
+                  onChange={(e) => setDraft((d) => ({ ...d, amount: e.target.value }))}
+                  onKeyDown={handleDraftKeyDown}
+                  className={`${CELL} font-mono text-right`}
+                  placeholder="0"
+                />
+              </td>
+              <td className={TD}>
+                <select
+                  value={draft.timing_mode}
+                  onChange={(e) => setDraft((d) => ({ ...d, timing_mode: e.target.value }))}
+                  className={CELL}
+                >
+                  <option value="date">Date</option>
+                  <option value="days">Days</option>
+                </select>
+              </td>
+              <td className={TD}>
+                {draft.timing_mode === "date" ? (
+                  <input
+                    type="date"
+                    value={draft.expected_date}
+                    onChange={(e) => setDraft((d) => ({ ...d, expected_date: e.target.value }))}
+                    onKeyDown={handleDraftKeyDown}
+                    className={CELL}
+                  />
+                ) : (
+                  <input
+                    type="number"
+                    min="0"
+                    value={draft.days_from_today}
+                    onChange={(e) => setDraft((d) => ({ ...d, days_from_today: Number(e.target.value) }))}
+                    onKeyDown={handleDraftKeyDown}
+                    className={`${CELL} font-mono`}
+                  />
+                )}
+              </td>
+              <td className={`${TD} text-[10px] text-zinc-600`}>—</td>
+              <td className={TD}>
+                <input
+                  value={draft.notes}
+                  onChange={(e) => setDraft((d) => ({ ...d, notes: e.target.value }))}
+                  onKeyDown={handleDraftKeyDown}
+                  className={`${CELL} text-zinc-400`}
+                  placeholder="Notes"
+                />
+              </td>
+              <td className={TD}>
+                <button
+                  type="button"
+                  onClick={submitDraft}
+                  className="p-0.5 text-zinc-400 hover:text-zinc-100 mx-auto block"
+                  title="Add entry"
+                >
+                  <Plus size={14} weight="bold" />
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -404,7 +479,7 @@ export const CashHorizonPage = () => {
 
       <section>
         <h2 className="text-xs uppercase tracking-[0.15em] text-zinc-500 mb-3">Cash Horizon Matrix</h2>
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
           {QUADRANTS.map(({ id, title }) => (
             <QuadrantPanel
               key={id}
