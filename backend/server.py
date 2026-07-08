@@ -23,6 +23,8 @@ from dateutil import parser as date_parser
 
 from bulk_flow_match import best_flow_match, auto_select_flow_match_score as _auto_select_flow_match_score, flow_matches_import_direction
 
+from cash_horizon import analyze_cash_horizon, normalize_entry, resolve_expected_date
+
 from xlsx_simple import read_first_sheet_as_dict_rows
 
 ROOT_DIR = Path(__file__).parent
@@ -244,6 +246,63 @@ class CashPositionDayEntry(BaseModel):
 class CashPositionHistoryResponse(BaseModel):
     days: List[CashPositionDayEntry]
     account_audit_log: List[BankAccountAuditLog]
+
+
+class CashHorizonEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    quadrant: Literal["confirmed_inflow", "confirmed_outflow", "potential_inflow", "potential_outflow"]
+    label: str
+    amount: float
+    timing_mode: Literal["date", "days"] = "date"
+    expected_date: Optional[str] = None
+    days_from_today: Optional[int] = None
+    notes: Optional[str] = None
+    sort_order: int = 0
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class CashHorizonEntryCreate(BaseModel):
+    quadrant: Literal["confirmed_inflow", "confirmed_outflow", "potential_inflow", "potential_outflow"]
+    label: str
+    amount: float
+    timing_mode: Literal["date", "days"] = "date"
+    expected_date: Optional[str] = None
+    days_from_today: Optional[int] = None
+    notes: Optional[str] = None
+    sort_order: Optional[int] = None
+
+
+class CashHorizonEntryUpdate(BaseModel):
+    label: Optional[str] = None
+    amount: Optional[float] = None
+    timing_mode: Optional[Literal["date", "days"]] = None
+    expected_date: Optional[str] = None
+    days_from_today: Optional[int] = None
+    notes: Optional[str] = None
+    sort_order: Optional[int] = None
+
+
+class CashHorizonReorderItem(BaseModel):
+    id: str
+    sort_order: int
+
+
+class CashHorizonReorderRequest(BaseModel):
+    quadrant: Literal["confirmed_inflow", "confirmed_outflow", "potential_inflow", "potential_outflow"]
+    items: List[CashHorizonReorderItem]
+
+
+class CashHorizonAnalysisResponse(BaseModel):
+    as_of: str
+    entries: List[Dict[str, Any]]
+    quadrant_totals: Dict[str, Dict[str, Any]]
+    positions: Dict[str, float]
+    checkpoints: List[Dict[str, Any]]
+    timeline: List[Dict[str, Any]]
+    cash_match_events: List[Dict[str, Any]]
+    summary: List[str]
 
 
 class ActualImportPreviewChange(BaseModel):
@@ -1435,6 +1494,126 @@ async def get_cash_position_history(
     ).sort("changed_at", -1).to_list(5000)
     audit_rows = [BankAccountAuditLog(**row) for row in audit_rows_raw]
     return CashPositionHistoryResponse(days=day_entries, account_audit_log=audit_rows)
+
+
+async def _next_cash_horizon_sort_order(quadrant: str) -> int:
+    latest = await db.cash_horizon_entries.find_one(
+        {"quadrant": quadrant},
+        {"_id": 0, "sort_order": 1},
+        sort=[("sort_order", -1)],
+    )
+    if not latest:
+        return 0
+    return int(latest.get("sort_order", 0)) + 1
+
+
+async def _load_cash_horizon_entries() -> List[dict]:
+    rows = await db.cash_horizon_entries.find({}, {"_id": 0}).sort(
+        [("quadrant", 1), ("sort_order", 1), ("created_at", 1)]
+    ).to_list(5000)
+    return rows
+
+
+@api_router.get("/cash-horizon", response_model=CashHorizonAnalysisResponse)
+async def get_cash_horizon():
+    entries = await _load_cash_horizon_entries()
+    analysis = analyze_cash_horizon(entries)
+    return CashHorizonAnalysisResponse(**analysis)
+
+
+@api_router.post("/cash-horizon/entries", response_model=CashHorizonAnalysisResponse)
+async def create_cash_horizon_entry(
+    payload: CashHorizonEntryCreate,
+    user: dict = Depends(get_optional_user),
+):
+    if not payload.label.strip():
+        raise HTTPException(status_code=400, detail="Label is required")
+    if payload.amount < 0:
+        raise HTTPException(status_code=400, detail="Amount must be non-negative")
+    if payload.timing_mode == "date" and not payload.expected_date:
+        raise HTTPException(status_code=400, detail="Expected date is required")
+    if payload.timing_mode == "days" and payload.days_from_today is None:
+        raise HTTPException(status_code=400, detail="Days from today is required")
+
+    sort_order = payload.sort_order
+    if sort_order is None:
+        sort_order = await _next_cash_horizon_sort_order(payload.quadrant)
+
+    entry = CashHorizonEntry(
+        quadrant=payload.quadrant,
+        label=payload.label.strip(),
+        amount=round(float(payload.amount), 2),
+        timing_mode=payload.timing_mode,
+        expected_date=payload.expected_date,
+        days_from_today=payload.days_from_today,
+        notes=(payload.notes or "").strip() or None,
+        sort_order=sort_order,
+    )
+    await db.cash_horizon_entries.insert_one(entry.model_dump())
+    analysis = analyze_cash_horizon(await _load_cash_horizon_entries())
+    return CashHorizonAnalysisResponse(**analysis)
+
+
+@api_router.put("/cash-horizon/entries/{entry_id}", response_model=CashHorizonAnalysisResponse)
+async def update_cash_horizon_entry(
+    entry_id: str,
+    payload: CashHorizonEntryUpdate,
+    user: dict = Depends(get_optional_user),
+):
+    existing = await db.cash_horizon_entries.find_one({"id": entry_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    update_data = payload.model_dump(exclude_none=True)
+    if "label" in update_data:
+        update_data["label"] = update_data["label"].strip()
+        if not update_data["label"]:
+            raise HTTPException(status_code=400, detail="Label is required")
+    if "amount" in update_data and update_data["amount"] < 0:
+        raise HTTPException(status_code=400, detail="Amount must be non-negative")
+    if "notes" in update_data:
+        update_data["notes"] = (update_data["notes"] or "").strip() or None
+
+    merged = {**existing, **update_data}
+    timing_mode = merged.get("timing_mode", "date")
+    if timing_mode == "date" and not merged.get("expected_date"):
+        raise HTTPException(status_code=400, detail="Expected date is required")
+    if timing_mode == "days" and merged.get("days_from_today") is None:
+        raise HTTPException(status_code=400, detail="Days from today is required")
+
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.cash_horizon_entries.update_one({"id": entry_id}, {"$set": update_data})
+    analysis = analyze_cash_horizon(await _load_cash_horizon_entries())
+    return CashHorizonAnalysisResponse(**analysis)
+
+
+@api_router.delete("/cash-horizon/entries/{entry_id}", response_model=CashHorizonAnalysisResponse)
+async def delete_cash_horizon_entry(entry_id: str, user: dict = Depends(get_optional_user)):
+    result = await db.cash_horizon_entries.delete_one({"id": entry_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    analysis = analyze_cash_horizon(await _load_cash_horizon_entries())
+    return CashHorizonAnalysisResponse(**analysis)
+
+
+@api_router.put("/cash-horizon/entries/reorder", response_model=CashHorizonAnalysisResponse)
+async def reorder_cash_horizon_entries(
+    payload: CashHorizonReorderRequest,
+    user: dict = Depends(get_optional_user),
+):
+    for item in payload.items:
+        await db.cash_horizon_entries.update_one(
+            {"id": item.id, "quadrant": payload.quadrant},
+            {
+                "$set": {
+                    "sort_order": item.sort_order,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+    analysis = analyze_cash_horizon(await _load_cash_horizon_entries())
+    return CashHorizonAnalysisResponse(**analysis)
+
 
 @api_router.get("/treasury/debts", response_model=List[DebtConsolidationItem])
 async def get_treasury_debts(entity_id: Optional[str] = None):
@@ -3698,6 +3877,8 @@ async def seed_admin():
     )
     await db.cash_balance_snapshots.create_index([("snapshot_type", 1), ("date", -1), ("created_at", -1)])
     await db.bank_account_audit_log.create_index([("account_id", 1), ("changed_at", -1)])
+    await db.cash_horizon_entries.create_index([("id", 1)], unique=True)
+    await db.cash_horizon_entries.create_index([("quadrant", 1), ("sort_order", 1)])
 
 app.include_router(api_router)
 

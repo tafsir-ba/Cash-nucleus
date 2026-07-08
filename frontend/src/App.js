@@ -21,6 +21,7 @@ import { EntryLogDialog } from "./components/EntryLogDialog";
 import { EntityFilter } from "./components/EntityFilter";
 import { HorizonSelector } from "./components/HorizonSelector";
 import { BulkActualUploadPage } from "./components/BulkActualUploadPage";
+import { CashHorizonPage } from "./components/CashHorizonPage";
 
 // Icons
 import { Gear, Bank, ListBullets, ArrowCounterClockwise, SignOut } from "@phosphor-icons/react";
@@ -84,7 +85,7 @@ function Dashboard({ user, onLogout }) {
   const [entryLogOpen, setEntryLogOpen] = useState(false);
   
   // Tab state + flows for table
-  const [activeTab, setActiveTab] = useState("chart"); // "chart" | "table" | "entries" | "bulk_actuals"
+  const [activeTab, setActiveTab] = useState("chart"); // "chart" | "table" | "entries" | "bulk_actuals" | "cash_horizon"
   const [allFlows, setAllFlows] = useState([]);
   /** Bumps when any screen mutates cash flows so Bulk Actuals can refetch the flow match list. */
   const [dataRevision, setDataRevision] = useState(0);
@@ -288,12 +289,12 @@ function Dashboard({ user, onLogout }) {
       {/* Main Content — full width on Bulk Actuals for the working table */}
       <main
         className={`w-full mx-auto ${
-          activeTab === "bulk_actuals"
+          activeTab === "bulk_actuals" || activeTab === "cash_horizon"
             ? "max-w-none px-3 sm:px-4 lg:px-6 py-3"
             : "max-w-[1600px] px-4 md:px-6 lg:px-8 py-6"
         }`}
       >
-        {activeTab !== "bulk_actuals" && (
+        {activeTab !== "bulk_actuals" && activeTab !== "cash_horizon" && (
           <section className="mb-6">
             <KPICards
               projection={projection}
@@ -344,6 +345,15 @@ function Dashboard({ user, onLogout }) {
               Bulk Actuals
             </button>
           )}
+          <button
+            onClick={() => setActiveTab("cash_horizon")}
+            className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+              activeTab === "cash_horizon" ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
+            }`}
+            data-testid="tab-cash-horizon"
+          >
+            Cash Horizon
+          </button>
         </div>
 
         {activeTab === "chart" ? (
@@ -444,6 +454,10 @@ function Dashboard({ user, onLogout }) {
               entities={entities}
               onDataChange={handleDataChange}
             />
+          </section>
+        ) : activeTab === "cash_horizon" ? (
+          <section className="min-w-0 w-full">
+            <CashHorizonPage />
           </section>
         ) : ENABLE_BULK_ACTUALS ? (
           <section className="min-w-0 w-full">
