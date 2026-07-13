@@ -13,16 +13,19 @@ import {
   ReferenceLine,
   ScatterChart,
   Scatter,
-  ZAxis,
+  Cell,
 } from "recharts";
 import {
   QUADRANTS,
   analyzeCashHorizon,
   buildLiquidityChartDomain,
+  buildMatchChartDomain,
+  buildMatchScatterData,
   enrichAnalysisPayload,
   formatCHF,
   formatCHFCompact,
   formatResolvedDateLabel,
+  MATCH_QUADRANT_COLORS,
   parseAmountInput,
   quadrantToneClass,
   toDateInputValue,
@@ -44,6 +47,10 @@ const TH =
   "text-left px-1.5 py-1 text-[10px] uppercase tracking-wider text-zinc-500 font-medium whitespace-nowrap";
 
 const TD = "px-1 py-0.5 align-middle";
+
+const selectOnFocus = (event) => {
+  event.target.select();
+};
 
 const emptyDraft = (quadrant) => ({
   quadrant,
@@ -96,13 +103,18 @@ const QuadrantPanel = ({
       toast.error("Enter a valid amount");
       return;
     }
+    const days = draft.timing_mode === "days" ? parseAmountInput(draft.days_from_today) : null;
+    if (draft.timing_mode === "days" && days == null) {
+      toast.error("Enter valid days");
+      return;
+    }
     await onAdd({
       quadrant,
       label: draft.label.trim(),
       amount,
       timing_mode: draft.timing_mode,
       expected_date: draft.timing_mode === "date" ? draft.expected_date : null,
-      days_from_today: draft.timing_mode === "days" ? Number(draft.days_from_today) : null,
+      days_from_today: days,
       notes: draft.notes?.trim() || null,
     });
     setDraft(emptyDraft(quadrant));
@@ -177,19 +189,11 @@ const QuadrantPanel = ({
                   </td>
                   <td className={TD}>
                     <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={entry.amount}
-                      onChange={(e) => {
-                        const raw = e.target.value;
-                        if (raw === "") {
-                          onUpdateLocal(entry.id, { amount: "" });
-                          return;
-                        }
-                        const amount = parseAmountInput(raw);
-                        if (amount != null) onUpdateLocal(entry.id, { amount });
-                      }}
+                      type="text"
+                      inputMode="decimal"
+                      value={entry.amount === "" ? "" : entry.amount}
+                      onFocus={selectOnFocus}
+                      onChange={(e) => onUpdateLocal(entry.id, { amount: e.target.value })}
                       onBlur={(e) => {
                         const amount = parseAmountInput(e.target.value);
                         if (amount == null) {
@@ -199,6 +203,7 @@ const QuadrantPanel = ({
                         onSave(entry.id, { amount });
                       }}
                       className={`${CELL} font-mono text-right`}
+                      placeholder="0"
                     />
                   </td>
                   <td className={TD}>
@@ -226,12 +231,21 @@ const QuadrantPanel = ({
                       />
                     ) : (
                       <input
-                        type="number"
-                        min="0"
-                        value={entry.days_from_today ?? 0}
-                        onChange={(e) => onUpdateLocal(entry.id, { days_from_today: Number(e.target.value) })}
-                        onBlur={(e) => onSave(entry.id, { days_from_today: Number(e.target.value) })}
+                        type="text"
+                        inputMode="numeric"
+                        value={entry.days_from_today === "" ? "" : entry.days_from_today ?? ""}
+                        onFocus={selectOnFocus}
+                        onChange={(e) => onUpdateLocal(entry.id, { days_from_today: e.target.value })}
+                        onBlur={(e) => {
+                          const days = parseAmountInput(e.target.value);
+                          if (days == null) {
+                            toast.error("Enter valid days");
+                            return;
+                          }
+                          onSave(entry.id, { days_from_today: days });
+                        }}
                         className={`${CELL} font-mono`}
+                        placeholder="0"
                       />
                     )}
                   </td>
@@ -277,13 +291,14 @@ const QuadrantPanel = ({
               </td>
               <td className={TD}>
                 <input
-                  type="number"
-                  min="0"
+                  type="text"
+                  inputMode="decimal"
                   value={draft.amount}
+                  onFocus={selectOnFocus}
                   onChange={(e) => setDraft((d) => ({ ...d, amount: e.target.value }))}
                   onKeyDown={handleDraftKeyDown}
                   className={`${CELL} font-mono text-right`}
-                  placeholder="0"
+                  placeholder="Amount"
                 />
               </td>
               <td className={TD}>
@@ -307,12 +322,14 @@ const QuadrantPanel = ({
                   />
                 ) : (
                   <input
-                    type="number"
-                    min="0"
-                    value={draft.days_from_today}
-                    onChange={(e) => setDraft((d) => ({ ...d, days_from_today: Number(e.target.value) }))}
+                    type="text"
+                    inputMode="numeric"
+                    value={draft.days_from_today === "" ? "" : draft.days_from_today}
+                    onFocus={selectOnFocus}
+                    onChange={(e) => setDraft((d) => ({ ...d, days_from_today: e.target.value }))}
                     onKeyDown={handleDraftKeyDown}
                     className={`${CELL} font-mono`}
+                    placeholder="Days"
                   />
                 )}
               </td>
@@ -465,12 +482,13 @@ export const CashHorizonPage = () => {
     [analysis.timeline],
   );
 
+  const matchDomain = useMemo(
+    () => buildMatchChartDomain(analysis.cash_match_events, analysis.timeline),
+    [analysis.cash_match_events, analysis.timeline],
+  );
+
   const matchScatter = useMemo(
-    () =>
-      analysis.cash_match_events.map((event) => ({
-        ...event,
-        y: event.quadrant.endsWith("_inflow") ? event.amount : -event.amount,
-      })),
+    () => buildMatchScatterData(analysis.cash_match_events),
     [analysis.cash_match_events],
   );
 
@@ -617,19 +635,25 @@ export const CashHorizonPage = () => {
           <h3 className="text-xs uppercase tracking-[0.15em] text-zinc-500 mb-3">Cash Match Timeline</h3>
           <div className="h-[260px]">
             <ResponsiveContainer width="100%" height="100%">
-              <ScatterChart margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
+              <ScatterChart data={matchScatter} margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
                 <XAxis
                   dataKey="timestamp"
                   type="number"
                   scale="time"
-                  domain={liquidityDomain}
+                  domain={matchDomain}
                   tickFormatter={(ts) => new Date(ts).toLocaleDateString("en-GB", { month: "short", day: "numeric" })}
                   stroke="#71717a"
                   tick={{ fontSize: 10 }}
                 />
-                <YAxis stroke="#71717a" tick={{ fontSize: 10 }} tickFormatter={formatCHFCompact} width={48} />
-                <ZAxis range={[70, 70]} />
+                <YAxis
+                  dataKey="y"
+                  type="number"
+                  stroke="#71717a"
+                  tick={{ fontSize: 10 }}
+                  tickFormatter={formatCHFCompact}
+                  width={48}
+                />
                 <Tooltip
                   cursor={{ strokeDasharray: "3 3" }}
                   content={({ active, payload }) => {
@@ -644,22 +668,12 @@ export const CashHorizonPage = () => {
                     );
                   }}
                 />
-                {QUADRANTS.map(({ id }) => (
-                  <Scatter
-                    key={id}
-                    name={id}
-                    data={matchScatter.filter((e) => e.quadrant === id)}
-                    fill={
-                      id === "confirmed_inflow"
-                        ? "#34d399"
-                        : id === "confirmed_outflow"
-                          ? "#fb7185"
-                          : id === "potential_inflow"
-                            ? "#38bdf8"
-                            : "#fbbf24"
-                    }
-                  />
-                ))}
+                <ReferenceLine y={0} stroke="#52525b" strokeDasharray="4 4" />
+                <Scatter dataKey="y" fill="#34d399" isAnimationActive={false}>
+                  {matchScatter.map((point) => (
+                    <Cell key={point.id} fill={MATCH_QUADRANT_COLORS[point.quadrant] || "#a1a1aa"} />
+                  ))}
+                </Scatter>
               </ScatterChart>
             </ResponsiveContainer>
           </div>

@@ -1,7 +1,10 @@
 import {
   analyzeCashHorizon,
+  buildMatchChartDomain,
+  buildMatchScatterData,
   enrichAnalysisPayload,
   formatResolvedDateLabel,
+  normalizeEntry,
   parseAmountInput,
   resolveExpectedDate,
   toDateInputValue,
@@ -117,5 +120,28 @@ describe("cashHorizon", () => {
     expect(parseAmountInput("")).toBeNull();
     expect(parseAmountInput("19000")).toBe(19000);
     expect(parseAmountInput("-1")).toBeNull();
+  });
+
+  it("preserves empty amount while editing", () => {
+    const normalized = normalizeEntry({ id: "1", quadrant: "confirmed_inflow", amount: "", timing_mode: "date", expected_date: "2026-08-01" }, TODAY);
+    expect(normalized.amount).toBe("");
+    const analysis = analyzeCashHorizon([
+      { id: "1", quadrant: "confirmed_inflow", label: "Test", amount: "", timing_mode: "date", expected_date: "2026-08-01", sort_order: 0 },
+    ], TODAY);
+    expect(analysis.entries[0].amount).toBe("");
+    expect(analysis.positions.confirmed_inflows).toBe(0);
+  });
+
+  it("builds scatter points and chart domain for cash match timeline", () => {
+    const events = [
+      { id: "1", date: "2026-07-31", timestamp: new Date(2026, 6, 31, 12).getTime(), amount: 38000, quadrant: "confirmed_outflow", label: "Payroll" },
+      { id: "2", date: "2026-08-15", timestamp: new Date(2026, 7, 15, 12).getTime(), amount: 42000, quadrant: "confirmed_inflow", label: "Invoice" },
+    ];
+    const scatter = buildMatchScatterData(events);
+    expect(scatter).toHaveLength(2);
+    expect(scatter[0].y).toBe(-38000);
+    expect(scatter[1].y).toBe(42000);
+    const domain = buildMatchChartDomain(events, []);
+    expect(domain[0]).toBeLessThan(domain[1]);
   });
 });

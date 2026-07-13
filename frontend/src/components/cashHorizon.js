@@ -69,6 +69,18 @@ export const toDateInputValue = (value) => {
   return `${y}-${m}-${day}`;
 };
 
+const normalizeAmount = (value) => {
+  if (value === "" || value === null || value === undefined) return "";
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : "";
+};
+
+const normalizeDays = (value) => {
+  if (value === "" || value === null || value === undefined) return value === "" ? "" : 0;
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+};
+
 export const normalizeEntry = (entry, today = startOfDay()) => {
   const timingMode = entry.timing_mode || entry.timingMode || "date";
   const resolved = resolveExpectedDate({
@@ -80,7 +92,8 @@ export const normalizeEntry = (entry, today = startOfDay()) => {
   return {
     ...entry,
     timing_mode: timingMode,
-    amount: Math.round(Number(entry.amount || 0) * 100) / 100,
+    amount: normalizeAmount(entry.amount),
+    days_from_today: normalizeDays(entry.days_from_today ?? entry.daysFromToday),
     resolved_date: resolved ? toDateInputValue(resolved) : null,
   };
 };
@@ -311,17 +324,41 @@ export const analyzeCashHorizon = (entries, today = startOfDay(), checkpointDays
   };
 };
 
-export const buildLiquidityChartDomain = (timeline) => {
-  if (!timeline.length) return ["auto", "auto"];
-  const timestamps = timeline.map((p) => p.timestamp);
-  const min = Math.min(...timestamps);
-  const max = Math.max(...timestamps);
+const buildTimestampDomain = (timestamps) => {
+  const valid = timestamps.filter((t) => t != null && !Number.isNaN(t));
+  if (!valid.length) return ["auto", "auto"];
+  const min = Math.min(...valid);
+  const max = Math.max(...valid);
   if (min === max) {
     const monthMs = 30 * 24 * 60 * 60 * 1000;
     return [min - monthMs, max + monthMs];
   }
   return [min, max];
 };
+
+export const buildLiquidityChartDomain = (timeline) =>
+  buildTimestampDomain((timeline || []).map((p) => p.timestamp));
+
+export const buildMatchChartDomain = (events, timeline = []) =>
+  buildTimestampDomain([
+    ...(events || []).map((e) => e.timestamp),
+    ...(timeline || []).map((p) => p.timestamp),
+  ]);
+
+export const MATCH_QUADRANT_COLORS = {
+  confirmed_inflow: "#34d399",
+  confirmed_outflow: "#fb7185",
+  potential_inflow: "#38bdf8",
+  potential_outflow: "#fbbf24",
+};
+
+export const buildMatchScatterData = (events) =>
+  (events || [])
+    .filter((e) => e.timestamp != null && !Number.isNaN(e.timestamp))
+    .map((event) => ({
+      ...event,
+      y: event.quadrant.endsWith("_inflow") ? event.amount : -event.amount,
+    }));
 
 export const enrichAnalysisPayload = (payload) => {
   if (!payload) return payload;
