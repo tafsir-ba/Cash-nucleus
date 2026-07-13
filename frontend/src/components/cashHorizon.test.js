@@ -1,11 +1,11 @@
 import {
-  analyzeCashHorizon,
   buildMatchChartDomain,
   buildMatchScatterData,
   enrichAnalysisPayload,
   formatResolvedDateLabel,
   normalizeEntry,
   parseAmountInput,
+  patchEntryForDisplay,
   resolveExpectedDate,
   toDateInputValue,
 } from "./cashHorizon";
@@ -20,84 +20,6 @@ describe("cashHorizon", () => {
     expect(toDateInputValue(resolveExpectedDate({ timingMode: "date", expectedDate: "2026-08-15", today: TODAY }))).toBe(
       "2026-08-15",
     );
-  });
-
-  it("computes positions and checkpoints from mixed entries", () => {
-    const analysis = analyzeCashHorizon(
-      [
-        {
-          id: "1",
-          quadrant: "confirmed_inflow",
-          label: "Swissroc Invoice",
-          amount: 42000,
-          timing_mode: "date",
-          expected_date: "2026-08-15",
-          sort_order: 0,
-        },
-        {
-          id: "2",
-          quadrant: "confirmed_outflow",
-          label: "Payroll",
-          amount: 38000,
-          timing_mode: "date",
-          expected_date: "2026-07-31",
-          sort_order: 0,
-        },
-        {
-          id: "3",
-          quadrant: "potential_inflow",
-          label: "Forecast revenue",
-          amount: 70000,
-          timing_mode: "days",
-          days_from_today: 30,
-          sort_order: 0,
-        },
-        {
-          id: "4",
-          quadrant: "potential_outflow",
-          label: "VAT",
-          amount: 22000,
-          timing_mode: "days",
-          days_from_today: 14,
-          sort_order: 0,
-        },
-      ],
-      TODAY,
-    );
-
-    expect(analysis.positions.confirmed_net_position).toBe(4000);
-    expect(analysis.positions.potential_net_position).toBe(48000);
-    expect(analysis.positions.combined_outlook).toBe(52000);
-    expect(analysis.checkpoints[0].horizon).toBe("Today");
-    expect(analysis.summary.length).toBeGreaterThan(2);
-  });
-
-  it("marks negative cumulative balances at checkpoints", () => {
-    const analysis = analyzeCashHorizon(
-      [
-        {
-          id: "a",
-          quadrant: "confirmed_inflow",
-          label: "In",
-          amount: 50000,
-          timing_mode: "days",
-          days_from_today: 5,
-          sort_order: 0,
-        },
-        {
-          id: "b",
-          quadrant: "confirmed_outflow",
-          label: "Out",
-          amount: 70000,
-          timing_mode: "days",
-          days_from_today: 5,
-          sort_order: 0,
-        },
-      ],
-      TODAY,
-    );
-    expect(analysis.checkpoints[0].confirmed_net).toBe(0);
-    expect(analysis.checkpoints.find((c) => c.day_offset === 7).confirmed_net).toBe(-20000);
   });
 
   it("enriches API payloads missing chart timestamps", () => {
@@ -123,19 +45,38 @@ describe("cashHorizon", () => {
   });
 
   it("preserves empty amount while editing", () => {
-    const normalized = normalizeEntry({ id: "1", quadrant: "confirmed_inflow", amount: "", timing_mode: "date", expected_date: "2026-08-01" }, TODAY);
+    const normalized = normalizeEntry(
+      { id: "1", quadrant: "confirmed_inflow", amount: "", timing_mode: "date", expected_date: "2026-08-01" },
+      TODAY,
+    );
     expect(normalized.amount).toBe("");
-    const analysis = analyzeCashHorizon([
-      { id: "1", quadrant: "confirmed_inflow", label: "Test", amount: "", timing_mode: "date", expected_date: "2026-08-01", sort_order: 0 },
-    ], TODAY);
-    expect(analysis.entries[0].amount).toBe("");
-    expect(analysis.positions.confirmed_inflows).toBe(0);
+    const patched = patchEntryForDisplay(
+      [{ id: "1", quadrant: "confirmed_inflow", amount: 1000, timing_mode: "date", expected_date: "2026-08-01" }],
+      "1",
+      { amount: "" },
+      TODAY,
+    );
+    expect(patched[0].amount).toBe("");
   });
 
   it("builds scatter points and chart domain for cash match timeline", () => {
     const events = [
-      { id: "1", date: "2026-07-31", timestamp: new Date(2026, 6, 31, 12).getTime(), amount: 38000, quadrant: "confirmed_outflow", label: "Payroll" },
-      { id: "2", date: "2026-08-15", timestamp: new Date(2026, 7, 15, 12).getTime(), amount: 42000, quadrant: "confirmed_inflow", label: "Invoice" },
+      {
+        id: "1",
+        date: "2026-07-31",
+        timestamp: Date.UTC(2026, 6, 31, 12),
+        amount: 38000,
+        quadrant: "confirmed_outflow",
+        label: "Payroll",
+      },
+      {
+        id: "2",
+        date: "2026-08-15",
+        timestamp: Date.UTC(2026, 7, 15, 12),
+        amount: 42000,
+        quadrant: "confirmed_inflow",
+        label: "Invoice",
+      },
     ];
     const scatter = buildMatchScatterData(events);
     expect(scatter).toHaveLength(2);

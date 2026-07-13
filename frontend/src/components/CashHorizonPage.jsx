@@ -17,7 +17,6 @@ import {
 } from "recharts";
 import {
   QUADRANTS,
-  analyzeCashHorizon,
   buildLiquidityChartDomain,
   buildMatchChartDomain,
   buildMatchScatterData,
@@ -27,7 +26,9 @@ import {
   formatResolvedDateLabel,
   MATCH_QUADRANT_COLORS,
   parseAmountInput,
+  patchEntryForDisplay,
   quadrantToneClass,
+  reorderEntriesForDisplay,
   toDateInputValue,
 } from "./cashHorizon";
 
@@ -376,7 +377,7 @@ const LiquidityTooltip = ({ active, payload }) => {
 export const CashHorizonPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [analysis, setAnalysis] = useState(() => analyzeCashHorizon([]));
+  const [analysis, setAnalysis] = useState(null);
   const [savingId, setSavingId] = useState(null);
 
   const load = useCallback(async () => {
@@ -400,8 +401,24 @@ export const CashHorizonPage = () => {
     setAnalysis(enrichAnalysisPayload(data));
   };
 
-  const optimisticUpdate = (nextEntries) => {
-    setAnalysis(analyzeCashHorizon(nextEntries));
+  const patchEntryLocally = (entryId, patch) => {
+    setAnalysis((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        entries: patchEntryForDisplay(prev.entries, entryId, patch),
+      };
+    });
+  };
+
+  const reorderEntriesLocally = (quadrant, items) => {
+    setAnalysis((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        entries: reorderEntriesForDisplay(prev.entries, quadrant, items),
+      };
+    });
   };
 
   const handleAdd = async (payload) => {
@@ -416,10 +433,7 @@ export const CashHorizonPage = () => {
   };
 
   const handleUpdateLocal = (entryId, patch) => {
-    const nextEntries = analysis.entries.map((entry) =>
-      entry.id === entryId ? { ...entry, ...patch } : entry,
-    );
-    optimisticUpdate(nextEntries);
+    patchEntryLocally(entryId, patch);
   };
 
   const handleSave = async (entryId, patch) => {
@@ -447,16 +461,7 @@ export const CashHorizonPage = () => {
   };
 
   const handleReorder = async (quadrant, items) => {
-    const orderMap = Object.fromEntries(items.map((item) => [item.id, item.sort_order]));
-    const nextEntries = analysis.entries
-      .map((entry) =>
-        entry.quadrant === quadrant ? { ...entry, sort_order: orderMap[entry.id] ?? entry.sort_order } : entry,
-      )
-      .sort((a, b) => {
-        if (a.quadrant !== b.quadrant) return a.quadrant.localeCompare(b.quadrant);
-        return (a.sort_order || 0) - (b.sort_order || 0);
-      });
-    optimisticUpdate(nextEntries);
+    reorderEntriesLocally(quadrant, items);
     try {
       const response = await axios.put(`${API}/cash-horizon/entries/reorder`, { quadrant, items });
       applyAnalysis(response.data);
@@ -492,7 +497,7 @@ export const CashHorizonPage = () => {
     [analysis.cash_match_events],
   );
 
-  if (loading) {
+  if (loading || !analysis) {
     return <div className="text-sm text-zinc-500 py-12 text-center">Loading Cash Horizon...</div>;
   }
 

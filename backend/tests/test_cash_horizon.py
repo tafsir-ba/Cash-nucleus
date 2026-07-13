@@ -1,5 +1,5 @@
 import pytest
-from datetime import date
+from datetime import date, datetime, timezone
 
 from cash_horizon import (
     analyze_cash_horizon,
@@ -110,3 +110,6 @@ def test_timeline_and_events_include_timestamps():
     analysis = analyze_cash_horizon(entries, today=TODAY)
     assert analysis["timeline"][0]["timestamp"] > 0
     assert analysis["cash_match_events"][0]["timestamp"] > 0
+    expected = int(datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    assert analysis["timeline"][0]["timestamp"] == expected
+    assert analysis["cash_match_events"][0]["timestamp"] == expected

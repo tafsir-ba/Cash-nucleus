@@ -196,7 +196,7 @@ def build_timeline_points(entries: List[Dict[str, Any]], today: Optional[date] =
         if quadrant.startswith("confirmed"):
             confirmed_running = round(confirmed_running + delta, 2)
         combined_running = round(combined_running + delta, 2)
-        resolved_dt = datetime(resolved.year, resolved.month, resolved.day, 12, 0, 0)
+        resolved_dt = datetime(resolved.year, resolved.month, resolved.day, 12, 0, 0, tzinfo=timezone.utc)
         points.append(
             {
                 "date": resolved.isoformat(),
@@ -209,7 +209,7 @@ def build_timeline_points(entries: List[Dict[str, Any]], today: Optional[date] =
             }
         )
     if not points:
-        anchor_dt = datetime(anchor.year, anchor.month, anchor.day, 12, 0, 0)
+        anchor_dt = datetime(anchor.year, anchor.month, anchor.day, 12, 0, 0, tzinfo=timezone.utc)
         points.append(
             {
                 "date": anchor.isoformat(),
@@ -230,7 +230,7 @@ def build_cash_match_events(entries: List[Dict[str, Any]]) -> List[Dict[str, Any
         resolved = _as_date(entry.get("resolved_date"))
         if resolved is None:
             continue
-        resolved_dt = datetime(resolved.year, resolved.month, resolved.day, 12, 0, 0)
+        resolved_dt = datetime(resolved.year, resolved.month, resolved.day, 12, 0, 0, tzinfo=timezone.utc)
         events.append(
             {
                 "id": entry.get("id"),
