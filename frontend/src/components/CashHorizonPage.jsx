@@ -21,6 +21,7 @@ import {
   buildMatchChartDomain,
   buildMatchScatterData,
   enrichAnalysisPayload,
+  EMPTY_CASH_HORIZON_ANALYSIS,
   formatCHF,
   formatCHFCompact,
   formatResolvedDateLabel,
@@ -377,7 +378,7 @@ const LiquidityTooltip = ({ active, payload }) => {
 export const CashHorizonPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [analysis, setAnalysis] = useState(null);
+  const [analysis, setAnalysis] = useState(EMPTY_CASH_HORIZON_ANALYSIS);
   const [savingId, setSavingId] = useState(null);
 
   const load = useCallback(async () => {
@@ -479,25 +480,25 @@ export const CashHorizonPage = () => {
           analysis.entries.filter((entry) => entry.quadrant === id),
         ]),
       ),
-    [analysis.entries],
+    [analysis],
   );
 
   const liquidityDomain = useMemo(
     () => buildLiquidityChartDomain(analysis.timeline),
-    [analysis.timeline],
+    [analysis],
   );
 
   const matchDomain = useMemo(
     () => buildMatchChartDomain(analysis.cash_match_events, analysis.timeline),
-    [analysis.cash_match_events, analysis.timeline],
+    [analysis],
   );
 
   const matchScatter = useMemo(
     () => buildMatchScatterData(analysis.cash_match_events),
-    [analysis.cash_match_events],
+    [analysis],
   );
 
-  if (loading || !analysis) {
+  if (loading) {
     return <div className="text-sm text-zinc-500 py-12 text-center">Loading Cash Horizon...</div>;
   }
 

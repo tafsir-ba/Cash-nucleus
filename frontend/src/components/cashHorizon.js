@@ -5,6 +5,25 @@ export const QUADRANTS = [
   { id: "potential_outflow", title: "Potential Outflows", tone: "amber" },
 ];
 
+export const EMPTY_CASH_HORIZON_ANALYSIS = {
+  as_of: "",
+  entries: [],
+  quadrant_totals: {},
+  positions: {
+    confirmed_inflows: 0,
+    confirmed_outflows: 0,
+    potential_inflows: 0,
+    potential_outflows: 0,
+    confirmed_net_position: 0,
+    potential_net_position: 0,
+    combined_outlook: 0,
+  },
+  checkpoints: [],
+  timeline: [],
+  cash_match_events: [],
+  summary: [],
+};
+
 export const formatCHF = (amount) =>
   new Intl.NumberFormat("de-CH", {
     style: "currency",
