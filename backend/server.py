@@ -24,6 +24,7 @@ from dateutil import parser as date_parser
 from bulk_flow_match import (
     best_flow_match,
     auto_select_flow_match_score as _auto_select_flow_match_score,
+    choose_best_flow_match,
     flow_matches_import_direction,
     match_flow_by_label,
 )
@@ -531,6 +532,8 @@ class ActualImportRow(BaseModel):
     selected_flow_id: Optional[str] = None
     match_score: float = 0.0
     match_reason: str = ""
+    # Optional CSV "Flow match" cell retained for rematch.
+    raw_flow_match: Optional[str] = None
     variance_action: str = "actual_only"  # actual_only | carry_forward | write_off
     error: Optional[str] = None
     # existing_flow: map to selected_flow_id. new_flow: apply creates a new cash flow line from this row, then records the actual.
@@ -2594,21 +2597,25 @@ async def parse_actual_import(
                 row_entity_id = resolved_entity
 
         match: Dict[str, Any] = {"flow_id": None, "score": 0.0, "reason": "No close match"}
+        raw_flow_match: Optional[str] = None
         if detected.get("flow_match"):
             raw_flow = str(row.get(detected["flow_match"], "") or "").strip()
             if raw_flow and raw_flow.lower() not in {"unmatched", "none", "-", "n/a"}:
+                raw_flow_match = raw_flow
                 match = match_flow_by_label(flows, raw_flow, row_entity_id)
                 # If entity scope blocked the label, retry across all loaded flows.
                 if not match.get("flow_id") and row_entity_id:
                     match = match_flow_by_label(flows, raw_flow, None)
 
-        if not match.get("flow_id"):
-            match = best_flow_match(flows, description, parsed_amount, row_entity_id)
-            # Scoped entity often has zero lines; retry unscoped before leaving unmatched.
-            if (not match.get("flow_id") or match.get("score", 0) <= 0) and row_entity_id:
-                cross = best_flow_match(flows, description, parsed_amount, None)
-                if cross.get("score", 0) > match.get("score", 0):
-                    match = cross
+        if not match.get("flow_id") or not _auto_select_flow_match_score(match["score"], match.get("reason", "")):
+            desc_match = choose_best_flow_match(flows, description, parsed_amount, row_entity_id)
+            # Keep an explicit CSV label suggestion when description match is weaker / not selectable.
+            if not match.get("flow_id"):
+                match = desc_match
+            elif _auto_select_flow_match_score(desc_match.get("score", 0), desc_match.get("reason", "")) and not _auto_select_flow_match_score(
+                match.get("score", 0), match.get("reason", "")
+            ):
+                match = desc_match
 
         selected_flow_id = match["flow_id"] if _auto_select_flow_match_score(match["score"], match.get("reason", "")) else None
         matched_flow = flows_by_id.get(selected_flow_id) if selected_flow_id else None
@@ -2616,7 +2623,11 @@ async def parse_actual_import(
             matched_flow = next((f for f in flows if f.get("id") == selected_flow_id), None)
         if matched_flow:
             category = category_from_flow(matched_flow)
-        matched_entity_id = row_entity_id or (matched_flow.get("entity_id") if matched_flow else None)
+        # Selected flow owns entity scope so apply/validate_selected_flow_for_row succeeds.
+        if selected_flow_id and matched_flow and matched_flow.get("entity_id"):
+            matched_entity_id = matched_flow.get("entity_id")
+        else:
+            matched_entity_id = row_entity_id or (matched_flow.get("entity_id") if matched_flow else None)
         include = True
         status = "ready" if selected_flow_id else "warning"
 
@@ -2638,6 +2649,7 @@ async def parse_actual_import(
             selected_flow_id=selected_flow_id,
             match_score=match["score"],
             match_reason=match["reason"],
+            raw_flow_match=raw_flow_match,
             classification="existing_flow",
         )
         created_rows.append(import_row.model_dump())
@@ -2886,11 +2898,20 @@ async def rematch_actual_import_batch(batch_id: str, user: dict = Depends(get_cu
         description = row.get("description") or ""
         amount = float(row.get("amount", 0))
         row_entity = row.get("entity_id") or entity_id
-        match = best_flow_match(flows, description, amount, row_entity)
-        if (not match.get("flow_id") or match.get("score", 0) <= 0) and row_entity:
-            cross = best_flow_match(flows, description, amount, None)
-            if cross.get("score", 0) > match.get("score", 0):
-                match = cross
+        match: Dict[str, Any] = {"flow_id": None, "score": 0.0, "reason": "No close match"}
+        raw_flow = (row.get("raw_flow_match") or "").strip()
+        if raw_flow and raw_flow.lower() not in {"unmatched", "none", "-", "n/a"}:
+            match = match_flow_by_label(flows, raw_flow, row_entity)
+            if not match.get("flow_id") and row_entity:
+                match = match_flow_by_label(flows, raw_flow, None)
+        if not match.get("flow_id") or not _auto_select_flow_match_score(match.get("score", 0), match.get("reason", "")):
+            desc_match = choose_best_flow_match(flows, description, amount, row_entity)
+            if not match.get("flow_id"):
+                match = desc_match
+            elif _auto_select_flow_match_score(desc_match.get("score", 0), desc_match.get("reason", "")) and not _auto_select_flow_match_score(
+                match.get("score", 0), match.get("reason", "")
+            ):
+                match = desc_match
         selected = match["flow_id"] if _auto_select_flow_match_score(match["score"], match.get("reason", "")) else None
         patch = {
             "suggested_flow_id": match["flow_id"],
@@ -2902,7 +2923,7 @@ async def rematch_actual_import_batch(batch_id: str, user: dict = Depends(get_cu
         }
         if selected:
             matched_flow = flows_by_id.get(selected)
-            if matched_flow and matched_flow.get("entity_id") and not row.get("entity_id"):
+            if matched_flow and matched_flow.get("entity_id"):
                 patch["entity_id"] = matched_flow["entity_id"]
             if matched_flow:
                 patch["category"] = _category_value(matched_flow.get("category"))

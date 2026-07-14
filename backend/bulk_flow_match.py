@@ -41,11 +41,35 @@ def flow_matches_import_direction(flow: dict, amount: float) -> bool:
 
 
 def auto_select_flow_match_score(score: float, reason: str) -> bool:
+    reason_l = (reason or "").lower()
+    # Never auto-commit ambiguous CSV label hits — suggest only.
+    if "ambiguous" in reason_l:
+        return False
     if score >= 0.55:
         return True
-    if score >= 0.45 and reason and "label" in reason:
+    if score >= 0.45 and reason and "label" in reason_l:
         return True
     return False
+
+
+def choose_best_flow_match(
+    flows: List[dict],
+    description: str,
+    amount: float,
+    entity_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Prefer entity-scoped match; if it would not auto-select, try all flows."""
+    scoped = best_flow_match(flows, description, amount, entity_id)
+    if auto_select_flow_match_score(scoped.get("score", 0), scoped.get("reason", "")):
+        return scoped
+    if not entity_id:
+        return scoped
+    unscoped = best_flow_match(flows, description, amount, None)
+    if auto_select_flow_match_score(unscoped.get("score", 0), unscoped.get("reason", "")):
+        return unscoped
+    if unscoped.get("score", 0) > scoped.get("score", 0):
+        return unscoped
+    return scoped
 
 
 def normalize_flow_match_label(raw: Optional[str]) -> str:

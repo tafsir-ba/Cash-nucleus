@@ -286,6 +286,98 @@ def test_parse_uses_entity_and_flow_match_columns_with_european_dates(client: Te
     assert row["entity_id"] == owner_id
     assert row["selected_flow_id"] == fid
     assert row["match_score"] >= 0.9
+    assert row.get("raw_flow_match") == "Subscriptions - Expense"
+
+    client.delete(f"/api/cash-flows/{fid}")
+    client.delete(f"/api/entities/{empty_id}")
+    client.delete(f"/api/entities/{owner_id}")
+
+
+def test_parse_cross_entity_description_match_applies(client: TestClient):
+    """Batch entity with no lines must sync row.entity_id from matched flow so apply succeeds."""
+    empty = client.post("/api/entities", json={"name": f"MainEmpty_{uuid.uuid4().hex[:6]}"})
+    owner = client.post("/api/entities", json={"name": f"Evohom_{uuid.uuid4().hex[:4]}"})
+    assert empty.status_code == 200 and owner.status_code == 200
+    empty_id, owner_id = empty.json()["id"], owner.json()["id"]
+
+    flow = client.post(
+        "/api/cash-flows",
+        json={
+            "label": "Migros",
+            "amount": -20,
+            "date": "2026-06-01",
+            "category": "Expense",
+            "certainty": "Materialized",
+            "recurrence": "none",
+            "entity_id": owner_id,
+        },
+    )
+    assert flow.status_code == 200, flow.text
+    fid = flow.json()["id"]
+
+    csv = b"Date,Posting text,Amount\n03.06.2026,Achat Mastercard 02.06.2026 Migros MM Rieu,-13.26\n"
+    parse = client.post(
+        "/api/actual-imports/parse",
+        data={"entity_id": empty_id},
+        files={"file": ("bank.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert parse.status_code == 200, parse.text
+    batch_id = parse.json()["batch"]["id"]
+    row = parse.json()["rows"][0]
+    assert row["selected_flow_id"] == fid
+    assert row["entity_id"] == owner_id
+    assert row["transaction_date"] == "2026-06-03"
+
+    apply = client.post(f"/api/actual-imports/{batch_id}/apply", json={})
+    assert apply.status_code == 200, apply.text
+    assert apply.json().get("applied_rows", 0) >= 1
+    assert apply.json().get("status") in {"applied", "partial"}
+
+    client.delete(f"/api/cash-flows/{fid}")
+    client.delete(f"/api/entities/{empty_id}")
+    client.delete(f"/api/entities/{owner_id}")
+
+
+def test_rematch_syncs_entity_from_selected_flow(client: TestClient):
+    empty = client.post("/api/entities", json={"name": f"MainEmpty_{uuid.uuid4().hex[:6]}"})
+    owner = client.post("/api/entities", json={"name": f"Family_{uuid.uuid4().hex[:4]}"})
+    assert empty.status_code == 200 and owner.status_code == 200
+    empty_id, owner_id = empty.json()["id"], owner.json()["id"]
+
+    csv = b"Date,Posting text,Amount\n03.06.2026,Achat Mastercard Migros,-13.26\n"
+    parse = client.post(
+        "/api/actual-imports/parse",
+        data={"entity_id": empty_id},
+        files={"file": ("bank.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert parse.status_code == 200, parse.text
+    batch_id = parse.json()["batch"]["id"]
+    assert parse.json()["rows"][0].get("selected_flow_id") is None
+
+    flow = client.post(
+        "/api/cash-flows",
+        json={
+            "label": "Migros",
+            "amount": -20,
+            "date": "2026-06-01",
+            "category": "Expense",
+            "certainty": "Materialized",
+            "recurrence": "none",
+            "entity_id": owner_id,
+        },
+    )
+    assert flow.status_code == 200, flow.text
+    fid = flow.json()["id"]
+
+    rematch = client.post(f"/api/actual-imports/{batch_id}/rematch")
+    assert rematch.status_code == 200, rematch.text
+    row = rematch.json()["rows"][0]
+    assert row["selected_flow_id"] == fid
+    assert row["entity_id"] == owner_id
+
+    apply = client.post(f"/api/actual-imports/{batch_id}/apply", json={})
+    assert apply.status_code == 200, apply.text
+    assert apply.json().get("applied_rows", 0) >= 1
 
     client.delete(f"/api/cash-flows/{fid}")
     client.delete(f"/api/entities/{empty_id}")

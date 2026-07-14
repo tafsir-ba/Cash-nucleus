@@ -76,6 +76,12 @@ const flowMatchesBulkImportDirection = (flow, rowAmountNum, entityEff) => {
 
 const flowBelongsToEntity = (flow, entityEff, entityList) => {
   if (!entityEff) return true;
+  // Legacy cash lines may omit entity_id (backend _flow_belongs_to_entity treats them as eligible).
+  if (flow.entity_id == null || flow.entity_id === "") {
+    if (!flow.entity) return true;
+    const ent = entityList.find((e) => e.id === entityEff);
+    return !!(ent?.name && flow.entity === ent.name);
+  }
   if (flow.entity_id === entityEff) return true;
   const ent = entityList.find((e) => e.id === entityEff);
   return !!(ent?.name && flow.entity === ent.name);
