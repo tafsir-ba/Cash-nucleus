@@ -1000,7 +1000,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
             <span className="text-zinc-500">Included: <span className="text-emerald-400">{summary.included}</span></span>
             <span className="text-zinc-500">Discarded: <span className="text-zinc-400">{summary.discarded}</span></span>
             <span className="text-zinc-500">Unmatched: <span className="text-amber-400">{summary.unmatched}</span></span>
-            <span className="text-zinc-500">Flows loaded: <span className="text-zinc-300">{allFlows.filter((f) => flowBelongsToEntity(f, entityId || batch?.entity_id, entities)).length}</span></span>
+            <span className="text-zinc-500">Flows loaded: <span className="text-zinc-300">{allFlows.length}</span></span>
             {batch.id && (
               <span className="text-zinc-500">Batch ID: <span className="text-zinc-400 font-mono">{batch.id.slice(0, 8)}…</span></span>
             )}

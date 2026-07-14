@@ -241,3 +241,52 @@ def test_simulate_multi_entity_batch_returns_non_empty_matrix(client: TestClient
     client.delete(f"/api/cash-flows/{fid_b}")
     client.delete(f"/api/entities/{id_a}")
     client.delete(f"/api/entities/{id_b}")
+
+
+def test_parse_uses_entity_and_flow_match_columns_with_european_dates(client: TestClient):
+    """CSV Entity/Flow match columns must resolve even when batch entity has no flows."""
+    empty = client.post("/api/entities", json={"name": f"MainEmpty_{uuid.uuid4().hex[:6]}"})
+    owner = client.post("/api/entities", json={"name": f"Evohom SA {uuid.uuid4().hex[:4]}"})
+    assert empty.status_code == 200 and owner.status_code == 200
+    empty_id, owner_id = empty.json()["id"], owner.json()["id"]
+    owner_name = owner.json()["name"]
+
+    flow = client.post(
+        "/api/cash-flows",
+        json={
+            "label": "Subscriptions",
+            "amount": -29,
+            "date": "2026-06-01",
+            "category": "Expense",
+            "certainty": "Materialized",
+            "recurrence": "none",
+            "entity_id": owner_id,
+        },
+    )
+    assert flow.status_code == 200, flow.text
+    fid = flow.json()["id"]
+
+    csv = (
+        "Date,Posting text,Amount,Value,Entity,Month,Category,Flow match\n"
+        f"03.06.2026,Achat Mastercard 02.06.2026 infomaniak.com,-29.00,03.06.2026,{owner_name},2026-06,Expense,Subscriptions - Expense\n"
+    ).encode("utf-8")
+
+    parse = client.post(
+        "/api/actual-imports/parse",
+        data={"entity_id": empty_id},
+        files={"file": ("EN_Auszug_test.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert parse.status_code == 200, parse.text
+    body = parse.json()
+    assert body["detected_columns"]["flow_match"] == "Flow match"
+    assert body["detected_columns"]["entity"] == "Entity"
+    row = body["rows"][0]
+    assert row["transaction_date"] == "2026-06-03"
+    assert row["month"] == "2026-06"
+    assert row["entity_id"] == owner_id
+    assert row["selected_flow_id"] == fid
+    assert row["match_score"] >= 0.9
+
+    client.delete(f"/api/cash-flows/{fid}")
+    client.delete(f"/api/entities/{empty_id}")
+    client.delete(f"/api/entities/{owner_id}")

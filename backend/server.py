@@ -21,7 +21,12 @@ import json
 import hashlib
 from dateutil import parser as date_parser
 
-from bulk_flow_match import best_flow_match, auto_select_flow_match_score as _auto_select_flow_match_score, flow_matches_import_direction
+from bulk_flow_match import (
+    best_flow_match,
+    auto_select_flow_match_score as _auto_select_flow_match_score,
+    flow_matches_import_direction,
+    match_flow_by_label,
+)
 
 from cash_horizon import analyze_cash_horizon, normalize_entry, resolve_expected_date
 
@@ -805,6 +810,8 @@ def detect_import_columns(columns: List[str]) -> Dict[str, str]:
     date_exact = [
         "date", "transaction date", "booking date", "value date", "buchungsdatum", "buchungstag",
         "valuta", "valutadatum", "transaktionsdatum", "posting date", "trade date", "datum",
+        # Swiss/EN bank extracts often use "Value" for value date (not amount).
+        "value",
     ]
     desc_exact = [
         "description", "label", "details", "memo", "narrative", "name", "text", "beschreibung",
@@ -812,11 +819,19 @@ def detect_import_columns(columns: List[str]) -> Dict[str, str]:
         "begünstigter", "beguenstigter", "merchant", "note", "bemerkung",
         "posting text", "buchungstext en", "booking text",
     ]
+    # Do not treat plain "value" as amount — conflicts with Swiss value-date columns.
     amount_exact = [
-        "amount", "value", "chf", "betrag", "amount chf", "transaction amount", "booked amount",
+        "amount", "chf", "betrag", "amount chf", "transaction amount", "booked amount",
     ]
     debit_exact = ["debit", "soll", "belastung", "lastschrift", "abgang", "withdrawal"]
     credit_exact = ["credit", "haben", "gutschrift", "guthaben", "eingang", "deposit"]
+    entity_exact = ["entity", "entité", "entite", "company", "gesellschaft", "kontoinhaber"]
+    flow_match_exact = [
+        "flow match", "cash flow", "cashflow", "matched flow", "mapped flow",
+        "category match", "cash line", "flow line",
+    ]
+    category_exact = ["category", "catégorie", "categorie", "type", "flow category"]
+    month_exact = ["month", "periode", "période", "period", "mois"]
 
     def pick_exact(keys: List[str]) -> Optional[str]:
         for k in keys:
@@ -841,11 +856,17 @@ def detect_import_columns(columns: List[str]) -> Dict[str, str]:
         ),
         ("betrag", "amount", "belastung", "gutschrift", "text", "beschreibung", "posting text"),
     )
+    # Prefer Booking/Transaction Date over Value when both exist.
+    preferred_date = pick_exact(
+        ["date", "transaction date", "booking date", "posting date", "buchungsdatum", "buchungstag", "datum"]
+    )
+    if preferred_date:
+        detected["date"] = preferred_date
     detected["description"] = pick_exact(desc_exact) or pick_contains(
         ("beschreibung", "text", "zweck", "verwendung", "detail", "memo", "narrative", "payee", "merchant"), ()
     )
     detected["amount"] = pick_exact(amount_exact) or pick_contains(
-        ("betrag", "amount", "chf", "saldo"), ("datum", "date", "buchung")
+        ("betrag", "amount", "chf", "saldo"), ("datum", "date", "buchung", "value")
     )
 
     if "amount" not in detected or detected["amount"] is None:
@@ -855,6 +876,17 @@ def detect_import_columns(columns: List[str]) -> Dict[str, str]:
             detected["debit"] = debit_col
             detected["credit"] = credit_col
             detected.pop("amount", None)
+
+    detected["entity"] = pick_exact(entity_exact) or pick_contains(
+        ("entity", "entité", "entite", "company", "gesellschaft"),
+        ("id", "amount", "date", "text", "description"),
+    )
+    detected["flow_match"] = pick_exact(flow_match_exact) or pick_contains(
+        ("flow match", "matched flow", "mapped flow", "cash flow", "cashflow"),
+        ("amount", "date", "entity"),
+    )
+    detected["category"] = pick_exact(category_exact)
+    detected["month"] = pick_exact(month_exact)
 
     detected = {k: v for k, v in detected.items() if v}
     return detected
@@ -893,6 +925,9 @@ def parse_csv_to_rows(content: bytes) -> tuple[List[str], List[Dict[str, Any]]]:
     return fieldnames, rows
 
 
+_DOTTED_EU_DATE = re.compile(r"^(\d{1,2})[./](\d{1,2})[./](\d{2,4})$")
+
+
 def parse_import_row_date(raw: Any) -> Optional[date]:
     if raw is None or raw == "":
         return None
@@ -907,8 +942,21 @@ def parse_import_row_date(raw: Any) -> Optional[date]:
                 return date(1899, 12, 30) + timedelta(days=int(serial))
             except (OverflowError, ValueError):
                 pass
+    text = str(raw).strip()
+    # European bank extracts use DD.MM.YYYY (or DD/MM/YYYY). Force day-first so
+    # 03.06.2026 becomes June 3, not March 6.
+    m = _DOTTED_EU_DATE.match(text)
+    if m:
+        day_s, month_s, year_s = m.groups()
+        year = int(year_s)
+        if year < 100:
+            year += 2000 if year < 70 else 1900
+        try:
+            return date(year, int(month_s), int(day_s))
+        except ValueError:
+            return None
     try:
-        return date_parser.parse(str(raw)).date()
+        return date_parser.parse(text, dayfirst=True).date()
     except Exception:
         return None
 
@@ -925,11 +973,25 @@ def normalize_import_transaction_date(raw_date: Optional[str]) -> Optional[str]:
     text = str(raw_date).strip()
     if not text:
         return None
-    try:
-        parsed = date_parser.parse(text)
-        return parsed.strftime("%Y-%m-%d")
-    except Exception:
+    parsed = parse_import_row_date(text)
+    if not parsed:
         return None
+    return parsed.strftime("%Y-%m-%d")
+
+
+def resolve_entity_id_from_name(name: Optional[str], entities: List[dict]) -> Optional[str]:
+    """Match a CSV entity cell to an entity id (exact, then case-insensitive)."""
+    wanted = (name or "").strip()
+    if not wanted:
+        return None
+    by_exact = {str(e.get("name") or ""): e.get("id") for e in entities if e.get("id")}
+    if wanted in by_exact:
+        return by_exact[wanted]
+    lower = wanted.lower()
+    for e in entities:
+        if str(e.get("name") or "").strip().lower() == lower:
+            return e.get("id")
+    return None
 
 async def validate_selected_flow_for_row(selected_flow_id: Optional[str], row_entity_id: Optional[str], batch_entity_id: Optional[str]) -> Optional[dict]:
     if not selected_flow_id:
@@ -2447,7 +2509,31 @@ async def parse_actual_import(
         if not entity_exists:
             raise HTTPException(status_code=400, detail="entity_id does not exist")
 
-    flows = await fetch_entity_cash_flows_for_matching(entity_id)
+    entities = await db.entities.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(500)
+    entity_ids_needed: List[str] = []
+    if entity_id:
+        entity_ids_needed.append(entity_id)
+
+    # Pre-scan optional Entity column so we load the right match candidates.
+    if detected.get("entity"):
+        for row in parsed_rows:
+            resolved = resolve_entity_id_from_name(str(row.get(detected["entity"], "") or ""), entities)
+            if resolved and resolved not in entity_ids_needed:
+                entity_ids_needed.append(resolved)
+
+    flows_by_id: Dict[str, dict] = {}
+    for eid in entity_ids_needed or [None]:
+        for f in await fetch_entity_cash_flows_for_matching(eid):
+            if f.get("id"):
+                flows_by_id[f["id"]] = f
+
+    # If the batch entity has no lines, fall back to all cash flows so merchant/label
+    # matching (and CSV Flow match) can still resolve against other entities.
+    if not flows_by_id:
+        for f in await fetch_entity_cash_flows_for_matching(None):
+            if f.get("id"):
+                flows_by_id[f["id"]] = f
+    flows = list(flows_by_id.values())
 
     batch = ActualImportBatch(
         filename=filename,
@@ -2464,6 +2550,10 @@ async def parse_actual_import(
             continue
         transaction_date = parsed_d.strftime("%Y-%m-%d")
         month = parsed_d.strftime("%Y-%m")
+        if detected.get("month"):
+            raw_month = str(row.get(detected["month"], "") or "").strip()
+            if is_valid_month_key(raw_month):
+                month = raw_month
 
         description = str(row.get(detected["description"], "") or "").strip()
         if not description:
@@ -2480,12 +2570,53 @@ async def parse_actual_import(
             continue
 
         category = Category.REVENUE if parsed_amount > 0 else Category.EXPENSE
-        match = best_flow_match(flows, description, parsed_amount, entity_id)
+        if detected.get("category"):
+            raw_cat = str(row.get(detected["category"], "") or "").strip()
+            if raw_cat:
+                try:
+                    category = Category(raw_cat)
+                except ValueError:
+                    # Tolerate "Subscriptions - Expense" style cells in Category column.
+                    for part in reversed(re.split(r"\s*[-–—]\s*", raw_cat)):
+                        try:
+                            category = Category(part.strip())
+                            break
+                        except ValueError:
+                            continue
+
+        row_entity_id = entity_id
+        if detected.get("entity"):
+            resolved_entity = resolve_entity_id_from_name(
+                str(row.get(detected["entity"], "") or ""),
+                entities,
+            )
+            if resolved_entity:
+                row_entity_id = resolved_entity
+
+        match: Dict[str, Any] = {"flow_id": None, "score": 0.0, "reason": "No close match"}
+        if detected.get("flow_match"):
+            raw_flow = str(row.get(detected["flow_match"], "") or "").strip()
+            if raw_flow and raw_flow.lower() not in {"unmatched", "none", "-", "n/a"}:
+                match = match_flow_by_label(flows, raw_flow, row_entity_id)
+                # If entity scope blocked the label, retry across all loaded flows.
+                if not match.get("flow_id") and row_entity_id:
+                    match = match_flow_by_label(flows, raw_flow, None)
+
+        if not match.get("flow_id"):
+            match = best_flow_match(flows, description, parsed_amount, row_entity_id)
+            # Scoped entity often has zero lines; retry unscoped before leaving unmatched.
+            if (not match.get("flow_id") or match.get("score", 0) <= 0) and row_entity_id:
+                cross = best_flow_match(flows, description, parsed_amount, None)
+                if cross.get("score", 0) > match.get("score", 0):
+                    match = cross
+
         selected_flow_id = match["flow_id"] if _auto_select_flow_match_score(match["score"], match.get("reason", "")) else None
-        matched_flow = next((f for f in flows if f.get("id") == selected_flow_id), None) if selected_flow_id else None
+        matched_flow = flows_by_id.get(selected_flow_id) if selected_flow_id else None
+        if not matched_flow and selected_flow_id:
+            matched_flow = next((f for f in flows if f.get("id") == selected_flow_id), None)
         if matched_flow:
             category = category_from_flow(matched_flow)
-        matched_entity_id = entity_id or (matched_flow.get("entity_id") if matched_flow else None)
+        matched_entity_id = row_entity_id or (matched_flow.get("entity_id") if matched_flow else None)
         include = True
         status = "ready" if selected_flow_id else "warning"
 
@@ -2725,9 +2856,27 @@ async def rematch_actual_import_batch(batch_id: str, user: dict = Depends(get_cu
         raise HTTPException(status_code=400, detail="Cannot rematch a closed batch")
 
     entity_id = batch.get("entity_id")
-    flows = await fetch_entity_cash_flows_for_matching(entity_id)
-
     rows = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0}).sort("row_index", 1).to_list(100000)
+
+    entity_ids = []
+    if entity_id:
+        entity_ids.append(entity_id)
+    for row in rows:
+        rid = row.get("entity_id")
+        if rid and rid not in entity_ids:
+            entity_ids.append(rid)
+
+    flows_by_id: Dict[str, dict] = {}
+    for eid in entity_ids or [None]:
+        for f in await fetch_entity_cash_flows_for_matching(eid):
+            if f.get("id"):
+                flows_by_id[f["id"]] = f
+    if not flows_by_id:
+        for f in await fetch_entity_cash_flows_for_matching(None):
+            if f.get("id"):
+                flows_by_id[f["id"]] = f
+    flows = list(flows_by_id.values())
+
     updated = 0
     for row in rows:
         if row.get("classification") == "new_flow":
@@ -2738,6 +2887,10 @@ async def rematch_actual_import_batch(batch_id: str, user: dict = Depends(get_cu
         amount = float(row.get("amount", 0))
         row_entity = row.get("entity_id") or entity_id
         match = best_flow_match(flows, description, amount, row_entity)
+        if (not match.get("flow_id") or match.get("score", 0) <= 0) and row_entity:
+            cross = best_flow_match(flows, description, amount, None)
+            if cross.get("score", 0) > match.get("score", 0):
+                match = cross
         selected = match["flow_id"] if _auto_select_flow_match_score(match["score"], match.get("reason", "")) else None
         patch = {
             "suggested_flow_id": match["flow_id"],
@@ -2747,6 +2900,12 @@ async def rematch_actual_import_batch(batch_id: str, user: dict = Depends(get_cu
             "status": "ready" if selected else "warning",
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+        if selected:
+            matched_flow = flows_by_id.get(selected)
+            if matched_flow and matched_flow.get("entity_id") and not row.get("entity_id"):
+                patch["entity_id"] = matched_flow["entity_id"]
+            if matched_flow:
+                patch["category"] = _category_value(matched_flow.get("category"))
         await db.actual_import_rows.update_one({"id": row["id"]}, {"$set": patch})
         updated += 1
 
