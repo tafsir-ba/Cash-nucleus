@@ -107,3 +107,18 @@ def test_resolve_flow_from_match_text_ui_label():
     hit2 = resolve_flow_from_match_text(flows, "Personal expenses", entity_id="e2")
     assert hit2 and hit2["id"] == "f2"
     assert resolve_flow_from_match_text(flows, "Unmatched", entity_id="e1") is None
+
+
+def test_resolve_flow_includes_legacy_null_entity_when_scoped_flows_exist():
+    """Regression: Admin (scoped) must not hide legacy Avance Trésorerie (null entity_id)."""
+    flows = [
+        {"id": "a", "label": "Admin", "category": "Expense", "entity_id": "evo"},
+        {"id": "r", "label": "Avance Trésorerie", "category": "Revenue", "entity_id": None},
+        {"id": "recv", "label": "Receivables", "category": "Revenue", "entity_id": "fam"},
+    ]
+    hit = resolve_flow_from_match_text(flows, "Avance Trésorerie - Revenue", entity_id="evo")
+    assert hit and hit["id"] == "r"
+
+    # Unique cross-entity file label still resolves when scoped entity misses.
+    hit2 = resolve_flow_from_match_text(flows, "Receivables - Revenue", entity_id="evo")
+    assert hit2 and hit2["id"] == "recv"

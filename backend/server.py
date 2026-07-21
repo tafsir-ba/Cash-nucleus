@@ -2507,8 +2507,12 @@ async def parse_actual_import(
                 "reason": "file-flow-match",
             }
             category = category_from_flow(file_matched_flow)
-            if not row_entity_id and file_matched_flow.get("entity_id"):
+            # File Flow match is authoritative: sync entity from the matched line
+            # (covers legacy null-entity rows and unique cross-entity label hits).
+            if file_matched_flow.get("entity_id"):
                 row_entity_id = file_matched_flow.get("entity_id")
+                entity_unresolved = False
+            elif not row_entity_id:
                 entity_unresolved = False
         elif flow_match_unresolved:
             # Explicit file Flow match present but unresolved — never fuzzy-substitute.
@@ -2837,8 +2841,10 @@ async def rematch_actual_import_batch(batch_id: str, user: dict = Depends(get_cu
                 "reason": "file-flow-match",
             }
             selected = file_matched.get("id")
-            if not row_entity and file_matched.get("entity_id"):
+            if file_matched.get("entity_id"):
                 row_entity = file_matched.get("entity_id")
+                entity_unresolved = False
+            elif not row_entity:
                 entity_unresolved = False
         elif flow_match_unresolved:
             match = {

@@ -1467,9 +1467,15 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                         </Select>
                       </td>
                       <td className="px-2 py-2 align-top">
-                        <span className={`text-[11px] ${
+                        <span
+                          className={`text-[11px] ${
                           row.match_score >= 0.8 ? "text-emerald-400" : row.match_score >= 0.6 ? "text-amber-400" : "text-zinc-500"
-                        }`}>
+                        }`}
+                          title={[
+                            row.raw_flow_match ? `File Flow match: ${row.raw_flow_match}` : null,
+                            row.match_reason ? `Reason: ${row.match_reason}` : null,
+                          ].filter(Boolean).join("\n") || undefined}
+                        >
                           {scoreLabel(row.match_score)} ({row.match_score?.toFixed(2) || "0.00"})
                         </span>
                         <div className={`text-[10px] mt-1 ${isSaving ? "text-zinc-400" : row.error ? "text-rose-400" : "text-zinc-600"}`}>

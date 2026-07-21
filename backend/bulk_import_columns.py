@@ -308,6 +308,16 @@ def resolve_entity_id_from_name(
     return None
 
 
+def _flow_belongs_to_entity(flow: dict, entity_id: Optional[str]) -> bool:
+    """True if flow is in scope. Legacy rows missing entity_id stay eligible."""
+    if not entity_id:
+        return True
+    flow_entity = flow.get("entity_id")
+    if flow_entity in (None, ""):
+        return True
+    return flow_entity == entity_id
+
+
 def _flow_category_str(flow: dict) -> str:
     cat = flow.get("category", "Expense")
     if hasattr(cat, "value"):
@@ -324,6 +334,65 @@ def flow_display_label(flow: dict) -> str:
     return label or cat
 
 
+def _normalize_match_label(raw: str) -> str:
+    """Strip trailing ' - Category' suffix when present (UI export style)."""
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    for sep in (" - ", " – ", " — "):
+        if sep in text:
+            left, right = text.rsplit(sep, 1)
+            if right.strip().lower() in {
+                "revenue", "expense", "cogs", "opex", "debt", "tax", "salary", "transfer", "other",
+            }:
+                return left.strip()
+    return text
+
+
+def _find_flows_for_match_text(flows: Sequence[dict], text: str, entity_id: Optional[str]) -> List[dict]:
+    """Return all candidate flows that match the file Flow match cell."""
+    lower = text.lower().strip()
+    label_only = _normalize_match_label(text).lower()
+    candidates = [f for f in flows if _flow_belongs_to_entity(f, entity_id)]
+    hits: List[dict] = []
+    seen = set()
+
+    def add(f: dict) -> None:
+        fid = f.get("id")
+        if fid in seen:
+            return
+        seen.add(fid)
+        hits.append(f)
+
+    for f in candidates:
+        if flow_display_label(f).lower() == lower:
+            add(f)
+    for f in candidates:
+        lab = (f.get("label") or "").strip().lower()
+        if lab == lower or (label_only and lab == label_only):
+            add(f)
+
+    stripped = re.sub(r"\s+", " ", lower)
+    for f in candidates:
+        if re.sub(r"\s+", " ", flow_display_label(f).lower()) == stripped:
+            add(f)
+
+    m = re.match(r"^(.+?)\s*[-–—]\s*([A-Za-z]+)\s*$", text)
+    if m:
+        label_part = m.group(1).strip().lower()
+        cat_part = m.group(2).strip().lower()
+        for f in candidates:
+            if (f.get("label") or "").strip().lower() != label_part:
+                continue
+            if _flow_category_str(f).lower() == cat_part:
+                add(f)
+        for f in candidates:
+            if (f.get("label") or "").strip().lower() == label_part:
+                add(f)
+
+    return hits
+
+
 def resolve_flow_from_match_text(
     flows: Sequence[dict],
     match_text: Any,
@@ -333,6 +402,9 @@ def resolve_flow_from_match_text(
     """Resolve a Flow match cell to a cash-flow document.
 
     Accepts exact UI display ('Label - Category'), exact label, or case-insensitive variants.
+    Legacy flows with missing entity_id remain eligible (same rule as bulk_flow_match).
+    If entity-scoped resolution fails, a unique cross-entity exact match is accepted so the
+    file Flow match column still wins (caller should adopt that flow's entity_id).
     """
     if match_text is None:
         return None
@@ -340,40 +412,21 @@ def resolve_flow_from_match_text(
     if not text or text.lower() in {"unmatched", "none", "-", "n/a"}:
         return None
 
-    candidates = [f for f in flows if not entity_id or f.get("entity_id") == entity_id or not f.get("entity_id")]
+    scoped_hits = _find_flows_for_match_text(flows, text, entity_id)
+    if len(scoped_hits) == 1:
+        return scoped_hits[0]
+    if len(scoped_hits) > 1:
+        # Prefer exact display-label match when ambiguous.
+        lower = text.lower()
+        display_exact = [f for f in scoped_hits if flow_display_label(f).lower() == lower]
+        if len(display_exact) == 1:
+            return display_exact[0]
+        return scoped_hits[0]
+
+    # Entity-scoped miss: allow a unique match on another entity / legacy row.
     if entity_id:
-        scoped = [f for f in flows if f.get("entity_id") == entity_id]
-        if scoped:
-            candidates = scoped
-
-    lower = text.lower()
-
-    for f in candidates:
-        if flow_display_label(f).lower() == lower:
-            return f
-
-    for f in candidates:
-        if (f.get("label") or "").strip().lower() == lower:
-            return f
-
-    # "Label - Category" where category suffix is present but spacing differs
-    stripped = re.sub(r"\s+", " ", lower)
-    for f in candidates:
-        if re.sub(r"\s+", " ", flow_display_label(f).lower()) == stripped:
-            return f
-
-    # Strip trailing " - Category" and match label
-    m = re.match(r"^(.+?)\s*[-–]\s*([a-zA-Z]+)\s*$", text)
-    if m:
-        label_part = m.group(1).strip().lower()
-        cat_part = m.group(2).strip().lower()
-        for f in candidates:
-            if (f.get("label") or "").strip().lower() != label_part:
-                continue
-            if _flow_category_str(f).lower() == cat_part:
-                return f
-        for f in candidates:
-            if (f.get("label") or "").strip().lower() == label_part:
-                return f
+        global_hits = _find_flows_for_match_text(flows, text, None)
+        if len(global_hits) == 1:
+            return global_hits[0]
 
     return None
