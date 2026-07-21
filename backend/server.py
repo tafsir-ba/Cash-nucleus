@@ -3302,6 +3302,24 @@ async def get_projection(
                 months_data[key]["inflows"] += flow["amount"]
             else:
                 months_data[key]["outflows"] += abs(flow["amount"])
+
+    # Actual-only months (no planned expansion) must still move cash
+    filtered_ids = {f.get("id") for f in filtered if f.get("id")}
+    planned_keys = {
+        (ef.get("flow_id", ""), ef["date"].strftime("%Y-%m"))
+        for ef in expanded
+        if ef.get("flow_id")
+    }
+    for (fid, mkey), actual_amt in actuals_map.items():
+        if fid not in filtered_ids or mkey not in months_data:
+            continue
+        if (fid, mkey) in planned_keys:
+            continue
+        amt = float(actual_amt)
+        if amt > 0:
+            months_data[mkey]["inflows"] += amt
+        else:
+            months_data[mkey]["outflows"] += abs(amt)
     
     # Calculate projection (opening balances anchored at start of current month = cash_now)
     sorted_keys = sorted(months_data.keys())
@@ -3477,7 +3495,40 @@ async def get_projection_matrix(
             }
         
         flow_month_map[fid][mkey] = flow_month_map[fid].get(mkey, 0) + ef["amount"]
-    
+
+    # Actual-only months: bulk import can record an actual for a month with no planned
+    # recurrence (common for one-off Trésorerie lines). Without this, the cell is "—"
+    # even though flow_occurrences has the amount — and re-apply then "skips" as no-op.
+    month_key_set = {mk["key"] for mk in month_keys}
+    filtered_ids = {f.get("id") for f in filtered if f.get("id")}
+    flows_by_id_all = {f.get("id", ""): f for f in flows_with_amounts if f.get("id")}
+    for (fid, mkey), actual_amt in actuals_map.items():
+        if not fid or mkey not in month_key_set:
+            continue
+        if fid not in filtered_ids and fid not in flow_info:
+            continue
+        src = flows_by_id_all.get(fid)
+        if not src:
+            continue
+        if fid not in flow_month_map:
+            flow_month_map[fid] = {}
+        if mkey in flow_month_map[fid]:
+            continue  # already covered via planned expansion (+ actual overlay)
+        planned_amt = float(src.get("amount", 0) or 0)
+        cat = src.get("category", "Expense")
+        cat_val = cat.value if hasattr(cat, "value") else str(cat or "Expense")
+        is_rev = (cat_val == Category.REVENUE.value) or planned_amt > 0
+        if fid not in flow_info:
+            flow_info[fid] = {
+                "flow_id": fid,
+                "label": src.get("label", ""),
+                "category": cat_val,
+                "is_revenue": is_rev,
+                "parent_id": src.get("parent_id"),
+                "is_percentage": src.get("is_percentage", False),
+            }
+        flow_month_map[fid][mkey] = float(actual_amt)
+
     # Build rows: separate revenues and expenses, exclude children (show net on parent)
     revenue_rows = []
     expense_rows = []
@@ -3489,17 +3540,21 @@ async def get_projection_matrix(
         cells = {}
         for mk in month_keys:
             amt = flow_month_map[fid].get(mk["key"])
-            if amt is not None:
-                planned = planned_map.get((fid, mk["key"]))
-                actual = actuals_map.get((fid, mk["key"]))
-                cell_data = {"amount": round(amt, 2)}
-                if actual is not None:
-                    cell_data["actual"] = round(actual, 2)
-                    cell_data["planned"] = round(planned, 2) if planned is not None else round(amt, 2)
-                    cell_data["has_actual"] = True
-                else:
-                    cell_data["has_actual"] = False
-                cells[mk["key"]] = cell_data
+            actual = actuals_map.get((fid, mk["key"]))
+            planned = planned_map.get((fid, mk["key"]))
+            # Show cell when planned exists OR an actual was recorded for this month
+            if amt is None and actual is None:
+                continue
+            if amt is None:
+                amt = float(actual)
+            cell_data = {"amount": round(amt, 2)}
+            if actual is not None:
+                cell_data["actual"] = round(float(actual), 2)
+                cell_data["planned"] = round(planned, 2) if planned is not None else 0.0
+                cell_data["has_actual"] = True
+            else:
+                cell_data["has_actual"] = False
+            cells[mk["key"]] = cell_data
         
         row = {
             "flow_id": fid,
@@ -3533,6 +3588,20 @@ async def get_projection_matrix(
                 revenue_per_month[mkey] += ef["amount"]
             else:
                 cost_per_month[mkey] += abs(ef["amount"])
+    # Include actual-only months (no planned expansion) in monthly totals
+    for (fid, mkey), actual_amt in actuals_map.items():
+        if mkey not in net_per_month:
+            continue
+        if (fid, mkey) in planned_map:
+            continue
+        if fid not in flow_info:
+            continue
+        amt = float(actual_amt)
+        net_per_month[mkey] += amt
+        if amt > 0:
+            revenue_per_month[mkey] += amt
+        else:
+            cost_per_month[mkey] += abs(amt)
     net_per_month = {k: round(v, 2) for k, v in net_per_month.items()}
     revenue_per_month = {k: round(v, 2) for k, v in revenue_per_month.items()}
     cost_per_month = {k: round(v, 2) for k, v in cost_per_month.items()}
