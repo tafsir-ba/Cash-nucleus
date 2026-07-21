@@ -335,9 +335,31 @@ def flow_display_label(flow: dict) -> str:
     return label or cat
 
 
+def _repair_mojibake(text: str) -> str:
+    """Fix common UTF-8-as-Latin-1 mojibake (TrÃ©sorerie → Trésorerie)."""
+    if not text:
+        return text
+    # Fast path: only attempt when classic mojibake markers are present.
+    if "Ã" not in text and "Â" not in text:
+        return text
+    try:
+        repaired = text.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+    # Prefer repair when it introduces expected Latin letters / accents.
+    if repaired != text and ("Ã" not in repaired or repaired.count("Ã") < text.count("Ã")):
+        return repaired
+    return text
+
+
+def repair_mojibake_text(raw: Any) -> str:
+    """Public helper to clean import cell text before match/store."""
+    return _repair_mojibake(str(raw or "").strip())
+
+
 def _fold_match_text(raw: Any) -> str:
     """Casefold + strip accents/punctuation noise for resilient label compare."""
-    text = str(raw or "").strip().lower()
+    text = _repair_mojibake(str(raw or "").strip()).lower()
     if not text:
         return ""
     # NFKD then drop combining marks so Trésorerie ~= Tresorerie
@@ -547,7 +569,7 @@ def resolve_flow_from_match_text(
     """
     if match_text is None:
         return None
-    text = str(match_text).strip()
+    text = _repair_mojibake(str(match_text).strip())
     if not text or text.lower() in {"unmatched", "none", "-", "n/a"}:
         return None
 

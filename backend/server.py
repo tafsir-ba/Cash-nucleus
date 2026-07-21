@@ -28,6 +28,7 @@ from bulk_import_columns import (
     parse_category_label,
     resolve_entity_id_from_name,
     resolve_flow_from_match_text,
+    repair_mojibake_text,
 )
 
 from cash_horizon import analyze_cash_horizon, normalize_entry, resolve_expected_date
@@ -804,12 +805,26 @@ def build_cash_flow_from_import_row(row: dict, entity_id: str, amount_value: flo
 
 
 def decode_csv_bytes(content: bytes) -> str:
+    """Decode CSV bytes, preferring UTF-8 and avoiding mojibake from Latin-1 misreads."""
+
+    def _mojibake_score(text: str) -> int:
+        # Higher = worse. Ã© / Ã¨ / Ã  are classic UTF-8-as-cp1252 artifacts.
+        return text.count("Ã") + text.count("Â")
+
+    candidates: List[tuple] = []
     for enc in ("utf-8-sig", "utf-8", "cp1252", "iso-8859-1", "mac_roman"):
         try:
-            return content.decode(enc)
+            text = content.decode(enc)
         except UnicodeDecodeError:
             continue
-    return content.decode("utf-8", errors="replace")
+        candidates.append((_mojibake_score(text), enc == "utf-8-sig" or enc == "utf-8", enc, text))
+
+    if not candidates:
+        return content.decode("utf-8", errors="replace")
+
+    # Prefer low mojibake, then UTF-8 family, then first successful decode.
+    candidates.sort(key=lambda c: (c[0], 0 if c[1] else 1))
+    return candidates[0][3]
 
 
 def sniff_csv_delimiter(sample: str) -> str:
@@ -2432,7 +2447,7 @@ async def parse_actual_import(
             if file_month:
                 month = file_month
 
-        description = str(row.get(detected["description"], "") or "").strip()
+        description = repair_mojibake_text(row.get(detected["description"], "") or "")
         if not description:
             description = f"Imported row {idx + 1}"
 
@@ -2450,7 +2465,7 @@ async def parse_actual_import(
         entity_unresolved = False
         row_entity_id = entity_id
         if detected.get("entity"):
-            raw_entity_cell = str(row.get(detected["entity"], "") or "").strip()
+            raw_entity_cell = repair_mojibake_text(row.get(detected["entity"], "") or "")
             if raw_entity_cell:
                 resolved_entity = resolve_entity_id_from_name(
                     raw_entity_cell,
@@ -2469,7 +2484,7 @@ async def parse_actual_import(
         raw_category_cell = ""
         category = Category.REVENUE if parsed_amount > 0 else Category.EXPENSE
         if detected.get("category"):
-            raw_category_cell = str(row.get(detected["category"], "") or "").strip()
+            raw_category_cell = repair_mojibake_text(row.get(detected["category"], "") or "")
             allowed_cats = [c.value for c in Category]
             parsed_cat = parse_category_label(raw_category_cell, allowed=allowed_cats)
             if parsed_cat:
@@ -2482,7 +2497,7 @@ async def parse_actual_import(
         file_matched_flow = None
         flow_match_unresolved = False
         if detected.get("flow_match"):
-            raw_flow_match_cell = str(row.get(detected["flow_match"], "") or "").strip()
+            raw_flow_match_cell = repair_mojibake_text(row.get(detected["flow_match"], "") or "")
             if raw_flow_match_cell:
                 file_matched_flow = resolve_flow_from_match_text(
                     flows,

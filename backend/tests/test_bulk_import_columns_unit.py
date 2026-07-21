@@ -173,3 +173,18 @@ def test_resolve_flow_typo_recievables_vs_receivables():
         entity_name="Evohom SA",
     )
     assert hit and hit["id"] == "r"
+
+
+def test_resolve_flow_repairs_utf8_mojibake():
+    """CSV mis-decoded as Latin-1 yields TrÃ©sorerie; must still match Tresorerie."""
+    from bulk_import_columns import repair_mojibake_text
+
+    mojibake = "Avance Trésorerie - Revenue".encode("utf-8").decode("latin-1")
+    assert "Ã" in mojibake
+    assert repair_mojibake_text(mojibake) == "Avance Trésorerie - Revenue"
+
+    flows = [
+        {"id": "av", "label": "Avance Tresorerie", "category": "Revenue", "entity_id": "evo", "entity": "Evohom SA"},
+    ]
+    hit = resolve_flow_from_match_text(flows, mojibake, entity_id="evo", entity_name="Evohom SA")
+    assert hit and hit["id"] == "av"
