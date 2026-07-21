@@ -2447,20 +2447,31 @@ async def parse_actual_import(
             continue
 
         raw_entity_cell = ""
+        entity_unresolved = False
         row_entity_id = entity_id
         if detected.get("entity"):
             raw_entity_cell = str(row.get(detected["entity"], "") or "").strip()
-            row_entity_id = resolve_entity_id_from_name(
-                raw_entity_cell,
-                entities_docs,
-                default_entity_id=entity_id,
-            )
+            if raw_entity_cell:
+                resolved_entity = resolve_entity_id_from_name(
+                    raw_entity_cell,
+                    entities_docs,
+                    default_entity_id=None,
+                )
+                if resolved_entity:
+                    row_entity_id = resolved_entity
+                else:
+                    # Do not fall back to default entity — that scopes Flow match wrongly.
+                    row_entity_id = None
+                    entity_unresolved = True
+            else:
+                row_entity_id = entity_id
 
         raw_category_cell = ""
         category = Category.REVENUE if parsed_amount > 0 else Category.EXPENSE
         if detected.get("category"):
             raw_category_cell = str(row.get(detected["category"], "") or "").strip()
-            parsed_cat = parse_category_label(raw_category_cell)
+            allowed_cats = [c.value for c in Category]
+            parsed_cat = parse_category_label(raw_category_cell, allowed=allowed_cats)
             if parsed_cat:
                 try:
                     category = Category(parsed_cat)
@@ -2469,13 +2480,24 @@ async def parse_actual_import(
 
         raw_flow_match_cell = ""
         file_matched_flow = None
+        flow_match_unresolved = False
         if detected.get("flow_match"):
             raw_flow_match_cell = str(row.get(detected["flow_match"], "") or "").strip()
-            file_matched_flow = resolve_flow_from_match_text(
-                flows,
-                raw_flow_match_cell,
-                entity_id=row_entity_id,
-            )
+            if raw_flow_match_cell:
+                file_matched_flow = resolve_flow_from_match_text(
+                    flows,
+                    raw_flow_match_cell,
+                    entity_id=row_entity_id,
+                )
+                # If entity was unresolved, retry flow match across all entities.
+                if not file_matched_flow and entity_unresolved:
+                    file_matched_flow = resolve_flow_from_match_text(
+                        flows,
+                        raw_flow_match_cell,
+                        entity_id=None,
+                    )
+                if not file_matched_flow:
+                    flow_match_unresolved = True
 
         if file_matched_flow:
             selected_flow_id = file_matched_flow.get("id")
@@ -2487,6 +2509,15 @@ async def parse_actual_import(
             category = category_from_flow(file_matched_flow)
             if not row_entity_id and file_matched_flow.get("entity_id"):
                 row_entity_id = file_matched_flow.get("entity_id")
+                entity_unresolved = False
+        elif flow_match_unresolved:
+            # Explicit file Flow match present but unresolved — never fuzzy-substitute.
+            selected_flow_id = None
+            match = {
+                "flow_id": None,
+                "score": 0.0,
+                "reason": "file-flow-match-unresolved",
+            }
         else:
             match = best_flow_match(flows, description, parsed_amount, row_entity_id)
             selected_flow_id = (
@@ -2497,13 +2528,18 @@ async def parse_actual_import(
             matched_flow = next((f for f in flows if f.get("id") == selected_flow_id), None) if selected_flow_id else None
             if matched_flow:
                 # Prefer explicit file category when present; otherwise take flow's category.
-                if not parse_category_label(raw_category_cell):
+                allowed_cats = [c.value for c in Category]
+                if not parse_category_label(raw_category_cell, allowed=allowed_cats):
                     category = category_from_flow(matched_flow)
                 if not row_entity_id and matched_flow.get("entity_id"):
                     row_entity_id = matched_flow.get("entity_id")
 
         include = True
-        status = "ready" if selected_flow_id else "warning"
+        reasons = [match.get("reason") or ""]
+        if entity_unresolved:
+            reasons.append("entity-unresolved")
+        match_reason = ", ".join(r for r in reasons if r)
+        status = "ready" if selected_flow_id and not entity_unresolved else "warning"
 
         import_row = ActualImportRow(
             batch_id=batch.id,
@@ -2527,7 +2563,7 @@ async def parse_actual_import(
             suggested_flow_id=match["flow_id"],
             selected_flow_id=selected_flow_id,
             match_score=match["score"],
-            match_reason=match["reason"],
+            match_reason=match_reason,
             classification="existing_flow",
         )
         created_rows.append(import_row.model_dump())
@@ -2746,11 +2782,13 @@ async def rematch_actual_import_batch(batch_id: str, user: dict = Depends(get_cu
         raise HTTPException(status_code=400, detail="Cannot rematch a closed batch")
 
     entity_id = batch.get("entity_id")
-    # Rematch across all flows so rows that carry per-row entity / file flow match stay accurate.
-    flows = await fetch_entity_cash_flows_for_matching(None)
+    rows = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0}).sort("row_index", 1).to_list(100000)
+    needs_all_flows = any(
+        (r.get("raw_entity") or r.get("raw_flow_match")) for r in rows
+    )
+    flows = await fetch_entity_cash_flows_for_matching(None if needs_all_flows else entity_id)
     entities_docs = await db.entities.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(5000)
 
-    rows = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0}).sort("row_index", 1).to_list(100000)
     updated = 0
     for row in rows:
         if row.get("classification") == "new_flow":
@@ -2760,20 +2798,37 @@ async def rematch_actual_import_batch(batch_id: str, user: dict = Depends(get_cu
         description = row.get("description") or ""
         amount = float(row.get("amount", 0))
         row_entity = row.get("entity_id") or entity_id
-        if row.get("raw_entity") and not row.get("entity_id"):
-            row_entity = resolve_entity_id_from_name(
-                row.get("raw_entity"),
+        entity_unresolved = False
+        raw_entity = (row.get("raw_entity") or "").strip()
+        if raw_entity:
+            resolved = resolve_entity_id_from_name(
+                raw_entity,
                 entities_docs,
-                default_entity_id=row_entity,
-            ) or row_entity
+                default_entity_id=None,
+            )
+            if resolved:
+                row_entity = resolved
+            else:
+                row_entity = None
+                entity_unresolved = True
 
         file_matched = None
-        if row.get("raw_flow_match"):
+        flow_match_unresolved = False
+        raw_flow = (row.get("raw_flow_match") or "").strip()
+        if raw_flow:
             file_matched = resolve_flow_from_match_text(
                 flows,
-                row.get("raw_flow_match"),
+                raw_flow,
                 entity_id=row_entity,
             )
+            if not file_matched and entity_unresolved:
+                file_matched = resolve_flow_from_match_text(
+                    flows,
+                    raw_flow,
+                    entity_id=None,
+                )
+            if not file_matched:
+                flow_match_unresolved = True
 
         if file_matched:
             match = {
@@ -2782,19 +2837,32 @@ async def rematch_actual_import_batch(batch_id: str, user: dict = Depends(get_cu
                 "reason": "file-flow-match",
             }
             selected = file_matched.get("id")
+            if not row_entity and file_matched.get("entity_id"):
+                row_entity = file_matched.get("entity_id")
+                entity_unresolved = False
+        elif flow_match_unresolved:
+            match = {
+                "flow_id": None,
+                "score": 0.0,
+                "reason": "file-flow-match-unresolved",
+            }
+            selected = None
         else:
             match = best_flow_match(flows, description, amount, row_entity)
             selected = match["flow_id"] if _auto_select_flow_match_score(match["score"], match.get("reason", "")) else None
 
+        reasons = [match.get("reason") or ""]
+        if entity_unresolved:
+            reasons.append("entity-unresolved")
         patch = {
             "suggested_flow_id": match["flow_id"],
             "match_score": match["score"],
-            "match_reason": match["reason"],
+            "match_reason": ", ".join(r for r in reasons if r),
             "selected_flow_id": selected,
-            "status": "ready" if selected else "warning",
+            "status": "ready" if selected and not entity_unresolved else "warning",
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        if row_entity and row_entity != row.get("entity_id"):
+        if row_entity != row.get("entity_id"):
             patch["entity_id"] = row_entity
         await db.actual_import_rows.update_one({"id": row["id"]}, {"$set": patch})
         updated += 1

@@ -1,5 +1,6 @@
 """Unit tests for bulk_import_columns (no API server)."""
 from bulk_import_columns import (
+    DEFAULT_CATEGORY_VALUES,
     detect_import_columns,
     flow_display_label,
     normalize_month_cell,
@@ -46,6 +47,12 @@ def test_detect_value_date_only_promotes_to_date():
     assert detected["description"] == "Posting text"
 
 
+def test_detect_rejects_broad_type_and_line_aliases():
+    detected = detect_import_columns(["Date", "Posting text", "Amount", "Type", "Line"])
+    assert "category" not in detected
+    assert "flow_match" not in detected
+
+
 def test_normalize_month_cell():
     assert normalize_month_cell("2026-06") == "2026-06"
     assert normalize_month_cell("2026/6") == "2026-06"
@@ -60,15 +67,33 @@ def test_parse_category_label():
     assert parse_category_label("unknown-thing") is None
 
 
-def test_resolve_entity_id_from_name():
+def test_default_category_values_match_server_enum():
+    import os
+    import uuid as _uuid
+
+    os.environ.setdefault("MONGO_URL", "mongodb://localhost")
+    os.environ.setdefault("DB_NAME", f"cat_ssot_{_uuid.uuid4().hex[:8]}")
+    os.environ.setdefault("JWT_SECRET", "test")
+    os.environ.setdefault("ENABLE_BULK_ACTUALS", "true")
+    from server import Category
+
+    assert set(DEFAULT_CATEGORY_VALUES) == {c.value for c in Category}
+
+
+def test_resolve_entity_id_from_name_exact_only():
     entities = [
         {"id": "e1", "name": "Evohom SA"},
         {"id": "e2", "name": "Family"},
+        {"id": "main", "name": "Main Company"},
     ]
     assert resolve_entity_id_from_name("Family", entities) == "e2"
     assert resolve_entity_id_from_name("evohom sa", entities) == "e1"
-    assert resolve_entity_id_from_name("", entities, default_entity_id="e1") == "e1"
-    assert resolve_entity_id_from_name("Missing", entities, default_entity_id="e1") == "e1"
+    assert resolve_entity_id_from_name("", entities, default_entity_id="main") == "main"
+    # Non-empty unknown must NOT silently fall back to default
+    assert resolve_entity_id_from_name("Missing", entities, default_entity_id="main") is None
+    # Partial / contains must not match
+    assert resolve_entity_id_from_name("SA", entities, default_entity_id="main") is None
+    assert resolve_entity_id_from_name("Ev", entities, default_entity_id="main") is None
 
 
 def test_resolve_flow_from_match_text_ui_label():

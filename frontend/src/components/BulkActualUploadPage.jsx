@@ -25,6 +25,7 @@ const fallbackVarianceActions = [
 const sortColumnLabels = {
   entity: "Entity",
   date: "Date",
+  valueDate: "Value",
   month: "Month",
   description: "Description",
   amount: "Amount",
@@ -729,6 +730,8 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
       }
       case "date":
         return row.transaction_date || "";
+      case "valueDate":
+        return row.value_date || "";
       case "month":
         return row.month || "";
       case "description":
@@ -1170,6 +1173,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                   </th>
                   <SortHeader label="Entity"           sortKey="entity"        activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-entity" />
                   <SortHeader label="Date"             sortKey="date"          activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-date" />
+                  <SortHeader label="Value"            sortKey="valueDate"     activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-value-date" />
                   <SortHeader label="Month"            sortKey="month"         activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-month" />
                   <SortHeader label="Description"      sortKey="description"   activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-description" />
                   <SortHeader label="Amount"           sortKey="amount"        activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" testId="bulk-sort-amount" />
@@ -1314,6 +1318,15 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                           className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-100"
                           data-testid={`bulk-row-date-${row.id}`}
                         />
+                      </td>
+                      <td className="px-2 py-2 align-top">
+                        <span
+                          className="block min-w-[110px] px-2 py-1 text-zinc-300 font-mono text-[11px] tabular-nums"
+                          title="Value date from file (read-only)"
+                          data-testid={`bulk-row-value-date-${row.id}`}
+                        >
+                          {row.value_date || "—"}
+                        </span>
                       </td>
                       <td className="px-2 py-2 align-top">
                         <input

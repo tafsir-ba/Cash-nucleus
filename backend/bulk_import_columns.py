@@ -9,27 +9,17 @@ import re
 from typing import Any, Dict, List, Optional, Sequence
 
 
-CATEGORY_VALUES = {
-    "revenue",
-    "salary",
-    "tax",
-    "debt",
-    "expense",
-    "transfer",
-    "cogs",
-    "other",
-}
-
-CATEGORY_CANONICAL = {
-    "revenue": "Revenue",
-    "salary": "Salary",
-    "tax": "Tax",
-    "debt": "Debt",
-    "expense": "Expense",
-    "transfer": "Transfer",
-    "cogs": "COGS",
-    "other": "Other",
-}
+# Canonical category labels must match server.Category values (SSOT enforced in tests).
+DEFAULT_CATEGORY_VALUES = (
+    "Revenue",
+    "Salary",
+    "Tax",
+    "Debt",
+    "Expense",
+    "Transfer",
+    "COGS",
+    "Other",
+)
 
 
 def _norm_header(raw: Any) -> str:
@@ -111,16 +101,14 @@ def detect_import_columns(columns: List[str]) -> Dict[str, str]:
     credit_exact = ["credit", "haben", "gutschrift", "guthaben", "eingang", "deposit"]
     entity_exact = ["entity", "company", "organisation", "organization", "firma", "gesellschaft"]
     month_exact = ["month", "period", "periode", "monat", "booking month"]
-    category_exact = ["category", "kategorie", "type", "flow type"]
+    # Keep aliases explicit — avoid broad headers like "type" / "line" / "match" / "flow".
+    category_exact = ["category", "kategorie"]
     flow_match_exact = [
         "flow match",
-        "flow",
         "cash flow",
         "matched flow",
-        "line",
         "cash line",
         "flow label",
-        "match",
     ]
 
     def pick_exact(keys: List[str], used: Optional[set] = None) -> Optional[str]:
@@ -268,20 +256,29 @@ def normalize_month_cell(raw: Any) -> Optional[str]:
     return None
 
 
-def parse_category_label(raw: Any) -> Optional[str]:
-    """Return canonical Category value or None if unrecognized."""
+def parse_category_label(
+    raw: Any,
+    *,
+    allowed: Optional[Sequence[str]] = None,
+) -> Optional[str]:
+    """Return canonical Category value or None if unrecognized.
+
+    `allowed` should be the live Category enum values (SSOT). Defaults to
+    DEFAULT_CATEGORY_VALUES which must stay in sync with server.Category.
+    """
     if raw is None or raw == "":
         return None
     text = str(raw).strip()
     if not text:
         return None
+    canon = {str(v): str(v) for v in (allowed or DEFAULT_CATEGORY_VALUES)}
+    by_lower = {k.lower(): v for k, v in canon.items()}
     key = text.lower()
-    if key in CATEGORY_CANONICAL:
-        return CATEGORY_CANONICAL[key]
-    # Tolerate "Expense - ..." style
+    if key in by_lower:
+        return by_lower[key]
     first = re.split(r"[\s\-–|/]+", key)[0]
-    if first in CATEGORY_CANONICAL:
-        return CATEGORY_CANONICAL[first]
+    if first in by_lower:
+        return by_lower[first]
     return None
 
 
@@ -291,25 +288,24 @@ def resolve_entity_id_from_name(
     *,
     default_entity_id: Optional[str] = None,
 ) -> Optional[str]:
-    """Resolve an Entity cell (name or id) to an entity id."""
+    """Resolve an Entity cell (name or id) to an entity id.
+
+    Empty cell → `default_entity_id`.
+    Non-empty unresolved cell → `None` (caller must warn; do not silently
+    substitute the default — that caused wrong entity/flow scoping).
+    Matching is exact id or case-insensitive exact name only.
+    """
     if raw_name is None or str(raw_name).strip() == "":
         return default_entity_id
     text = str(raw_name).strip()
-    # Direct id match
     for ent in entities:
         if ent.get("id") == text:
             return ent["id"]
     lower = text.lower()
     exact = [e for e in entities if (e.get("name") or "").strip().lower() == lower]
-    if len(exact) == 1:
+    if exact:
         return exact[0]["id"]
-    if len(exact) > 1:
-        return exact[0]["id"]
-    # Unique prefix / contains
-    partial = [e for e in entities if lower in (e.get("name") or "").strip().lower()]
-    if len(partial) == 1:
-        return partial[0]["id"]
-    return default_entity_id
+    return None
 
 
 def _flow_category_str(flow: dict) -> str:

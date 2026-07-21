@@ -322,3 +322,59 @@ def test_parse_enriched_prepopulated_columns(client: TestClient):
     client.delete(f"/api/cash-flows/{fid_b}?delete_linked=true")
     client.delete(f"/api/entities/{id_a}")
     client.delete(f"/api/entities/{id_b}")
+
+
+def test_parse_unresolved_entity_and_flow_match_do_not_fuzzy_or_default(client: TestClient):
+    """Explicit Entity/Flow match cells must not silently substitute defaults."""
+    e1 = client.post("/api/entities", json={"name": f"MainEnt_{uuid.uuid4().hex[:6]}"})
+    assert e1.status_code == 200
+    id_a = e1.json()["id"]
+    name_a = e1.json()["name"]
+
+    flow_a = client.post(
+        "/api/cash-flows",
+        json={
+            "label": "Office supplies",
+            "amount": -20,
+            "date": "2026-06-01",
+            "category": "Expense",
+            "certainty": "Materialized",
+            "recurrence": "none",
+            "entity_id": id_a,
+        },
+    )
+    assert flow_a.status_code == 200
+    fid_a = flow_a.json()["id"]
+
+    # Unknown entity name + unknown flow label — must warn, not auto-pick Office supplies.
+    csv = (
+        "Date,Posting text,Amount,Value,Entity,Month,Category,Flow match\n"
+        f"03.06.2026,Achat Mastercard Netflix,-13.26,02.06.2026,Unknown Co,2026-06,Expense,Subscriptions - Expense\n"
+        f"04.06.2026,Achat Mastercard Shop,-22.60,03.06.2026,{name_a},2026-06,Expense,Missing Flow - Expense\n"
+    ).encode("utf-8")
+
+    parse = client.post(
+        "/api/actual-imports/parse",
+        data={"entity_id": id_a},
+        files={"file": ("bad_match.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert parse.status_code == 200, parse.text
+    rows = sorted(parse.json()["rows"], key=lambda r: r.get("row_index", 0))
+    assert len(rows) == 2
+
+    r0 = rows[0]
+    assert r0["entity_id"] is None
+    assert r0["selected_flow_id"] is None
+    assert r0["status"] == "warning"
+    assert "entity-unresolved" in (r0.get("match_reason") or "")
+    assert "file-flow-match-unresolved" in (r0.get("match_reason") or "")
+
+    r1 = rows[1]
+    assert r1["entity_id"] == id_a
+    assert r1["selected_flow_id"] is None
+    assert r1["status"] == "warning"
+    assert "file-flow-match-unresolved" in (r1.get("match_reason") or "")
+    assert r1["selected_flow_id"] != fid_a
+
+    client.delete(f"/api/cash-flows/{fid_a}?delete_linked=true")
+    client.delete(f"/api/entities/{id_a}")
