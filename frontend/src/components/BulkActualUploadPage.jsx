@@ -78,6 +78,12 @@ const flowMatchesBulkImportDirection = (flow, rowAmountNum, entityEff) => {
 
 const flowBelongsToEntity = (flow, entityEff, entityList) => {
   if (!entityEff) return true;
+  // Legacy cash lines may omit entity_id (backend _flow_belongs_to_entity treats them as eligible).
+  if (flow.entity_id == null || flow.entity_id === "") {
+    if (!flow.entity) return true;
+    const ent = entityList.find((e) => e.id === entityEff);
+    return !!(ent?.name && flow.entity === ent.name);
+  }
   if (flow.entity_id === entityEff) return true;
   const ent = entityList.find((e) => e.id === entityEff);
   return !!(ent?.name && flow.entity === ent.name);
@@ -1012,7 +1018,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
             <span className="text-zinc-500">Included: <span className="text-emerald-400">{summary.included}</span></span>
             <span className="text-zinc-500">Discarded: <span className="text-zinc-400">{summary.discarded}</span></span>
             <span className="text-zinc-500">Unmatched: <span className="text-amber-400">{summary.unmatched}</span></span>
-            <span className="text-zinc-500">Flows loaded: <span className="text-zinc-300">{allFlows.filter((f) => flowBelongsToEntity(f, entityId || batch?.entity_id, entities)).length}</span></span>
+            <span className="text-zinc-500">Flows loaded: <span className="text-zinc-300">{allFlows.length}</span></span>
             {batch.id && (
               <span className="text-zinc-500">Batch ID: <span className="text-zinc-400 font-mono">{batch.id.slice(0, 8)}…</span></span>
             )}

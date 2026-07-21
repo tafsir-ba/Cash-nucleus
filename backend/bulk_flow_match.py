@@ -7,6 +7,19 @@ from typing import Any, Dict, List, Optional
 
 REVENUE_CATEGORY = "Revenue"
 
+# Common category suffixes stripped from CSV "Flow match" cells like "Subscriptions - Expense".
+_CATEGORY_SUFFIXES = (
+    "revenue",
+    "expense",
+    "cogs",
+    "opex",
+    "debt",
+    "tax",
+    "salary",
+    "transfer",
+    "other",
+)
+
 
 def _flow_category_value(flow: dict) -> str:
     cat = flow.get("category", "Expense")
@@ -28,11 +41,106 @@ def flow_matches_import_direction(flow: dict, amount: float) -> bool:
 
 
 def auto_select_flow_match_score(score: float, reason: str) -> bool:
+    reason_l = (reason or "").lower()
+    # Never auto-commit ambiguous CSV label hits — suggest only.
+    if "ambiguous" in reason_l:
+        return False
     if score >= 0.55:
         return True
-    if score >= 0.45 and reason and "label" in reason:
+    if score >= 0.45 and reason and "label" in reason_l:
         return True
     return False
+
+
+def choose_best_flow_match(
+    flows: List[dict],
+    description: str,
+    amount: float,
+    entity_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Prefer entity-scoped match; if it would not auto-select, try all flows."""
+    scoped = best_flow_match(flows, description, amount, entity_id)
+    if auto_select_flow_match_score(scoped.get("score", 0), scoped.get("reason", "")):
+        return scoped
+    if not entity_id:
+        return scoped
+    unscoped = best_flow_match(flows, description, amount, None)
+    if auto_select_flow_match_score(unscoped.get("score", 0), unscoped.get("reason", "")):
+        return unscoped
+    if unscoped.get("score", 0) > scoped.get("score", 0):
+        return unscoped
+    return scoped
+
+
+def normalize_flow_match_label(raw: Optional[str]) -> str:
+    """Normalize a CSV Flow match cell to a comparable cash-flow label."""
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    # UI / export often shows "Label - Category"
+    for sep in (" - ", " – ", " — "):
+        if sep in text:
+            left, right = text.rsplit(sep, 1)
+            if right.strip().lower() in _CATEGORY_SUFFIXES:
+                text = left.strip()
+                break
+    return text.strip()
+
+
+def _flow_belongs_to_entity(flow: dict, entity_id: Optional[str]) -> bool:
+    """True if flow is in scope. Legacy rows missing entity_id stay eligible."""
+    if not entity_id:
+        return True
+    flow_entity = flow.get("entity_id")
+    if flow_entity in (None, ""):
+        return True
+    return flow_entity == entity_id
+
+
+def match_flow_by_label(
+    flows: List[dict],
+    raw_label: Optional[str],
+    entity_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Resolve an explicit CSV Flow match / label to a cash flow id."""
+    wanted = normalize_flow_match_label(raw_label)
+    if not wanted:
+        return {"flow_id": None, "score": 0.0, "reason": "No close match"}
+
+    wanted_lower = wanted.lower()
+    candidates = [f for f in flows if _flow_belongs_to_entity(f, entity_id)]
+
+    exact = [
+        f for f in candidates
+        if (f.get("label") or "").strip().lower() == wanted_lower
+    ]
+    if len(exact) == 1:
+        return {"flow_id": exact[0].get("id"), "score": 0.99, "reason": "csv-label-exact"}
+    if len(exact) > 1 and entity_id:
+        scoped = [f for f in exact if f.get("entity_id") == entity_id]
+        if len(scoped) == 1:
+            return {"flow_id": scoped[0].get("id"), "score": 0.99, "reason": "csv-label-exact"}
+        if scoped:
+            return {"flow_id": scoped[0].get("id"), "score": 0.9, "reason": "csv-label-exact-ambiguous"}
+    if exact:
+        return {"flow_id": exact[0].get("id"), "score": 0.9, "reason": "csv-label-exact-ambiguous"}
+
+    # Prefix / contains against flow labels (still strong enough to auto-select).
+    partial = []
+    for f in candidates:
+        label = (f.get("label") or "").strip().lower()
+        if not label:
+            continue
+        if label in wanted_lower or wanted_lower in label:
+            partial.append(f)
+    if len(partial) == 1:
+        return {"flow_id": partial[0].get("id"), "score": 0.85, "reason": "csv-label-partial"}
+    if partial:
+        preferred = [f for f in partial if f.get("entity_id") == entity_id] if entity_id else partial
+        pick = preferred[0] if preferred else partial[0]
+        return {"flow_id": pick.get("id"), "score": 0.72, "reason": "csv-label-partial-ambiguous"}
+
+    return {"flow_id": None, "score": 0.0, "reason": "No close match"}
 
 
 def best_flow_match(
@@ -50,7 +158,7 @@ def best_flow_match(
     best: Dict[str, Any] = {"flow_id": None, "score": 0.0, "reason": "No close match"}
 
     for flow in flows:
-        if entity_id and flow.get("entity_id") != entity_id:
+        if not _flow_belongs_to_entity(flow, entity_id):
             continue
         score = 0.0
         reasons: List[str] = []
