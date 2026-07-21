@@ -872,11 +872,13 @@ def normalize_import_transaction_date(raw_date: Optional[str]) -> Optional[str]:
     text = str(raw_date).strip()
     if not text:
         return None
-    try:
-        parsed = date_parser.parse(text)
-        return parsed.strftime("%Y-%m-%d")
-    except Exception:
-        return None
+    for dayfirst in (True, False):
+        try:
+            parsed = date_parser.parse(text, dayfirst=dayfirst)
+            return parsed.strftime("%Y-%m-%d")
+        except Exception:
+            continue
+    return None
 
 async def validate_selected_flow_for_row(selected_flow_id: Optional[str], row_entity_id: Optional[str], batch_entity_id: Optional[str]) -> Optional[dict]:
     if not selected_flow_id:

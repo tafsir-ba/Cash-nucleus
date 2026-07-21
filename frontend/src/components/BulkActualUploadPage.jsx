@@ -932,7 +932,9 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
           <h2 className="text-sm font-medium tracking-[0.15em] uppercase text-zinc-400 font-heading">
             Bulk Actual Upload
           </h2>
-          <p className="text-xs text-zinc-600 mt-1">Upload CSV/XLSX, review rows, then apply actuals.</p>
+          <p className="text-xs text-zinc-600 mt-1">
+            Upload CSV/XLSX, review rows, then apply actuals. Enriched files may include Date, Posting text, Amount, Value, Entity, Month, Category, and Flow match — those columns are pre-filled on parse.
+          </p>
         </div>
         <button onClick={onBack} className="btn-secondary text-xs">
           Back
