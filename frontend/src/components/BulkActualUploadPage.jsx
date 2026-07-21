@@ -1542,7 +1542,7 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
               <button
                 type="button"
                 onClick={rematchBatch}
-                disabled={loadingRows || applying || simulating || batch.status === "applied"}
+                disabled={loadingRows || applying || simulating || batch.status === "discarded"}
                 className="btn-secondary text-sm"
                 data-testid="bulk-rematch-btn"
               >

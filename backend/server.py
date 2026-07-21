@@ -805,25 +805,33 @@ def build_cash_flow_from_import_row(row: dict, entity_id: str, amount_value: flo
 
 
 def decode_csv_bytes(content: bytes) -> str:
-    """Decode CSV bytes, preferring UTF-8 and avoiding mojibake from Latin-1 misreads."""
+    """Decode CSV bytes, preferring UTF-8 and encodings that preserve French accents.
 
-    def _mojibake_score(text: str) -> int:
-        # Higher = worse. Ã© / Ã¨ / Ã  are classic UTF-8-as-cp1252 artifacts.
-        return text.count("Ã") + text.count("Â")
+    Some Excel/Mac exports store é as byte 0x8E (Mac Roman). Decoding those as
+    cp1252 yields Ž (TrŽsorerie) and breaks Flow match. Score encodings by
+    mojibake markers and unlikely letters vs common French accents.
+    """
+
+    def _quality(text: str) -> tuple:
+        mojibake = text.count("Ã") + text.count("Â")
+        unlikely = sum(text.count(c) for c in "ŽžŸÿŠšŒœ")
+        french = sum(text.count(c) for c in "éèêëàâäùûüôöîïçÉÈÀÙÇ")
+        # Lower tuple sorts better: fewer artifacts, more French accents, prefer UTF-8 later.
+        return (mojibake + unlikely, -french)
 
     candidates: List[tuple] = []
-    for enc in ("utf-8-sig", "utf-8", "cp1252", "iso-8859-1", "mac_roman"):
+    for enc in ("utf-8-sig", "utf-8", "mac_roman", "cp1252", "iso-8859-1"):
         try:
             text = content.decode(enc)
         except UnicodeDecodeError:
             continue
-        candidates.append((_mojibake_score(text), enc == "utf-8-sig" or enc == "utf-8", enc, text))
+        is_utf8 = enc in {"utf-8-sig", "utf-8"}
+        candidates.append((_quality(text), 0 if is_utf8 else 1, enc, text))
 
     if not candidates:
         return content.decode("utf-8", errors="replace")
 
-    # Prefer low mojibake, then UTF-8 family, then first successful decode.
-    candidates.sort(key=lambda c: (c[0], 0 if c[1] else 1))
+    candidates.sort(key=lambda c: (c[0], c[1]))
     return candidates[0][3]
 
 
@@ -2723,19 +2731,9 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
     rows = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0}).sort("row_index", 1).to_list(100000)
     fingerprint = build_apply_fingerprint(rows, payload.idempotency_key)
 
-    if batch.get("last_apply_fingerprint") == fingerprint and batch.get("status") in {"applied", "partial"}:
-        return {
-            "batch_id": batch_id,
-            "status": "idempotent",
-            "applied_rows": batch.get("applied_rows", 0),
-            "failed_rows": batch.get("failed_rows", 0),
-            "skipped_rows": batch.get("skipped_rows", 0),
-            "discarded_rows": batch.get("discarded_rows", 0),
-            "errors": [],
-        }
-    if batch.get("status") == "applied" and batch.get("last_apply_fingerprint") and batch.get("last_apply_fingerprint") != fingerprint:
-        raise HTTPException(status_code=409, detail="Batch already applied. Create a new import batch to apply different rows.")
-
+    # Always run group apply. Per-group skip already no-ops when the occurrence
+    # amount is unchanged; a batch-level short-circuit prevented rewriting after
+    # actuals were cleared, and blocked rematched rows after a prior apply.
     to_apply = [r for r in rows if r.get("include", True)]
     if not to_apply:
         raise HTTPException(status_code=400, detail="No included rows to apply")
@@ -2758,6 +2756,16 @@ async def apply_actual_import(batch_id: str, payload: ActualImportApplyRequest, 
         user=user,
     )
 
+    if applied == 0 and failed == 0 and skipped > 0 and batch.get("last_apply_fingerprint") == fingerprint:
+        return {
+            "batch_id": batch_id,
+            "status": "idempotent",
+            "applied_rows": 0,
+            "failed_rows": 0,
+            "skipped_rows": skipped,
+            "discarded_rows": discarded,
+            "errors": [],
+        }
 
     if applied > 0:
         await push_undo(
@@ -2799,8 +2807,8 @@ async def rematch_actual_import_batch(batch_id: str, user: dict = Depends(get_cu
     batch = await db.actual_import_batches.find_one({"id": batch_id}, {"_id": 0})
     if not batch:
         raise HTTPException(status_code=404, detail="Import batch not found")
-    if batch.get("status") in {"applied", "discarded"}:
-        raise HTTPException(status_code=400, detail="Cannot rematch a closed batch")
+    if batch.get("status") == "discarded":
+        raise HTTPException(status_code=400, detail="Cannot rematch a discarded batch")
 
     entity_id = batch.get("entity_id")
     rows = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0}).sort("row_index", 1).to_list(100000)
