@@ -24,6 +24,8 @@ const fallbackVarianceActions = [
 
 const sortColumnLabels = {
   entity: "Entity",
+  date: "Date",
+  valueDate: "Value",
   month: "Month",
   description: "Description",
   amount: "Amount",
@@ -124,6 +126,8 @@ const buildBulkRowReviewSearchText = (row, ctx) => {
     row.include ? "included" : "excluded",
     row.multi_edit ? "multi" : "",
     entityName,
+    row.transaction_date || "",
+    row.value_date || "",
     row.month,
     row.description,
     String(row.amount ?? ""),
@@ -137,6 +141,8 @@ const buildBulkRowReviewSearchText = (row, ctx) => {
     row.error || "",
     row.status || "",
     String(row.id || ""),
+    row.raw_flow_match || "",
+    row.raw_entity || "",
   ];
   return parts.join(" ");
 };
@@ -722,6 +728,10 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
         const id = row.entity_id || entityId || batch?.entity_id || "";
         return (entityNameById[id] || "").toLowerCase();
       }
+      case "date":
+        return row.transaction_date || "";
+      case "valueDate":
+        return row.value_date || "";
       case "month":
         return row.month || "";
       case "description":
@@ -925,7 +935,9 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
           <h2 className="text-sm font-medium tracking-[0.15em] uppercase text-zinc-400 font-heading">
             Bulk Actual Upload
           </h2>
-          <p className="text-xs text-zinc-600 mt-1">Upload CSV/XLSX, review rows, then apply actuals.</p>
+          <p className="text-xs text-zinc-600 mt-1">
+            Upload CSV/XLSX, review rows, then apply actuals. Enriched files may include Date, Posting text, Amount, Value, Entity, Month, Category, and Flow match — those columns are pre-filled on parse.
+          </p>
         </div>
         <button onClick={onBack} className="btn-secondary text-xs">
           Back
@@ -1160,6 +1172,8 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                     </div>
                   </th>
                   <SortHeader label="Entity"           sortKey="entity"        activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-entity" />
+                  <SortHeader label="Date"             sortKey="date"          activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-date" />
+                  <SortHeader label="Value"            sortKey="valueDate"     activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-value-date" />
                   <SortHeader label="Month"            sortKey="month"         activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-month" />
                   <SortHeader label="Description"      sortKey="description"   activeKey={sortKey} dir={sortDir} onToggle={toggleSort} testId="bulk-sort-description" />
                   <SortHeader label="Amount"           sortKey="amount"        activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" testId="bulk-sort-amount" />
@@ -1282,6 +1296,37 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                             ))}
                           </SelectContent>
                         </Select>
+                      </td>
+                      <td className="px-2 py-2 align-top">
+                        <input
+                          type="date"
+                          value={row.transaction_date || ""}
+                          title={row.value_date ? `Value date: ${row.value_date}` : undefined}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (shouldBulkEdit(row.id)) {
+                              setRows((prev) =>
+                                prev.map((r) =>
+                                  multiEditRowIds.has(r.id) ? { ...r, transaction_date: v } : r,
+                                ),
+                              );
+                            } else {
+                              updateRowLocal(row.id, { transaction_date: v });
+                            }
+                          }}
+                          onBlur={(e) => persistFromAnchorRow(row.id, { transaction_date: e.target.value })}
+                          className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-100"
+                          data-testid={`bulk-row-date-${row.id}`}
+                        />
+                      </td>
+                      <td className="px-2 py-2 align-top">
+                        <span
+                          className="block min-w-[110px] px-2 py-1 text-zinc-300 font-mono text-[11px] tabular-nums"
+                          title="Value date from file (read-only)"
+                          data-testid={`bulk-row-value-date-${row.id}`}
+                        >
+                          {row.value_date || "—"}
+                        </span>
                       </td>
                       <td className="px-2 py-2 align-top">
                         <input

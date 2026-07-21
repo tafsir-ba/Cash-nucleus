@@ -22,6 +22,13 @@ import hashlib
 from dateutil import parser as date_parser
 
 from bulk_flow_match import best_flow_match, auto_select_flow_match_score as _auto_select_flow_match_score, flow_matches_import_direction
+from bulk_import_columns import (
+    detect_import_columns,
+    normalize_month_cell,
+    parse_category_label,
+    resolve_entity_id_from_name,
+    resolve_flow_from_match_text,
+)
 
 from cash_horizon import analyze_cash_horizon, normalize_entry, resolve_expected_date
 
@@ -516,7 +523,12 @@ class ActualImportRow(BaseModel):
     raw_date: str = ""
     raw_description: str = ""
     raw_amount: str = ""
+    raw_entity: str = ""
+    raw_month: str = ""
+    raw_category: str = ""
+    raw_flow_match: str = ""
     transaction_date: str  # YYYY-MM-DD
+    value_date: Optional[str] = None  # YYYY-MM-DD when a Value / Valuta column is present
     month: str  # YYYY-MM
     description: str
     amount: float
@@ -791,75 +803,6 @@ def build_cash_flow_from_import_row(row: dict, entity_id: str, amount_value: flo
     )
 
 
-def detect_import_columns(columns: List[str]) -> Dict[str, str]:
-    cols: Dict[str, str] = {}
-    for c in columns:
-        if c is None:
-            continue
-        raw = str(c).strip()
-        if not raw:
-            continue
-        key = raw.lower().replace("\ufeff", "").replace("\xa0", " ")
-        cols[key] = raw
-
-    date_exact = [
-        "date", "transaction date", "booking date", "value date", "buchungsdatum", "buchungstag",
-        "valuta", "valutadatum", "transaktionsdatum", "posting date", "trade date", "datum",
-    ]
-    desc_exact = [
-        "description", "label", "details", "memo", "narrative", "name", "text", "beschreibung",
-        "buchungstext", "verwendungszweck", "zweck", "payee", "empfänger", "empfaenger",
-        "begünstigter", "beguenstigter", "merchant", "note", "bemerkung",
-        "posting text", "buchungstext en", "booking text",
-    ]
-    amount_exact = [
-        "amount", "value", "chf", "betrag", "amount chf", "transaction amount", "booked amount",
-    ]
-    debit_exact = ["debit", "soll", "belastung", "lastschrift", "abgang", "withdrawal"]
-    credit_exact = ["credit", "haben", "gutschrift", "guthaben", "eingang", "deposit"]
-
-    def pick_exact(keys: List[str]) -> Optional[str]:
-        for k in keys:
-            if k in cols:
-                return cols[k]
-        return None
-
-    def pick_contains(subs: tuple, exclude: tuple = ()) -> Optional[str]:
-        for col_lower, orig in cols.items():
-            if any(ex in col_lower for ex in exclude):
-                continue
-            for sub in subs:
-                if sub in col_lower:
-                    return orig
-        return None
-
-    detected: Dict[str, str] = {}
-    detected["date"] = pick_exact(date_exact) or pick_contains(
-        (
-            "buchungsdatum", "buchungstag", "valutadatum", "valuta", "transaktionsdatum",
-            "booking date", "value date", "trade date", "posting date",
-        ),
-        ("betrag", "amount", "belastung", "gutschrift", "text", "beschreibung", "posting text"),
-    )
-    detected["description"] = pick_exact(desc_exact) or pick_contains(
-        ("beschreibung", "text", "zweck", "verwendung", "detail", "memo", "narrative", "payee", "merchant"), ()
-    )
-    detected["amount"] = pick_exact(amount_exact) or pick_contains(
-        ("betrag", "amount", "chf", "saldo"), ("datum", "date", "buchung")
-    )
-
-    if "amount" not in detected or detected["amount"] is None:
-        debit_col = pick_exact(debit_exact) or pick_contains(("belastung", "debit", "soll", "abgang", "lastschrift"), ())
-        credit_col = pick_exact(credit_exact) or pick_contains(("gutschrift", "guthaben", "credit", "haben", "eingang"), ())
-        if debit_col and credit_col:
-            detected["debit"] = debit_col
-            detected["credit"] = credit_col
-            detected.pop("amount", None)
-
-    detected = {k: v for k, v in detected.items() if v}
-    return detected
-
-
 def decode_csv_bytes(content: bytes) -> str:
     for enc in ("utf-8-sig", "utf-8", "cp1252", "iso-8859-1", "mac_roman"):
         try:
@@ -907,10 +850,14 @@ def parse_import_row_date(raw: Any) -> Optional[date]:
                 return date(1899, 12, 30) + timedelta(days=int(serial))
             except (OverflowError, ValueError):
                 pass
-    try:
-        return date_parser.parse(str(raw)).date()
-    except Exception:
-        return None
+    text = str(raw).strip()
+    # Prefer European DD.MM.YYYY (common in bank exports) before US-centric defaults.
+    for dayfirst in (True, False):
+        try:
+            return date_parser.parse(text, dayfirst=dayfirst).date()
+        except Exception:
+            continue
+    return None
 
 def is_valid_month_key(month: str) -> bool:
     if not isinstance(month, str) or not re.match(r"^\d{4}-\d{2}$", month):
@@ -925,11 +872,13 @@ def normalize_import_transaction_date(raw_date: Optional[str]) -> Optional[str]:
     text = str(raw_date).strip()
     if not text:
         return None
-    try:
-        parsed = date_parser.parse(text)
-        return parsed.strftime("%Y-%m-%d")
-    except Exception:
-        return None
+    for dayfirst in (True, False):
+        try:
+            parsed = date_parser.parse(text, dayfirst=dayfirst)
+            return parsed.strftime("%Y-%m-%d")
+        except Exception:
+            continue
+    return None
 
 async def validate_selected_flow_for_row(selected_flow_id: Optional[str], row_entity_id: Optional[str], batch_entity_id: Optional[str]) -> Optional[dict]:
     if not selected_flow_id:
@@ -2447,7 +2396,12 @@ async def parse_actual_import(
         if not entity_exists:
             raise HTTPException(status_code=400, detail="entity_id does not exist")
 
-    flows = await fetch_entity_cash_flows_for_matching(entity_id)
+    # Load all entities for name→id resolution when Entity column is present.
+    entities_docs = await db.entities.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(5000)
+    # When Entity (or Flow match) columns are present, match across all flows so
+    # multi-entity enriched files pre-populate correctly. Otherwise keep scoped.
+    needs_all_flows = bool(detected.get("entity") or detected.get("flow_match"))
+    flows = await fetch_entity_cash_flows_for_matching(None if needs_all_flows else entity_id)
 
     batch = ActualImportBatch(
         filename=filename,
@@ -2465,6 +2419,19 @@ async def parse_actual_import(
         transaction_date = parsed_d.strftime("%Y-%m-%d")
         month = parsed_d.strftime("%Y-%m")
 
+        value_date = None
+        if detected.get("value_date"):
+            parsed_vd = parse_import_row_date(row.get(detected["value_date"]))
+            if parsed_vd:
+                value_date = parsed_vd.strftime("%Y-%m-%d")
+
+        raw_month_cell = ""
+        if detected.get("month"):
+            raw_month_cell = str(row.get(detected["month"], "") or "").strip()
+            file_month = normalize_month_cell(row.get(detected["month"]))
+            if file_month:
+                month = file_month
+
         description = str(row.get(detected["description"], "") or "").strip()
         if not description:
             description = f"Imported row {idx + 1}"
@@ -2479,15 +2446,100 @@ async def parse_actual_import(
         if parsed_amount is None or parsed_amount == 0:
             continue
 
+        raw_entity_cell = ""
+        entity_unresolved = False
+        row_entity_id = entity_id
+        if detected.get("entity"):
+            raw_entity_cell = str(row.get(detected["entity"], "") or "").strip()
+            if raw_entity_cell:
+                resolved_entity = resolve_entity_id_from_name(
+                    raw_entity_cell,
+                    entities_docs,
+                    default_entity_id=None,
+                )
+                if resolved_entity:
+                    row_entity_id = resolved_entity
+                else:
+                    # Do not fall back to default entity — that scopes Flow match wrongly.
+                    row_entity_id = None
+                    entity_unresolved = True
+            else:
+                row_entity_id = entity_id
+
+        raw_category_cell = ""
         category = Category.REVENUE if parsed_amount > 0 else Category.EXPENSE
-        match = best_flow_match(flows, description, parsed_amount, entity_id)
-        selected_flow_id = match["flow_id"] if _auto_select_flow_match_score(match["score"], match.get("reason", "")) else None
-        matched_flow = next((f for f in flows if f.get("id") == selected_flow_id), None) if selected_flow_id else None
-        if matched_flow:
-            category = category_from_flow(matched_flow)
-        matched_entity_id = entity_id or (matched_flow.get("entity_id") if matched_flow else None)
+        if detected.get("category"):
+            raw_category_cell = str(row.get(detected["category"], "") or "").strip()
+            allowed_cats = [c.value for c in Category]
+            parsed_cat = parse_category_label(raw_category_cell, allowed=allowed_cats)
+            if parsed_cat:
+                try:
+                    category = Category(parsed_cat)
+                except ValueError:
+                    pass
+
+        raw_flow_match_cell = ""
+        file_matched_flow = None
+        flow_match_unresolved = False
+        if detected.get("flow_match"):
+            raw_flow_match_cell = str(row.get(detected["flow_match"], "") or "").strip()
+            if raw_flow_match_cell:
+                file_matched_flow = resolve_flow_from_match_text(
+                    flows,
+                    raw_flow_match_cell,
+                    entity_id=row_entity_id,
+                )
+                # If entity was unresolved, retry flow match across all entities.
+                if not file_matched_flow and entity_unresolved:
+                    file_matched_flow = resolve_flow_from_match_text(
+                        flows,
+                        raw_flow_match_cell,
+                        entity_id=None,
+                    )
+                if not file_matched_flow:
+                    flow_match_unresolved = True
+
+        if file_matched_flow:
+            selected_flow_id = file_matched_flow.get("id")
+            match = {
+                "flow_id": selected_flow_id,
+                "score": 0.99,
+                "reason": "file-flow-match",
+            }
+            category = category_from_flow(file_matched_flow)
+            if not row_entity_id and file_matched_flow.get("entity_id"):
+                row_entity_id = file_matched_flow.get("entity_id")
+                entity_unresolved = False
+        elif flow_match_unresolved:
+            # Explicit file Flow match present but unresolved — never fuzzy-substitute.
+            selected_flow_id = None
+            match = {
+                "flow_id": None,
+                "score": 0.0,
+                "reason": "file-flow-match-unresolved",
+            }
+        else:
+            match = best_flow_match(flows, description, parsed_amount, row_entity_id)
+            selected_flow_id = (
+                match["flow_id"]
+                if _auto_select_flow_match_score(match["score"], match.get("reason", ""))
+                else None
+            )
+            matched_flow = next((f for f in flows if f.get("id") == selected_flow_id), None) if selected_flow_id else None
+            if matched_flow:
+                # Prefer explicit file category when present; otherwise take flow's category.
+                allowed_cats = [c.value for c in Category]
+                if not parse_category_label(raw_category_cell, allowed=allowed_cats):
+                    category = category_from_flow(matched_flow)
+                if not row_entity_id and matched_flow.get("entity_id"):
+                    row_entity_id = matched_flow.get("entity_id")
+
         include = True
-        status = "ready" if selected_flow_id else "warning"
+        reasons = [match.get("reason") or ""]
+        if entity_unresolved:
+            reasons.append("entity-unresolved")
+        match_reason = ", ".join(r for r in reasons if r)
+        status = "ready" if selected_flow_id and not entity_unresolved else "warning"
 
         import_row = ActualImportRow(
             batch_id=batch.id,
@@ -2497,16 +2549,21 @@ async def parse_actual_import(
             raw_date=str(raw_date),
             raw_description=description,
             raw_amount=str(row.get(detected.get("amount", ""), "")),
+            raw_entity=raw_entity_cell,
+            raw_month=raw_month_cell,
+            raw_category=raw_category_cell,
+            raw_flow_match=raw_flow_match_cell,
             transaction_date=transaction_date,
+            value_date=value_date,
             month=month,
             description=description,
             amount=float(parsed_amount),
             category=category,
-            entity_id=matched_entity_id,
+            entity_id=row_entity_id,
             suggested_flow_id=match["flow_id"],
             selected_flow_id=selected_flow_id,
             match_score=match["score"],
-            match_reason=match["reason"],
+            match_reason=match_reason,
             classification="existing_flow",
         )
         created_rows.append(import_row.model_dump())
@@ -2725,9 +2782,13 @@ async def rematch_actual_import_batch(batch_id: str, user: dict = Depends(get_cu
         raise HTTPException(status_code=400, detail="Cannot rematch a closed batch")
 
     entity_id = batch.get("entity_id")
-    flows = await fetch_entity_cash_flows_for_matching(entity_id)
-
     rows = await db.actual_import_rows.find({"batch_id": batch_id}, {"_id": 0}).sort("row_index", 1).to_list(100000)
+    needs_all_flows = any(
+        (r.get("raw_entity") or r.get("raw_flow_match")) for r in rows
+    )
+    flows = await fetch_entity_cash_flows_for_matching(None if needs_all_flows else entity_id)
+    entities_docs = await db.entities.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(5000)
+
     updated = 0
     for row in rows:
         if row.get("classification") == "new_flow":
@@ -2737,16 +2798,72 @@ async def rematch_actual_import_batch(batch_id: str, user: dict = Depends(get_cu
         description = row.get("description") or ""
         amount = float(row.get("amount", 0))
         row_entity = row.get("entity_id") or entity_id
-        match = best_flow_match(flows, description, amount, row_entity)
-        selected = match["flow_id"] if _auto_select_flow_match_score(match["score"], match.get("reason", "")) else None
+        entity_unresolved = False
+        raw_entity = (row.get("raw_entity") or "").strip()
+        if raw_entity:
+            resolved = resolve_entity_id_from_name(
+                raw_entity,
+                entities_docs,
+                default_entity_id=None,
+            )
+            if resolved:
+                row_entity = resolved
+            else:
+                row_entity = None
+                entity_unresolved = True
+
+        file_matched = None
+        flow_match_unresolved = False
+        raw_flow = (row.get("raw_flow_match") or "").strip()
+        if raw_flow:
+            file_matched = resolve_flow_from_match_text(
+                flows,
+                raw_flow,
+                entity_id=row_entity,
+            )
+            if not file_matched and entity_unresolved:
+                file_matched = resolve_flow_from_match_text(
+                    flows,
+                    raw_flow,
+                    entity_id=None,
+                )
+            if not file_matched:
+                flow_match_unresolved = True
+
+        if file_matched:
+            match = {
+                "flow_id": file_matched.get("id"),
+                "score": 0.99,
+                "reason": "file-flow-match",
+            }
+            selected = file_matched.get("id")
+            if not row_entity and file_matched.get("entity_id"):
+                row_entity = file_matched.get("entity_id")
+                entity_unresolved = False
+        elif flow_match_unresolved:
+            match = {
+                "flow_id": None,
+                "score": 0.0,
+                "reason": "file-flow-match-unresolved",
+            }
+            selected = None
+        else:
+            match = best_flow_match(flows, description, amount, row_entity)
+            selected = match["flow_id"] if _auto_select_flow_match_score(match["score"], match.get("reason", "")) else None
+
+        reasons = [match.get("reason") or ""]
+        if entity_unresolved:
+            reasons.append("entity-unresolved")
         patch = {
             "suggested_flow_id": match["flow_id"],
             "match_score": match["score"],
-            "match_reason": match["reason"],
+            "match_reason": ", ".join(r for r in reasons if r),
             "selected_flow_id": selected,
-            "status": "ready" if selected else "warning",
+            "status": "ready" if selected and not entity_unresolved else "warning",
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+        if row_entity != row.get("entity_id"):
+            patch["entity_id"] = row_entity
         await db.actual_import_rows.update_one({"id": row["id"]}, {"$set": patch})
         updated += 1
 

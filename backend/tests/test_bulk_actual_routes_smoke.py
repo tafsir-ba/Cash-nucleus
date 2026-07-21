@@ -241,3 +241,140 @@ def test_simulate_multi_entity_batch_returns_non_empty_matrix(client: TestClient
     client.delete(f"/api/cash-flows/{fid_b}")
     client.delete(f"/api/entities/{id_a}")
     client.delete(f"/api/entities/{id_b}")
+
+
+def test_parse_enriched_prepopulated_columns(client: TestClient):
+    """Excel-style enriched exports should pre-fill entity/month/category/flow match."""
+    e1 = client.post("/api/entities", json={"name": f"Evohom SA {uuid.uuid4().hex[:6]}"})
+    e2 = client.post("/api/entities", json={"name": f"Family {uuid.uuid4().hex[:6]}"})
+    assert e1.status_code == 200 and e2.status_code == 200
+    id_a, id_b = e1.json()["id"], e2.json()["id"]
+    name_a, name_b = e1.json()["name"], e2.json()["name"]
+
+    flow_a = client.post(
+        "/api/cash-flows",
+        json={
+            "label": "Subscriptions",
+            "amount": -20,
+            "date": "2026-06-01",
+            "category": "Expense",
+            "certainty": "Materialized",
+            "recurrence": "none",
+            "entity_id": id_a,
+        },
+    )
+    flow_b = client.post(
+        "/api/cash-flows",
+        json={
+            "label": "Personal expenses",
+            "amount": -80,
+            "date": "2026-06-01",
+            "category": "Expense",
+            "certainty": "Materialized",
+            "recurrence": "none",
+            "entity_id": id_b,
+        },
+    )
+    assert flow_a.status_code == 200 and flow_b.status_code == 200
+    fid_a, fid_b = flow_a.json()["id"], flow_b.json()["id"]
+
+    csv = (
+        "Date,Posting text,Amount,Value,Entity,Month,Category,Flow match\n"
+        f"03.06.2026,Achat Mastercard 02.06.2026 Netflix,-13.26,02.06.2026,{name_a},2026-06,Expense,Subscriptions - Expense\n"
+        f"08.06.2026,Achat Mastercard 07.06.2026 Shop,-80,07.06.2026,{name_b},2026-06,Expense,Personal expenses - Expense\n"
+    ).encode("utf-8")
+
+    parse = client.post(
+        "/api/actual-imports/parse",
+        data={"entity_id": id_a},
+        files={"file": ("enriched.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert parse.status_code == 200, parse.text
+    body = parse.json()
+    detected = body["detected_columns"]
+    assert detected.get("entity") == "Entity"
+    assert detected.get("month") == "Month"
+    assert detected.get("category") == "Category"
+    assert detected.get("flow_match") == "Flow match"
+    assert detected.get("value_date") == "Value"
+    assert detected.get("amount") == "Amount"
+    assert detected.get("description") == "Posting text"
+
+    rows = sorted(body["rows"], key=lambda r: r.get("row_index", 0))
+    assert len(rows) == 2
+
+    r0, r1 = rows[0], rows[1]
+    assert r0["transaction_date"] == "2026-06-03"
+    assert r0["value_date"] == "2026-06-02"
+    assert r0["month"] == "2026-06"
+    assert r0["entity_id"] == id_a
+    assert r0["category"] == "Expense"
+    assert r0["selected_flow_id"] == fid_a
+    assert r0["match_reason"] == "file-flow-match"
+    assert r0["status"] == "ready"
+
+    assert r1["entity_id"] == id_b
+    assert r1["selected_flow_id"] == fid_b
+    assert r1["amount"] == -80.0
+    assert r1["status"] == "ready"
+
+    client.delete(f"/api/cash-flows/{fid_a}?delete_linked=true")
+    client.delete(f"/api/cash-flows/{fid_b}?delete_linked=true")
+    client.delete(f"/api/entities/{id_a}")
+    client.delete(f"/api/entities/{id_b}")
+
+
+def test_parse_unresolved_entity_and_flow_match_do_not_fuzzy_or_default(client: TestClient):
+    """Explicit Entity/Flow match cells must not silently substitute defaults."""
+    e1 = client.post("/api/entities", json={"name": f"MainEnt_{uuid.uuid4().hex[:6]}"})
+    assert e1.status_code == 200
+    id_a = e1.json()["id"]
+    name_a = e1.json()["name"]
+
+    flow_a = client.post(
+        "/api/cash-flows",
+        json={
+            "label": "Office supplies",
+            "amount": -20,
+            "date": "2026-06-01",
+            "category": "Expense",
+            "certainty": "Materialized",
+            "recurrence": "none",
+            "entity_id": id_a,
+        },
+    )
+    assert flow_a.status_code == 200
+    fid_a = flow_a.json()["id"]
+
+    # Unknown entity name + unknown flow label — must warn, not auto-pick Office supplies.
+    csv = (
+        "Date,Posting text,Amount,Value,Entity,Month,Category,Flow match\n"
+        f"03.06.2026,Achat Mastercard Netflix,-13.26,02.06.2026,Unknown Co,2026-06,Expense,Subscriptions - Expense\n"
+        f"04.06.2026,Achat Mastercard Shop,-22.60,03.06.2026,{name_a},2026-06,Expense,Missing Flow - Expense\n"
+    ).encode("utf-8")
+
+    parse = client.post(
+        "/api/actual-imports/parse",
+        data={"entity_id": id_a},
+        files={"file": ("bad_match.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert parse.status_code == 200, parse.text
+    rows = sorted(parse.json()["rows"], key=lambda r: r.get("row_index", 0))
+    assert len(rows) == 2
+
+    r0 = rows[0]
+    assert r0["entity_id"] is None
+    assert r0["selected_flow_id"] is None
+    assert r0["status"] == "warning"
+    assert "entity-unresolved" in (r0.get("match_reason") or "")
+    assert "file-flow-match-unresolved" in (r0.get("match_reason") or "")
+
+    r1 = rows[1]
+    assert r1["entity_id"] == id_a
+    assert r1["selected_flow_id"] is None
+    assert r1["status"] == "warning"
+    assert "file-flow-match-unresolved" in (r1.get("match_reason") or "")
+    assert r1["selected_flow_id"] != fid_a
+
+    client.delete(f"/api/cash-flows/{fid_a}?delete_linked=true")
+    client.delete(f"/api/entities/{id_a}")
