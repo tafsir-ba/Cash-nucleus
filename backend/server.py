@@ -2488,6 +2488,7 @@ async def parse_actual_import(
                     flows,
                     raw_flow_match_cell,
                     entity_id=row_entity_id,
+                    entity_name=raw_entity_cell or None,
                 )
                 # If entity was unresolved, retry flow match across all entities.
                 if not file_matched_flow and entity_unresolved:
@@ -2495,6 +2496,7 @@ async def parse_actual_import(
                         flows,
                         raw_flow_match_cell,
                         entity_id=None,
+                        entity_name=raw_entity_cell or None,
                     )
                 if not file_matched_flow:
                     flow_match_unresolved = True
@@ -2824,12 +2826,14 @@ async def rematch_actual_import_batch(batch_id: str, user: dict = Depends(get_cu
                 flows,
                 raw_flow,
                 entity_id=row_entity,
+                entity_name=raw_entity or None,
             )
             if not file_matched and entity_unresolved:
                 file_matched = resolve_flow_from_match_text(
                     flows,
                     raw_flow,
                     entity_id=None,
+                    entity_name=raw_entity or None,
                 )
             if not file_matched:
                 flow_match_unresolved = True
