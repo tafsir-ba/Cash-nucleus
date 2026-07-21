@@ -158,3 +158,18 @@ def test_resolve_flow_accent_insensitive():
         entity_id="evo",
     )
     assert hit and hit["id"] == "av"
+
+
+def test_resolve_flow_typo_recievables_vs_receivables():
+    """Excel typo Recievables must still resolve to cash line Receivables."""
+    flows = [
+        {"id": "r", "label": "Receivables", "category": "Revenue", "entity_id": "evo", "entity": "Evohom SA"},
+        {"id": "a", "label": "Admin", "category": "Expense", "entity_id": "evo", "entity": "Evohom SA"},
+    ]
+    hit = resolve_flow_from_match_text(
+        flows,
+        "Recievables - Revenue",
+        entity_id="evo",
+        entity_name="Evohom SA",
+    )
+    assert hit and hit["id"] == "r"

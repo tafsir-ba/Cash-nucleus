@@ -379,6 +379,55 @@ def _flow_label_variants(flow: dict) -> set:
     return variants
 
 
+def _edit_distance(a: str, b: str) -> int:
+    """Levenshtein distance (small strings only — flow labels)."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    # Tiny optimization for classic transposition (Recievables ↔ Receivables)
+    if len(a) == len(b):
+        diffs = [i for i, (ca, cb) in enumerate(zip(a, b)) if ca != cb]
+        if len(diffs) == 2 and diffs[1] == diffs[0] + 1:
+            i = diffs[0]
+            if a[i] == b[i + 1] and a[i + 1] == b[i]:
+                return 1
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            ins = cur[j - 1] + 1
+            delete = prev[j] + 1
+            sub = prev[j - 1] + (0 if ca == cb else 1)
+            cur.append(min(ins, delete, sub))
+        prev = cur
+    return prev[-1]
+
+
+def _best_fuzzy_label_distance(wanted: set, flow: dict) -> Optional[int]:
+    """Minimum edit distance between wanted variants and flow label variants."""
+    labs = {v for v in _flow_label_variants(flow) if v and " - " not in v}
+    # Prefer bare label; also allow full display variants
+    labs |= {v for v in _flow_label_variants(flow) if v}
+    wanted_labels = {v for v in wanted if v}
+    if not labs or not wanted_labels:
+        return None
+    best = None
+    for w in wanted_labels:
+        for lab in labs:
+            # Only compare similar-length tokens to avoid matching short junk
+            if abs(len(w) - len(lab)) > 2:
+                continue
+            if min(len(w), len(lab)) < 5:
+                continue
+            d = _edit_distance(w, lab)
+            if best is None or d < best:
+                best = d
+    return best
+
+
 def _find_flows_for_match_text(
     flows: Sequence[dict],
     text: str,
@@ -411,6 +460,23 @@ def _find_flows_for_match_text(
                 if any(w == lab or w in lab or lab in w for lab in labs if lab):
                     add(f)
                     break
+
+    # Typo tolerance: unique nearest label within edit distance 2
+    # (covers Recievables ↔ Receivables).
+    if not hits:
+        scored: List[tuple] = []
+        for f in candidates:
+            dist = _best_fuzzy_label_distance(wanted, f)
+            if dist is not None and dist <= 2:
+                scored.append((dist, f))
+        if scored:
+            scored.sort(key=lambda t: t[0])
+            best_dist = scored[0][0]
+            best = [f for d, f in scored if d == best_dist]
+            if len(best) == 1:
+                return best
+            # Multiple equally close: return all for entity disambiguation upstream
+            return best
 
     return hits
 
