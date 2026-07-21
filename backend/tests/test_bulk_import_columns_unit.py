@@ -122,3 +122,39 @@ def test_resolve_flow_includes_legacy_null_entity_when_scoped_flows_exist():
     # Unique cross-entity file label still resolves when scoped entity misses.
     hit2 = resolve_flow_from_match_text(flows, "Receivables - Revenue", entity_id="evo")
     assert hit2 and hit2["id"] == "recv"
+
+
+def test_resolve_flow_disambiguates_duplicate_labels_by_entity_name():
+    flows = [
+        {"id": "r1", "label": "Receivables", "category": "Revenue", "entity_id": "fam", "entity": "Family"},
+        {"id": "r2", "label": "Receivables", "category": "Revenue", "entity_id": "jol", "entity": "Jolya Invest Sarl"},
+        {"id": "a", "label": "Admin", "category": "Expense", "entity_id": "evo", "entity": "Evohom SA"},
+    ]
+    # Row entity Evohom has no Receivables — still resolve via entity_name when provided.
+    hit = resolve_flow_from_match_text(
+        flows,
+        "Receivables - Revenue",
+        entity_id="evo",
+        entity_name="Family",
+    )
+    assert hit and hit["id"] == "r1"
+
+    hit2 = resolve_flow_from_match_text(
+        flows,
+        "Receivables - Revenue",
+        entity_id="jol",
+        entity_name="Jolya Invest Sarl",
+    )
+    assert hit2 and hit2["id"] == "r2"
+
+
+def test_resolve_flow_accent_insensitive():
+    flows = [
+        {"id": "av", "label": "Avance Tresorerie", "category": "Revenue", "entity_id": "evo", "entity": "Evohom SA"},
+    ]
+    hit = resolve_flow_from_match_text(
+        flows,
+        "Avance Trésorerie - Revenue",
+        entity_id="evo",
+    )
+    assert hit and hit["id"] == "av"

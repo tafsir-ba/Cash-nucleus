@@ -1465,6 +1465,15 @@ export const BulkActualUploadPage = ({ entities, onDataChange, onBack, flowsRefr
                             ))}
                           </SelectContent>
                         </Select>
+                        {!row.selected_flow_id && row.raw_flow_match ? (
+                          <div
+                            className="mt-1 text-[10px] text-amber-500/90 truncate max-w-[220px]"
+                            title={`File Flow match not resolved: ${row.raw_flow_match}${row.match_reason ? ` (${row.match_reason})` : ""}`}
+                            data-testid={`bulk-row-raw-flow-${row.id}`}
+                          >
+                            File: {row.raw_flow_match}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-2 py-2 align-top">
                         <span

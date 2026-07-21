@@ -6,6 +6,7 @@ Category, and Flow match (in addition to Date / Posting text / Amount / Value).
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional, Sequence
 
 
@@ -334,12 +335,25 @@ def flow_display_label(flow: dict) -> str:
     return label or cat
 
 
+def _fold_match_text(raw: Any) -> str:
+    """Casefold + strip accents/punctuation noise for resilient label compare."""
+    text = str(raw or "").strip().lower()
+    if not text:
+        return ""
+    # NFKD then drop combining marks so Trésorerie ~= Tresorerie
+    decomposed = unicodedata.normalize("NFKD", text)
+    folded = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    folded = folded.replace("\xa0", " ")
+    folded = re.sub(r"\s+", " ", folded).strip()
+    return folded
+
+
 def _normalize_match_label(raw: str) -> str:
     """Strip trailing ' - Category' suffix when present (UI export style)."""
     text = (raw or "").strip()
     if not text:
         return ""
-    for sep in (" - ", " – ", " — "):
+    for sep in (" - ", " – ", " — ", "-", "–", "—"):
         if sep in text:
             left, right = text.rsplit(sep, 1)
             if right.strip().lower() in {
@@ -349,10 +363,31 @@ def _normalize_match_label(raw: str) -> str:
     return text
 
 
-def _find_flows_for_match_text(flows: Sequence[dict], text: str, entity_id: Optional[str]) -> List[dict]:
+def _label_variants(text: str) -> set:
+    """Comparable forms of a Flow match cell or flow label."""
+    raw = (text or "").strip()
+    if not raw:
+        return set()
+    variants = {_fold_match_text(raw), _fold_match_text(_normalize_match_label(raw))}
+    return {v for v in variants if v}
+
+
+def _flow_label_variants(flow: dict) -> set:
+    variants = set()
+    variants |= _label_variants(flow.get("label") or "")
+    variants |= _label_variants(flow_display_label(flow))
+    return variants
+
+
+def _find_flows_for_match_text(
+    flows: Sequence[dict],
+    text: str,
+    entity_id: Optional[str],
+) -> List[dict]:
     """Return all candidate flows that match the file Flow match cell."""
-    lower = text.lower().strip()
-    label_only = _normalize_match_label(text).lower()
+    wanted = _label_variants(text)
+    if not wanted:
+        return []
     candidates = [f for f in flows if _flow_belongs_to_entity(f, entity_id)]
     hits: List[dict] = []
     seen = set()
@@ -365,32 +400,70 @@ def _find_flows_for_match_text(flows: Sequence[dict], text: str, entity_id: Opti
         hits.append(f)
 
     for f in candidates:
-        if flow_display_label(f).lower() == lower:
-            add(f)
-    for f in candidates:
-        lab = (f.get("label") or "").strip().lower()
-        if lab == lower or (label_only and lab == label_only):
+        if wanted.intersection(_flow_label_variants(f)):
             add(f)
 
-    stripped = re.sub(r"\s+", " ", lower)
-    for f in candidates:
-        if re.sub(r"\s+", " ", flow_display_label(f).lower()) == stripped:
-            add(f)
-
-    m = re.match(r"^(.+?)\s*[-–—]\s*([A-Za-z]+)\s*$", text)
-    if m:
-        label_part = m.group(1).strip().lower()
-        cat_part = m.group(2).strip().lower()
+    # Contains / prefix against folded labels (unique enough for file-driven match).
+    if not hits:
         for f in candidates:
-            if (f.get("label") or "").strip().lower() != label_part:
-                continue
-            if _flow_category_str(f).lower() == cat_part:
-                add(f)
-        for f in candidates:
-            if (f.get("label") or "").strip().lower() == label_part:
-                add(f)
+            labs = _flow_label_variants(f)
+            for w in wanted:
+                if any(w == lab or w in lab or lab in w for lab in labs if lab):
+                    add(f)
+                    break
 
     return hits
+
+
+def _prefer_flow_hits(
+    hits: List[dict],
+    *,
+    entity_id: Optional[str] = None,
+    entity_name: Optional[str] = None,
+    match_text: str = "",
+) -> Optional[dict]:
+    if not hits:
+        return None
+    if len(hits) == 1:
+        return hits[0]
+
+    folded_text = _fold_match_text(match_text)
+    display_exact = [
+        f for f in hits
+        if _fold_match_text(flow_display_label(f)) == folded_text
+    ]
+    if len(display_exact) == 1:
+        return display_exact[0]
+
+    if entity_id:
+        by_id = [f for f in hits if f.get("entity_id") == entity_id]
+        if len(by_id) == 1:
+            return by_id[0]
+        if len(by_id) > 1:
+            hits = by_id
+
+    if entity_name:
+        name_l = entity_name.strip().lower()
+        by_name = [
+            f for f in hits
+            if (f.get("entity") or "").strip().lower() == name_l
+        ]
+        if len(by_name) == 1:
+            return by_name[0]
+        if len(by_name) > 1:
+            hits = by_name
+
+    # Still ambiguous: prefer exact folded label (without category suffix).
+    label_only = _fold_match_text(_normalize_match_label(match_text))
+    by_label = [
+        f for f in hits
+        if _fold_match_text(f.get("label") or "") == label_only
+    ]
+    if len(by_label) == 1:
+        return by_label[0]
+    if by_label:
+        return by_label[0]
+    return hits[0]
 
 
 def resolve_flow_from_match_text(
@@ -398,13 +471,13 @@ def resolve_flow_from_match_text(
     match_text: Any,
     *,
     entity_id: Optional[str] = None,
+    entity_name: Optional[str] = None,
 ) -> Optional[dict]:
     """Resolve a Flow match cell to a cash-flow document.
 
-    Accepts exact UI display ('Label - Category'), exact label, or case-insensitive variants.
-    Legacy flows with missing entity_id remain eligible (same rule as bulk_flow_match).
-    If entity-scoped resolution fails, a unique cross-entity exact match is accepted so the
-    file Flow match column still wins (caller should adopt that flow's entity_id).
+    Accepts exact UI display ('Label - Category'), exact label, accent-insensitive
+    variants, and unique cross-entity hits. When multiple entities share the same
+    label, prefers the row entity id/name.
     """
     if match_text is None:
         return None
@@ -413,20 +486,24 @@ def resolve_flow_from_match_text(
         return None
 
     scoped_hits = _find_flows_for_match_text(flows, text, entity_id)
-    if len(scoped_hits) == 1:
-        return scoped_hits[0]
-    if len(scoped_hits) > 1:
-        # Prefer exact display-label match when ambiguous.
-        lower = text.lower()
-        display_exact = [f for f in scoped_hits if flow_display_label(f).lower() == lower]
-        if len(display_exact) == 1:
-            return display_exact[0]
-        return scoped_hits[0]
+    picked = _prefer_flow_hits(
+        scoped_hits,
+        entity_id=entity_id,
+        entity_name=entity_name,
+        match_text=text,
+    )
+    if picked:
+        return picked
 
-    # Entity-scoped miss: allow a unique match on another entity / legacy row.
-    if entity_id:
+    # Entity-scoped miss: search all flows, then disambiguate by entity name/id.
+    if entity_id or entity_name:
         global_hits = _find_flows_for_match_text(flows, text, None)
-        if len(global_hits) == 1:
-            return global_hits[0]
+        return _prefer_flow_hits(
+            global_hits,
+            entity_id=entity_id,
+            entity_name=entity_name,
+            match_text=text,
+        )
 
-    return None
+    global_hits = _find_flows_for_match_text(flows, text, None)
+    return _prefer_flow_hits(global_hits, match_text=text)
