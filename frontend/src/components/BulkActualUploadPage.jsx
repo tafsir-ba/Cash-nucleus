@@ -175,7 +175,7 @@ const buildApplyReviewItems = (rows, applyResult) => {
       const isFail = row.status === "failed";
       const reason = isFail
         ? (row.error || errorByRowId[row.id] || "Unknown error")
-        : "No change — actual already matched planned (same value and variance mode).";
+        : "No change — this flow/month already has the same actual amount (idempotent skip). If the cash table still looks empty, refresh it; actuals without a planned line for that month are now shown.";
       items.push({ row, reason, kind: isFail ? "failed" : "skipped" });
       seen.add(row.id);
     }
