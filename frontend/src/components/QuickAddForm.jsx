@@ -16,7 +16,7 @@ import { EntitySelector } from "./EntitySelector";
 import { format } from "date-fns";
 import { inspectAmountInput, formatAmountInput } from "./amountExpression";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 const categories = ["Revenue", "Salary", "Tax", "Debt", "Expense", "COGS", "Transfer", "Other"];
 

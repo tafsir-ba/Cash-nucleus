@@ -13,7 +13,7 @@ import { Label } from "../components/ui/label";
 import { CashFlowTable } from "./CashFlowTable";
 import { inspectAmountInput, formatAmountInput } from "./amountExpression";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 const fallbackCategories = ["Revenue", "Salary", "Tax", "Debt", "Expense", "COGS", "Transfer", "Other"];
 const fallbackVarianceActions = [

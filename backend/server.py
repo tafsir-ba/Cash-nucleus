@@ -4133,8 +4133,16 @@ async def logout(response: Response):
     response.delete_cookie("access_token", path="/")
     return {"status": "ok"}
 
+def normalize_index_keys(keys) -> list:
+    """Normalize create_index keys so string names compare equal to pymongo key lists."""
+    if isinstance(keys, str):
+        return [(keys, 1)]
+    return [tuple(pair) for pair in keys]
+
+
 async def ensure_collection_index(collection, keys, **kwargs) -> None:
     """Create an index without crashing startup on option/data conflicts."""
+    normalized = normalize_index_keys(keys)
     try:
         await collection.create_index(keys, **kwargs)
         return
@@ -4142,29 +4150,28 @@ async def ensure_collection_index(collection, keys, **kwargs) -> None:
         logging.warning(
             "Index option conflict on %s %s: %s — dropping matching indexes and retrying",
             collection.name,
-            keys,
+            normalized,
             exc,
         )
         try:
             indexes = await collection.index_information()
-            wanted = list(keys)
             for name, info in indexes.items():
                 existing = [tuple(pair) for pair in info.get("key", [])]
-                if existing == wanted and name != "_id_":
+                if existing == normalized and name != "_id_":
                     await collection.drop_index(name)
                     logging.info("Dropped conflicting index %s on %s", name, collection.name)
             await collection.create_index(keys, **kwargs)
         except Exception as retry_exc:
-            logging.warning("Could not recreate index %s on %s: %s", keys, collection.name, retry_exc)
+            logging.warning("Could not recreate index %s on %s: %s", normalized, collection.name, retry_exc)
     except DuplicateKeyError as exc:
         logging.warning(
             "Unique index %s on %s was not created because existing documents collide: %s",
-            keys,
+            normalized,
             collection.name,
             exc,
         )
     except Exception as exc:
-        logging.warning("Index create failed on %s %s: %s", collection.name, keys, exc)
+        logging.warning("Index create failed on %s %s: %s", collection.name, normalized, exc)
 
 
 # ============== STARTUP ==============

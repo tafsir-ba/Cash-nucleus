@@ -14,7 +14,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popove
 import { format, parse } from "date-fns";
 import { inspectAmountInput, formatAmountInput } from "./amountExpression";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 const categories = ["Revenue", "Salary", "Tax", "Debt", "Expense", "COGS", "Transfer", "Other"];
 const certainties = [

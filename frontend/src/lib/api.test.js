@@ -16,6 +16,10 @@ describe("resolveApiBase", () => {
     expect(resolveApiBase("", "https://cash.evonucleus.ch")).toBe("/api");
     expect(resolveApiBase(undefined, "")).toBe("/api");
   });
+
+  it("trims whitespace on the configured backend URL", () => {
+    expect(resolveApiBase(" https://cash.evonucleus.ch ", "https://cash.evonucleus.ch")).toBe("/api");
+  });
 });
 
 describe("isRequestCanceled", () => {

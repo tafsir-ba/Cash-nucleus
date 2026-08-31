@@ -12,7 +12,7 @@ import {
 } from "../components/ui/dialog";
 import { FlowEditor } from "./FlowEditor";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 const formatCurrency = (amount) => {
   return new Intl.NumberFormat('de-CH', {

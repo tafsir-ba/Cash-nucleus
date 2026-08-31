@@ -39,6 +39,14 @@ async def reset_history(snapshots=None, audit=None):
         await server.db.bank_account_audit_log.insert_many(audit)
 
 
+def test_normalize_index_keys_string_and_list():
+    assert server.normalize_index_keys("email") == [("email", 1)]
+    assert server.normalize_index_keys([("entity_id", 1), ("month", 1)]) == [
+        ("entity_id", 1),
+        ("month", 1),
+    ]
+
+
 def test_history_empty(client: TestClient):
     asyncio.run(reset_history())
     resp = client.get("/api/treasury/cash-position-history")
