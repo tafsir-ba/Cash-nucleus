@@ -6,7 +6,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "../components/ui/dialog";
+} from "./ui/dialog";
 import {
   LineChart,
   Line,
@@ -21,8 +21,7 @@ import {
   buildCashPositionChartXDomain,
   formatChartDate,
 } from "./cashPositionChart";
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API, isRequestCanceled } from "../lib/api";
 
 const formatCurrency = (amount) =>
   new Intl.NumberFormat("de-CH", {
@@ -41,17 +40,27 @@ const fmtMovement = (delta) => {
   return base;
 };
 
-export const CashPositionHistoryDialog = ({ open, onOpenChange }) => {
+const emptyHistory = { days: [], account_audit_log: [] };
+
+const normalizeHistory = (payload) => ({
+  days: Array.isArray(payload?.days) ? payload.days : [],
+  account_audit_log: Array.isArray(payload?.account_audit_log) ? payload.account_audit_log : [],
+});
+
+export const CashPositionHistoryDialog = ({ open, onOpenChange, entities: entitiesProp }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [data, setData] = useState({ days: [], account_audit_log: [] });
-  const [entities, setEntities] = useState([]);
+  const [data, setData] = useState(emptyHistory);
+  const [fetchedEntities, setFetchedEntities] = useState([]);
   const [entityFilter, setEntityFilter] = useState("all");
   const [accountFilter, setAccountFilter] = useState("all");
   const [expandedDate, setExpandedDate] = useState(null);
 
+  const entities = Array.isArray(entitiesProp) && entitiesProp.length > 0 ? entitiesProp : fetchedEntities;
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) return undefined;
+    const controller = new AbortController();
     const run = async () => {
       setLoading(true);
       setError(null);
@@ -59,47 +68,66 @@ export const CashPositionHistoryDialog = ({ open, onOpenChange }) => {
         const params = {};
         if (accountFilter !== "all") params.account_id = accountFilter;
         if (entityFilter !== "all") params.entity_id = entityFilter;
-        const response = await axios.get(`${API}/treasury/cash-position-history`, { params });
-        setData(response.data || { days: [], account_audit_log: [] });
-      } catch {
+        const response = await axios.get(`${API}/treasury/cash-position-history`, {
+          params,
+          signal: controller.signal,
+        });
+        setData(normalizeHistory(response.data));
+      } catch (err) {
+        if (isRequestCanceled(err) || controller.signal.aborted) return;
         setError("Unable to load cash position history.");
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     };
     run();
+    return () => controller.abort();
   }, [open, entityFilter, accountFilter]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) return undefined;
+    if (Array.isArray(entitiesProp) && entitiesProp.length > 0) return undefined;
+    const controller = new AbortController();
     const loadEntities = async () => {
       try {
-        const response = await axios.get(`${API}/entities`);
-        setEntities(Array.isArray(response.data) ? response.data : []);
-      } catch {
-        setEntities([]);
+        const response = await axios.get(`${API}/entities`, { signal: controller.signal });
+        if (!controller.signal.aborted) {
+          setFetchedEntities(Array.isArray(response.data) ? response.data : []);
+        }
+      } catch (err) {
+        if (isRequestCanceled(err) || controller.signal.aborted) return;
+        setFetchedEntities([]);
       }
     };
     loadEntities();
-  }, [open]);
+    return () => controller.abort();
+  }, [open, entitiesProp]);
+
+  const days = data.days;
+  const auditLog = data.account_audit_log;
 
   const accountOptions = useMemo(() => {
     const map = new Map();
-    data.days.forEach((d) =>
+    days.forEach((d) =>
       d.changed_accounts?.forEach((a) => {
         if (!map.has(a.account_id)) map.set(a.account_id, a.account_name);
       }),
     );
     return [...map.entries()].map(([id, label]) => ({ id, label }));
-  }, [data.days]);
+  }, [days]);
 
-  const chartData = useMemo(() => buildCashPositionChartData(data.days), [data.days]);
+  const chartData = useMemo(() => buildCashPositionChartData(days), [days]);
 
   const chartXDomain = useMemo(() => buildCashPositionChartXDomain(chartData), [chartData]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-zinc-950 border-zinc-800 max-w-5xl max-h-[92vh] overflow-y-auto">
+      <DialogContent
+        className="bg-zinc-950 border-zinc-800 max-w-5xl max-h-[92vh] overflow-y-auto"
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onInteractOutside={(event) => event.preventDefault()}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle className="text-zinc-100 font-heading">Cash Position History</DialogTitle>
           <DialogDescription className="text-zinc-500">
@@ -202,14 +230,14 @@ export const CashPositionHistoryDialog = ({ open, onOpenChange }) => {
                     {error}
                   </td>
                 </tr>
-              ) : data.days.length === 0 ? (
+              ) : days.length === 0 ? (
                 <tr>
                   <td className="px-3 py-4 text-sm text-zinc-500" colSpan={5}>
                     No snapshot history yet.
                   </td>
                 </tr>
               ) : (
-                data.days.map((day) => (
+                days.map((day) => (
                   <Fragment key={day.date}>
                     <tr
                       className="border-b border-zinc-800/60 hover:bg-zinc-900/40 cursor-pointer"
@@ -267,10 +295,10 @@ export const CashPositionHistoryDialog = ({ open, onOpenChange }) => {
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/30 p-3">
           <p className="text-xs uppercase tracking-wider text-zinc-500 mb-2">Manual balance adjustment audit log</p>
           <div className="space-y-1 max-h-44 overflow-y-auto">
-            {data.account_audit_log.length === 0 ? (
+            {auditLog.length === 0 ? (
               <p className="text-xs text-zinc-600">No manual audit entries yet.</p>
             ) : (
-              data.account_audit_log.slice(0, 50).map((row) => (
+              auditLog.slice(0, 50).map((row) => (
                 <div key={row.id} className="text-xs text-zinc-400 flex flex-wrap items-center gap-2 border-b border-zinc-800/60 pb-1">
                   <span className="font-mono text-zinc-300">{new Date(row.changed_at).toLocaleString()}</span>
                   <span>{row.account_id}</span>

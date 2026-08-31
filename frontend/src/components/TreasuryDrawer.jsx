@@ -20,8 +20,7 @@ import { Label } from "../components/ui/label";
 import { CashPositionHistoryDialog } from "./CashPositionHistoryDialog";
 import { TreasuryAccountTable } from "./TreasuryAccountTable";
 import { inspectBalanceInput, formatAmountInput, formatBalancePreview } from "./amountExpression";
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 const formatCurrency = (amount) => {
   return new Intl.NumberFormat('de-CH', {
@@ -305,7 +304,13 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
 
   return (
     <>
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && historyOpen) return;
+        onOpenChange(nextOpen);
+      }}
+    >
       <SheetContent
         side="right"
         className="bg-zinc-950 border-zinc-800 w-[560px] sm:max-w-[560px] p-0 flex flex-col"
@@ -332,7 +337,11 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
                 <p className="text-xs text-zinc-500 uppercase tracking-wider mb-1">Total Cash Now</p>
                 <button
                   type="button"
-                  onClick={() => setHistoryOpen(true)}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setHistoryOpen(true);
+                  }}
                   className="text-left"
                   data-testid="treasury-total"
                 >
@@ -675,7 +684,11 @@ export const TreasuryDrawer = ({ open, onOpenChange, onDataChange, entities, onE
         </div>
       </SheetContent>
     </Sheet>
-    <CashPositionHistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} />
+    <CashPositionHistoryDialog
+      open={historyOpen}
+      onOpenChange={setHistoryOpen}
+      entities={entities}
+    />
     </>
   );
 };
