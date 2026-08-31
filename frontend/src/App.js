@@ -22,12 +22,11 @@ import { EntityFilter } from "./components/EntityFilter";
 import { HorizonSelector } from "./components/HorizonSelector";
 import { BulkActualUploadPage } from "./components/BulkActualUploadPage";
 import { CashHorizonPage } from "./components/CashHorizonPage";
+import { API } from "./lib/api";
 
 // Icons
 import { Gear, Bank, ListBullets, ArrowCounterClockwise, SignOut } from "@phosphor-icons/react";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
 const ENABLE_BULK_ACTUALS = String(process.env.REACT_APP_ENABLE_BULK_ACTUALS ?? "true").toLowerCase() !== "false";
 
 // Configure axios to send cookies

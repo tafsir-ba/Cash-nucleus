@@ -9,7 +9,7 @@ import { Label } from "../components/ui/label";
 import { FlowEditor } from "./FlowEditor";
 import { inspectAmountInput, formatAmountInput } from "./amountExpression";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 const formatCompact = (amount) => {
   const abs = Math.abs(amount);

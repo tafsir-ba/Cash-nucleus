@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { TrendUp, TrendDown, Equals, ArrowBendDownRight, Check, X } from "@phosphor-icons/react";
 import { inspectAmountInput, formatAmountInput } from "./amountExpression";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 const formatCurrency = (amount) => {
   return new Intl.NumberFormat('de-CH', {

@@ -23,7 +23,7 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import { Label } from "../components/ui/label";
 import { inspectAmountInput, formatAmountInput } from "./amountExpression";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 const formatCurrency = (amount) => {
   return new Intl.NumberFormat('de-CH', {

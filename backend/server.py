@@ -20,6 +20,7 @@ import math
 import json
 import hashlib
 from dateutil import parser as date_parser
+from pymongo.errors import DuplicateKeyError, OperationFailure
 
 from bulk_flow_match import best_flow_match, auto_select_flow_match_score as _auto_select_flow_match_score, flow_matches_import_direction
 from bulk_import_columns import (
@@ -207,16 +208,37 @@ class BankAccountUpdate(BaseModel):
     trigger: Literal["manual_adjustment", "import", "system_recalc"] = "manual_adjustment"
 
 
+SNAPSHOT_TRIGGERS = ("manual_adjustment", "import", "system_recalc")
+
+
+def coerce_snapshot_trigger(value: Any) -> str:
+    if value in SNAPSHOT_TRIGGERS:
+        return value
+    return "system_recalc"
+
+
+def coerce_iso_str(value: Any) -> str:
+    if value is None:
+        return datetime.now(timezone.utc).isoformat()
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    return str(value)
+
+
 class CashBalanceSnapshotAccount(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     account_id: str
     account_name: str
     entity_id: Optional[str] = None
-    entity: str
+    entity: str = ""
     balance_chf: float
-    movement_chf: float
+    movement_chf: float = 0.0
 
 
 class CashBalanceSnapshot(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     snapshot_type: Literal["daily_cash_position"] = "daily_cash_position"
     date: str
@@ -229,29 +251,32 @@ class CashBalanceSnapshot(BaseModel):
 
 
 class BankAccountAuditLog(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     account_id: str
     previous_balance_chf: float
     new_balance_chf: float
     delta_chf: float
     changed_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    changed_by: str
+    changed_by: str = "system"
     note: Optional[str] = None
     trigger: Literal["manual_adjustment", "import", "system_recalc"] = "manual_adjustment"
 
 
 class CashPositionDayEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     date: str
     total_cash_chf: float
     movement_chf: Optional[float] = None
-    created_at: str
-    created_by: str
-    trigger: Literal["manual_adjustment", "import", "system_recalc"]
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_by: str = "system"
+    trigger: Literal["manual_adjustment", "import", "system_recalc"] = "system_recalc"
     note: Optional[str] = None
-    changed_accounts: List[CashBalanceSnapshotAccount]
+    changed_accounts: List[CashBalanceSnapshotAccount] = []
 
 
 class CashPositionHistoryResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     days: List[CashPositionDayEntry]
     account_audit_log: List[BankAccountAuditLog]
 
@@ -1376,6 +1401,36 @@ async def delete_bank_account(
     return {"message": "Bank account deleted"}
 
 
+def _snapshot_day_key(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()
+    return text[:10] if text else None
+
+
+def _account_balance(account: dict) -> float:
+    try:
+        return round(float(account.get("balance_chf", 0.0) or 0.0), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _parse_audit_log_row(row: dict) -> Optional[BankAccountAuditLog]:
+    try:
+        payload = dict(row)
+        payload["trigger"] = coerce_snapshot_trigger(payload.get("trigger"))
+        payload["changed_at"] = coerce_iso_str(payload.get("changed_at"))
+        payload["changed_by"] = payload.get("changed_by") or "system"
+        return BankAccountAuditLog(**payload)
+    except Exception:
+        logging.warning("Skipping invalid bank account audit log row id=%s", row.get("id"))
+        return None
+
+
 @api_router.get("/treasury/cash-position-history", response_model=CashPositionHistoryResponse)
 async def get_cash_position_history(
     entity_id: Optional[str] = None,
@@ -1391,9 +1446,10 @@ async def get_cash_position_history(
 
     day_latest: Dict[str, dict] = {}
     for row in docs:
-        day_key = row.get("date")
+        day_key = _snapshot_day_key(row.get("date"))
         if not day_key:
             continue
+        row = {**row, "date": day_key}
         if day_key not in day_latest:
             day_latest[day_key] = row
 
@@ -1412,18 +1468,26 @@ async def get_cash_position_history(
     prev_day_accounts: Dict[str, float] = {}
     day_entries: List[CashPositionDayEntry] = []
     for row in selected_days:
-        accounts = row.get("accounts", [])
+        accounts = row.get("accounts") or []
+        if not isinstance(accounts, list):
+            accounts = []
         if entity_id:
             accounts = [
                 a
                 for a in accounts
-                if a.get("entity_id") == entity_id or (entity_name_filter and a.get("entity") == entity_name_filter)
+                if isinstance(a, dict)
+                and (
+                    a.get("entity_id") == entity_id
+                    or (entity_name_filter and a.get("entity") == entity_name_filter)
+                )
             ]
         if account_id:
-            accounts = [a for a in accounts if a.get("account_id") == account_id]
+            accounts = [a for a in accounts if isinstance(a, dict) and a.get("account_id") == account_id]
+        else:
+            accounts = [a for a in accounts if isinstance(a, dict)]
 
         current_account_map = {
-            a.get("account_id", ""): round(float(a.get("balance_chf", 0.0)), 2)
+            a.get("account_id", ""): _account_balance(a)
             for a in accounts
             if a.get("account_id")
         }
@@ -1432,29 +1496,33 @@ async def get_cash_position_history(
                 account_id=a.get("account_id", ""),
                 account_name=a.get("account_name", ""),
                 entity_id=a.get("entity_id"),
-                entity=a.get("entity", ""),
-                balance_chf=round(float(a.get("balance_chf", 0.0)), 2),
+                entity=a.get("entity") or "",
+                balance_chf=_account_balance(a),
                 movement_chf=round(
-                    float(a.get("balance_chf", 0.0)) - float(prev_day_accounts.get(a.get("account_id", ""), 0.0)),
+                    _account_balance(a) - float(prev_day_accounts.get(a.get("account_id", ""), 0.0)),
                     2,
                 ),
             )
             for a in accounts
-            if abs(float(a.get("balance_chf", 0.0)) - float(prev_day_accounts.get(a.get("account_id", ""), 0.0))) > 0.009
+            if abs(_account_balance(a) - float(prev_day_accounts.get(a.get("account_id", ""), 0.0))) > 0.009
         ]
-        day_total = round(sum(float(a.get("balance_chf", 0.0)) for a in accounts), 2)
-        day_entries.append(
-            CashPositionDayEntry(
-                date=row.get("date"),
-                total_cash_chf=day_total,
-                movement_chf=None if prev_total is None else round(day_total - prev_total, 2),
-                created_at=row.get("created_at"),
-                created_by=row.get("created_by", "system"),
-                trigger=row.get("trigger", "system_recalc"),
-                note=row.get("note"),
-                changed_accounts=changed_accounts,
+        day_total = round(sum(_account_balance(a) for a in accounts), 2)
+        try:
+            day_entries.append(
+                CashPositionDayEntry(
+                    date=row.get("date"),
+                    total_cash_chf=day_total,
+                    movement_chf=None if prev_total is None else round(day_total - prev_total, 2),
+                    created_at=coerce_iso_str(row.get("created_at")),
+                    created_by=row.get("created_by") or "system",
+                    trigger=coerce_snapshot_trigger(row.get("trigger")),
+                    note=row.get("note"),
+                    changed_accounts=changed_accounts,
+                )
             )
-        )
+        except Exception:
+            logging.warning("Skipping invalid cash position snapshot date=%s", row.get("date"))
+            continue
         prev_total = day_total
         prev_day_accounts = current_account_map
 
@@ -1464,7 +1532,11 @@ async def get_cash_position_history(
     audit_rows_raw = await db.bank_account_audit_log.find(
         audit_query, {"_id": 0}
     ).sort("changed_at", -1).to_list(5000)
-    audit_rows = [BankAccountAuditLog(**row) for row in audit_rows_raw]
+    audit_rows = []
+    for row in audit_rows_raw:
+        parsed = _parse_audit_log_row(row)
+        if parsed:
+            audit_rows.append(parsed)
     return CashPositionHistoryResponse(days=day_entries, account_audit_log=audit_rows)
 
 
@@ -4061,6 +4133,47 @@ async def logout(response: Response):
     response.delete_cookie("access_token", path="/")
     return {"status": "ok"}
 
+def normalize_index_keys(keys) -> list:
+    """Normalize create_index keys so string names compare equal to pymongo key lists."""
+    if isinstance(keys, str):
+        return [(keys, 1)]
+    return [tuple(pair) for pair in keys]
+
+
+async def ensure_collection_index(collection, keys, **kwargs) -> None:
+    """Create an index without crashing startup on option/data conflicts."""
+    normalized = normalize_index_keys(keys)
+    try:
+        await collection.create_index(keys, **kwargs)
+        return
+    except OperationFailure as exc:
+        logging.warning(
+            "Index option conflict on %s %s: %s — dropping matching indexes and retrying",
+            collection.name,
+            normalized,
+            exc,
+        )
+        try:
+            indexes = await collection.index_information()
+            for name, info in indexes.items():
+                existing = [tuple(pair) for pair in info.get("key", [])]
+                if existing == normalized and name != "_id_":
+                    await collection.drop_index(name)
+                    logging.info("Dropped conflicting index %s on %s", name, collection.name)
+            await collection.create_index(keys, **kwargs)
+        except Exception as retry_exc:
+            logging.warning("Could not recreate index %s on %s: %s", normalized, collection.name, retry_exc)
+    except DuplicateKeyError as exc:
+        logging.warning(
+            "Unique index %s on %s was not created because existing documents collide: %s",
+            normalized,
+            collection.name,
+            exc,
+        )
+    except Exception as exc:
+        logging.warning("Index create failed on %s %s: %s", collection.name, normalized, exc)
+
+
 # ============== STARTUP ==============
 @app.on_event("startup")
 async def seed_admin():
@@ -4080,24 +4193,28 @@ async def seed_admin():
         # Safety: do not rotate existing admin credentials on startup.
         # Changing ADMIN_PASSWORD in env should not silently overwrite real users.
         logging.info(f"Admin user already exists, skipping password reset: {admin_email}")
-    await db.users.create_index("email", unique=True)
-    await db.actual_import_batches.create_index([("id", 1)], unique=True)
-    await db.actual_import_batches.create_index([("entity_id", 1), ("created_at", -1)])
-    await db.actual_import_batches.create_index([("status", 1), ("created_at", -1)])
-    await db.actual_import_rows.create_index([("id", 1)], unique=True)
-    await db.actual_import_rows.create_index([("batch_id", 1), ("row_index", 1)], unique=True)
-    await db.actual_import_rows.create_index([("batch_id", 1), ("status", 1)])
-    await db.flow_occurrence_events.create_index([("id", 1)], unique=True)
-    await db.flow_occurrence_events.create_index([("flow_id", 1), ("month", 1), ("timestamp", -1)])
-    await db.cash_balance_snapshots.create_index(
+    await ensure_collection_index(db.users, "email", unique=True)
+    await ensure_collection_index(db.actual_import_batches, [("id", 1)], unique=True)
+    await ensure_collection_index(db.actual_import_batches, [("entity_id", 1), ("created_at", -1)])
+    await ensure_collection_index(db.actual_import_batches, [("status", 1), ("created_at", -1)])
+    await ensure_collection_index(db.actual_import_rows, [("id", 1)], unique=True)
+    await ensure_collection_index(db.actual_import_rows, [("batch_id", 1), ("row_index", 1)], unique=True)
+    await ensure_collection_index(db.actual_import_rows, [("batch_id", 1), ("status", 1)])
+    await ensure_collection_index(db.flow_occurrence_events, [("id", 1)], unique=True)
+    await ensure_collection_index(db.flow_occurrence_events, [("flow_id", 1), ("month", 1), ("timestamp", -1)])
+    await ensure_collection_index(
+        db.cash_balance_snapshots,
         [("entity_id", 1), ("month", 1)],
         unique=True,
         partialFilterExpression={"month": {"$type": "string"}, "entity_id": {"$type": "string"}},
     )
-    await db.cash_balance_snapshots.create_index([("snapshot_type", 1), ("date", -1), ("created_at", -1)])
-    await db.bank_account_audit_log.create_index([("account_id", 1), ("changed_at", -1)])
-    await db.cash_horizon_entries.create_index([("id", 1)], unique=True)
-    await db.cash_horizon_entries.create_index([("quadrant", 1), ("sort_order", 1)])
+    await ensure_collection_index(
+        db.cash_balance_snapshots,
+        [("snapshot_type", 1), ("date", -1), ("created_at", -1)],
+    )
+    await ensure_collection_index(db.bank_account_audit_log, [("account_id", 1), ("changed_at", -1)])
+    await ensure_collection_index(db.cash_horizon_entries, [("id", 1)], unique=True)
+    await ensure_collection_index(db.cash_horizon_entries, [("quadrant", 1), ("sort_order", 1)])
 
 app.include_router(api_router)
 

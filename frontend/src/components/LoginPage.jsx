@@ -1,7 +1,7 @@
 import { useState } from "react";
 import axios from "axios";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 export const LoginPage = ({ onLogin }) => {
   const [email, setEmail] = useState("");

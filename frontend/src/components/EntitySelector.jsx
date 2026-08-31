@@ -16,7 +16,7 @@ import {
 } from "../components/ui/dialog";
 import { Label } from "../components/ui/label";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 export const EntitySelector = ({ value, onChange, entities, onEntitiesChange }) => {
   const [showCreate, setShowCreate] = useState(false);

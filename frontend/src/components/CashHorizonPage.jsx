@@ -33,7 +33,7 @@ import {
   toDateInputValue,
 } from "./cashHorizon";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { API } from "../lib/api";
 
 const toneBorder = {
   confirmed_inflow: "border-emerald-500/30",
