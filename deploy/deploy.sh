@@ -145,7 +145,7 @@ run_backend_tests() {
   source venv/bin/activate
   pip install -q -r requirements.test.txt 2>/dev/null || pip install -q pytest mongomock-motor
   python3 scripts/verify_bulk_routes.py || exit 1
-  python3 -m pytest tests/test_bulk_actual_routes_smoke.py tests/test_bulk_flow_match_unit.py -q --tb=line || {
+  python3 -m pytest tests/test_bulk_actual_routes_smoke.py tests/test_bulk_flow_match_unit.py tests/test_ops_service_auth.py -q --tb=line || {
     echo "ERROR: Pre-deploy route tests failed"
     exit 1
   }
