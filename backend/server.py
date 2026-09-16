@@ -33,6 +33,7 @@ from bulk_import_columns import (
 
 from cash_horizon import analyze_cash_horizon, normalize_entry, resolve_expected_date
 
+from ops_service_auth import authorize_ops_service_request
 from xlsx_simple import read_first_sheet_as_dict_rows
 
 ROOT_DIR = Path(__file__).parent
@@ -88,7 +89,23 @@ def should_use_secure_cookies(request: Optional[Request] = None) -> bool:
 
     return True
 
+@app.middleware("http")
+async def ops_service_auth_middleware(request: Request, call_next):
+    """Accept a service API key and short-circuit to a read-only principal.
+
+    Invalid/missing service credentials are handled in ops_service_auth;
+    human JWT/cookie login is unchanged.
+    """
+    denied = authorize_ops_service_request(request)
+    if denied is not None:
+        return denied
+    return await call_next(request)
+
+
 async def get_current_user(request: Request) -> dict:
+    principal = getattr(request.state, "ops_service_principal", None)
+    if principal:
+        return principal
     token = request.cookies.get("access_token")
     if not token:
         auth_header = request.headers.get("Authorization", "")
