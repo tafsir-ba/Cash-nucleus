@@ -167,3 +167,60 @@ def test_debt_create_rejects_missing_entity(client):
         json={"creditor": "X", "total_debt_chf": 100, "entity_id": "missing"},
     )
     assert res.status_code == 400
+
+
+def test_bexio_source_and_sync(client, monkeypatch):
+    os.environ["BEXIO_PAT_EVOHOM"] = "test-pat-evohom"
+    os.environ["BEXIO_PAT_EVAHOMES"] = "test-pat-evahomes"
+
+    async def fake_fetch(connection_id: str):
+        amounts = {"evohom": 71260.35, "evahomes": 7467.0}
+        return {
+            "amount": amounts[connection_id],
+            "invoice_count": 16 if connection_id == "evohom" else 3,
+            "status_ids": None,
+            "amount_field": "total_net",
+            "connection_id": connection_id,
+        }
+
+    monkeypatch.setattr(server, "fetch_connection_pending_net", fake_fetch)
+
+    ent = client.post("/api/entities", json={"name": "Evohom SA"})
+    assert ent.status_code == 200, ent.text
+    entity_id = ent.json()["id"]
+
+    create_acc = client.post(
+        "/api/bank-accounts",
+        json={
+            "entity_id": entity_id,
+            "label": "Bexio Acc. Receivables",
+            "amount": 0,
+            "is_receivables_financing": True,
+            "balance_source": "bexio",
+            "bexio_connection": "evohom",
+        },
+    )
+    assert create_acc.status_code == 200, create_acc.text
+    body = create_acc.json()
+    assert body["balance_source"] == "bexio"
+    assert body["bexio_connection"] == "evohom"
+    assert body["amount"] == 71260.35
+    assert body["bexio_invoice_count"] == 16
+    account_id = body["id"]
+
+    # Manual amount edit blocked while sourced from Bexio
+    blocked = client.put(
+        f"/api/bank-accounts/{account_id}",
+        json={"amount": 1, "trigger": "manual_adjustment"},
+    )
+    assert blocked.status_code == 400
+
+    sync = client.post("/api/treasury/sync-bexio")
+    assert sync.status_code == 200, sync.text
+    assert sync.json()["synced"] == 1
+    assert sync.json()["failed"] == 0
+
+    conns = client.get("/api/integrations/bexio/connections")
+    assert conns.status_code == 200
+    ids = {c["id"] for c in conns.json()}
+    assert ids == {"evohom", "evahomes"}

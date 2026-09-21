@@ -70,12 +70,15 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
     amount: "",
     entity_id: "",
     is_receivables_financing: false,
+    balance_source: "manual",
+    bexio_connection: "",
   });
   const [showEntityCreate, setShowEntityCreate] = useState(false);
   const [newEntityName, setNewEntityName] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [adjustmentNote, setAdjustmentNote] = useState("");
+  const [bexioSyncing, setBexioSyncing] = useState(false);
 
   const fetchAccounts = useCallback(async () => {
     const response = await axios.get(`${API}/bank-accounts`);
@@ -87,17 +90,51 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
     setDebts(response.data);
   }, []);
 
+  const syncBexioAccounts = useCallback(async ({ silent = false } = {}) => {
+    setBexioSyncing(true);
+    try {
+      const response = await axios.post(`${API}/treasury/sync-bexio`);
+      const { synced, failed, results } = response.data || {};
+      if (!silent) {
+        if (failed > 0) {
+          const firstErr = (results || []).find((r) => !r.ok)?.error;
+          toast.error(
+            firstErr
+              ? `Bexio sync: ${failed} failed — ${firstErr}`
+              : `Bexio sync: ${failed} account(s) failed`
+          );
+        } else if (synced > 0) {
+          toast.success(`Bexio synced ${synced} account${synced === 1 ? "" : "s"}`);
+        }
+      } else if (failed > 0) {
+        const firstErr = (results || []).find((r) => !r.ok)?.error;
+        if (firstErr) toast.error(`Bexio sync failed: ${firstErr}`);
+      }
+      return response.data;
+    } catch (error) {
+      const detail = error?.response?.data?.detail;
+      const msg = typeof detail === "string" ? detail : "Bexio sync failed";
+      if (!silent) toast.error(msg);
+      return null;
+    } finally {
+      setBexioSyncing(false);
+    }
+  }, []);
+
   const loadTreasury = useCallback(async () => {
     setLoadError(null);
     try {
       await Promise.all([fetchAccounts(), fetchDebts()]);
+      // Refresh Bexio-sourced balances on every Treasury load/refresh.
+      await syncBexioAccounts({ silent: true });
+      await fetchAccounts();
     } catch (error) {
       console.error("Failed to load treasury:", error);
       setLoadError("Unable to load treasury data. Check connection and retry.");
     } finally {
       setInitialLoading(false);
     }
-  }, [fetchAccounts, fetchDebts]);
+  }, [fetchAccounts, fetchDebts, syncBexioAccounts]);
 
   useEffect(() => {
     loadTreasury();
@@ -118,6 +155,8 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
       amount: "",
       entity_id: entities.length > 0 ? entities[0].id : "",
       is_receivables_financing: false,
+      balance_source: "manual",
+      bexio_connection: "",
     });
     setAdjustmentNote("");
   };
@@ -139,31 +178,47 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.label || !formData.amount || !formData.entity_id) return;
+    if (!formData.label || !formData.entity_id) return;
+    const fromBexio = formData.balance_source === "bexio";
+    if (!fromBexio && !formData.amount) return;
 
-    const parsed = inspectBalanceInput(formData.amount);
-    if (!parsed.isValid) {
-      toast.error("Invalid balance expression");
-      return;
+    let amountValue = 0;
+    if (!fromBexio) {
+      const parsed = inspectBalanceInput(formData.amount);
+      if (!parsed.isValid) {
+        toast.error("Invalid balance expression");
+        return;
+      }
+      amountValue = parsed.value;
     }
 
     setLoading(true);
     try {
+      const entityName = entities.find((ent) => ent.id === formData.entity_id)?.name || "";
+      let bexioConnection = formData.bexio_connection || undefined;
+      if (fromBexio && !bexioConnection) {
+        const lower = entityName.toLowerCase();
+        if (lower.includes("evahomes")) bexioConnection = "evahomes";
+        else if (lower.includes("evohom")) bexioConnection = "evohom";
+      }
       await axios.post(`${API}/bank-accounts`, {
         label: formData.label,
-        amount: parsed.value,
+        amount: amountValue,
         entity_id: formData.entity_id,
         is_receivables_financing: !!formData.is_receivables_financing,
+        balance_source: fromBexio ? "bexio" : "manual",
+        bexio_connection: fromBexio ? bexioConnection : undefined,
         note: adjustmentNote || undefined,
-        trigger: "manual_adjustment",
+        trigger: fromBexio ? "import" : "manual_adjustment",
       });
-      toast.success("Account added");
+      toast.success(fromBexio ? "Account added (Bexio)" : "Account added");
       resetForm();
       setShowAddForm(false);
       fetchAccounts();
       onDataChange?.();
-    } catch {
-      toast.error("Failed to save account");
+    } catch (error) {
+      const detail = error?.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : "Failed to save account");
     } finally {
       setLoading(false);
     }
@@ -178,9 +233,17 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
       amount: updates.amount ?? account.amount,
       entity_id: updates.entity_id ?? account.entity_id,
       is_receivables_financing: updates.is_receivables_financing ?? account.is_receivables_financing,
+      balance_source: updates.balance_source ?? account.balance_source ?? "manual",
+      bexio_connection:
+        updates.bexio_connection !== undefined
+          ? updates.bexio_connection
+          : account.bexio_connection,
       note: updates.note,
       trigger: updates.trigger || "manual_adjustment",
     };
+    if (payload.balance_source !== "bexio") {
+      payload.bexio_connection = null;
+    }
 
     try {
       await axios.put(`${API}/bank-accounts/${accountId}`, payload);
@@ -353,20 +416,39 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
               Bank accounts, debt consolidation, and cash balance evolution.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setHistoryOpen(true)}
-            className="text-left bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3 hover:border-zinc-600 transition-colors"
-            data-testid="treasury-total"
-          >
-            <p className="text-xs text-zinc-500 uppercase tracking-wider mb-1">Total Cash Now</p>
-            <p className="text-2xl font-mono text-zinc-50 font-light tracking-tight">
-              {formatCurrency(totalBalance)}
-            </p>
-            <p className="text-xs text-zinc-600 mt-1">
-              {accounts.length} account{accounts.length !== 1 ? "s" : ""} · open evolution chart
-            </p>
-          </button>
+          <div className="flex flex-col sm:flex-row gap-2 sm:items-stretch">
+            <button
+              type="button"
+              onClick={async () => {
+                await syncBexioAccounts();
+                await fetchAccounts();
+                onDataChange?.();
+              }}
+              disabled={bexioSyncing}
+              className="text-left bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3 hover:border-zinc-600 transition-colors disabled:opacity-60"
+              data-testid="treasury-bexio-refresh"
+              title="Refresh Bexio-sourced account balances"
+            >
+              <p className="text-xs text-zinc-500 uppercase tracking-wider mb-1">Bexio</p>
+              <p className="text-sm text-zinc-200">
+                {bexioSyncing ? "Syncing…" : "Refresh invoices"}
+              </p>
+            </button>
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(true)}
+              className="text-left bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3 hover:border-zinc-600 transition-colors"
+              data-testid="treasury-total"
+            >
+              <p className="text-xs text-zinc-500 uppercase tracking-wider mb-1">Total Cash Now</p>
+              <p className="text-2xl font-mono text-zinc-50 font-light tracking-tight">
+                {formatCurrency(totalBalance)}
+              </p>
+              <p className="text-xs text-zinc-600 mt-1">
+                {accounts.length} account{accounts.length !== 1 ? "s" : ""} · open evolution chart
+              </p>
+            </button>
+          </div>
         </div>
 
         {initialLoading && (
@@ -547,6 +629,64 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
                 />
               </div>
               <div>
+                <Label className="text-xs text-zinc-500 mb-1.5 block">Balance source</Label>
+                <Select
+                  value={formData.balance_source}
+                  onValueChange={(v) =>
+                    setFormData({
+                      ...formData,
+                      balance_source: v,
+                      bexio_connection:
+                        v === "bexio"
+                          ? formData.bexio_connection || ""
+                          : "",
+                    })
+                  }
+                >
+                  <SelectTrigger
+                    className="w-full bg-zinc-950 border-zinc-800 h-[38px] text-sm"
+                    data-testid="account-source-select"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="manual">Manual</SelectItem>
+                    <SelectItem value="bexio">Bexio (invoice net)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {formData.balance_source === "bexio" ? (
+              <div>
+                <Label className="text-xs text-zinc-500 mb-1.5 block">Bexio company</Label>
+                <Select
+                  value={formData.bexio_connection || "auto"}
+                  onValueChange={(v) =>
+                    setFormData({
+                      ...formData,
+                      bexio_connection: v === "auto" ? "" : v,
+                    })
+                  }
+                >
+                  <SelectTrigger
+                    className="w-full bg-zinc-950 border-zinc-800 h-[38px] text-sm"
+                    data-testid="account-bexio-connection-select"
+                  >
+                    <SelectValue placeholder="Infer from entity" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">Infer from entity name</SelectItem>
+                    <SelectItem value="evohom">Evohom SA</SelectItem>
+                    <SelectItem value="evahomes">Evahomes SA</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="mt-1 text-[10px] text-zinc-600">
+                  Balance = sum of pending invoice net amounts. Synced on Treasury refresh.
+                </p>
+              </div>
+            ) : (
+              <div>
                 <Label className="text-xs text-zinc-500 mb-1.5 block">Balance (CHF)</Label>
                 <input
                   type="text"
@@ -562,7 +702,7 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
                   </p>
                 )}
               </div>
-            </div>
+            )}
 
             <label className="flex items-center gap-2 text-xs text-zinc-400">
               <input
@@ -591,7 +731,12 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
 
             <button
               type="submit"
-              disabled={loading || !formData.label || !formData.amount || !formData.entity_id}
+              disabled={
+                loading ||
+                !formData.label ||
+                !formData.entity_id ||
+                (formData.balance_source !== "bexio" && !formData.amount)
+              }
               className="btn-primary w-full flex items-center justify-center gap-2 text-sm py-2"
               data-testid="save-account-btn"
             >

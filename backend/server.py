@@ -5,7 +5,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional, Dict, Any, Literal, Tuple
 import uuid
 from datetime import datetime, timezone, date, timedelta
@@ -35,6 +35,14 @@ from cash_horizon import analyze_cash_horizon, normalize_entry, resolve_expected
 
 from ops_service_auth import authorize_ops_service_request
 from xlsx_simple import read_first_sheet_as_dict_rows
+from bexio_client import (
+    BexioError,
+    CONNECTION_EVOHOM,
+    CONNECTION_EVAHOMES,
+    fetch_connection_pending_net,
+    infer_connection_from_entity_name,
+    list_configured_connections,
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -195,6 +203,10 @@ class EntityUpdate(BaseModel):
     description: Optional[str] = None
 
 # ============== BANK ACCOUNT MODELS ==============
+BalanceSource = Literal["manual", "bexio"]
+BexioConnectionId = Literal["evohom", "evahomes"]
+
+
 class BankAccount(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -203,6 +215,11 @@ class BankAccount(BaseModel):
     label: str
     amount: float
     is_receivables_financing: bool = False
+    balance_source: BalanceSource = "manual"
+    bexio_connection: Optional[BexioConnectionId] = None
+    bexio_last_synced_at: Optional[str] = None
+    bexio_last_error: Optional[str] = None
+    bexio_invoice_count: Optional[int] = None
     last_movement: Optional[float] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -210,18 +227,53 @@ class BankAccount(BaseModel):
 class BankAccountCreate(BaseModel):
     entity_id: str
     label: str
-    amount: float
+    amount: float = 0.0
     is_receivables_financing: bool = False
+    balance_source: BalanceSource = "manual"
+    bexio_connection: Optional[BexioConnectionId] = None
     note: Optional[str] = None
     trigger: Literal["manual_adjustment", "import", "system_recalc"] = "manual_adjustment"
+
+    @field_validator("bexio_connection", mode="before")
+    @classmethod
+    def _empty_bexio_connection(cls, value):
+        if value in ("", "auto", "none", "null"):
+            return None
+        return value
 
 class BankAccountUpdate(BaseModel):
     entity_id: Optional[str] = None
     label: Optional[str] = None
     amount: Optional[float] = None
     is_receivables_financing: Optional[bool] = None
+    balance_source: Optional[BalanceSource] = None
+    bexio_connection: Optional[BexioConnectionId] = None
     note: Optional[str] = None
     trigger: Literal["manual_adjustment", "import", "system_recalc"] = "manual_adjustment"
+
+    @field_validator("bexio_connection", mode="before")
+    @classmethod
+    def _empty_bexio_connection(cls, value):
+        if value in ("", "auto", "none", "null"):
+            return None
+        return value
+
+
+class BexioSyncAccountResult(BaseModel):
+    account_id: str
+    label: str
+    connection_id: Optional[str] = None
+    ok: bool
+    amount: Optional[float] = None
+    previous_amount: Optional[float] = None
+    invoice_count: Optional[int] = None
+    error: Optional[str] = None
+
+
+class BexioSyncResponse(BaseModel):
+    synced: int
+    failed: int
+    results: List[BexioSyncAccountResult]
 
 
 class CashBalanceSnapshotAccount(BaseModel):
@@ -1196,6 +1248,128 @@ async def delete_entity(entity_id: str):
         raise HTTPException(status_code=404, detail="Entity not found")
     return {"message": "Entity deleted"}
 
+# ============== BEXIO SYNC HELPERS ==============
+def resolve_bexio_connection_for_account(
+    *,
+    balance_source: str,
+    bexio_connection: Optional[str],
+    entity_name: str,
+) -> Optional[str]:
+    if balance_source != "bexio":
+        return None
+    if bexio_connection in (CONNECTION_EVOHOM, CONNECTION_EVAHOMES):
+        return bexio_connection
+    inferred = infer_connection_from_entity_name(entity_name)
+    if inferred:
+        return inferred
+    raise HTTPException(
+        status_code=400,
+        detail="Bexio connection required (evohom or evahomes). Set it explicitly or name the entity Evohom SA / Evahomes SA.",
+    )
+
+
+async def apply_bexio_amount_to_account(
+    account: dict,
+    *,
+    user: Optional[dict] = None,
+    note: Optional[str] = None,
+) -> BexioSyncAccountResult:
+    account_id = account.get("id", "")
+    label = account.get("label", "")
+    connection_id = account.get("bexio_connection") or infer_connection_from_entity_name(
+        account.get("entity") or ""
+    )
+    previous = float(account.get("amount") or 0.0)
+    if not connection_id:
+        err = "No Bexio connection mapped for this account"
+        await db.bank_accounts.update_one(
+            {"id": account_id},
+            {"$set": {"bexio_last_error": err, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        )
+        return BexioSyncAccountResult(
+            account_id=account_id,
+            label=label,
+            connection_id=None,
+            ok=False,
+            previous_amount=previous,
+            error=err,
+        )
+
+    try:
+        fetched = await fetch_connection_pending_net(connection_id)
+        new_amount = float(fetched["amount"])
+        invoice_count = int(fetched.get("invoice_count") or 0)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        update_data: Dict[str, Any] = {
+            "amount": new_amount,
+            "bexio_connection": connection_id,
+            "bexio_last_synced_at": now_iso,
+            "bexio_last_error": None,
+            "bexio_invoice_count": invoice_count,
+            "updated_at": now_iso,
+        }
+        if abs(new_amount - previous) > 0.009:
+            update_data["last_movement"] = new_amount - previous
+        await db.bank_accounts.update_one({"id": account_id}, {"$set": update_data})
+        if abs(new_amount - previous) > 0.009:
+            actor = resolve_actor_label(user)
+            await insert_bank_account_audit_log(
+                account_id=account_id,
+                previous_balance_chf=previous,
+                new_balance_chf=new_amount,
+                changed_by=actor,
+                note=note or f"Bexio sync ({connection_id}): {invoice_count} invoices net",
+                trigger="import",
+            )
+        return BexioSyncAccountResult(
+            account_id=account_id,
+            label=label,
+            connection_id=connection_id,
+            ok=True,
+            amount=new_amount,
+            previous_amount=previous,
+            invoice_count=invoice_count,
+        )
+    except BexioError as exc:
+        err = str(exc)
+        await db.bank_accounts.update_one(
+            {"id": account_id},
+            {
+                "$set": {
+                    "bexio_last_error": err,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+        return BexioSyncAccountResult(
+            account_id=account_id,
+            label=label,
+            connection_id=connection_id,
+            ok=False,
+            previous_amount=previous,
+            error=err,
+        )
+    except Exception as exc:
+        err = f"Unexpected Bexio sync error: {exc}"
+        await db.bank_accounts.update_one(
+            {"id": account_id},
+            {
+                "$set": {
+                    "bexio_last_error": err,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+        return BexioSyncAccountResult(
+            account_id=account_id,
+            label=label,
+            connection_id=connection_id,
+            ok=False,
+            previous_amount=previous,
+            error=err,
+        )
+
+
 # ============== TREASURY SNAPSHOT HELPERS ==============
 def resolve_actor_label(user: Optional[dict]) -> str:
     if not user:
@@ -1293,10 +1467,35 @@ async def create_bank_account(account: BankAccountCreate, user: dict = Depends(g
     payload = account.model_dump()
     note = payload.pop("note", None)
     trigger = payload.pop("trigger", "manual_adjustment")
+    entity_name = entity.get("name", "")
+    balance_source = payload.get("balance_source") or "manual"
+    bexio_connection = resolve_bexio_connection_for_account(
+        balance_source=balance_source,
+        bexio_connection=payload.get("bexio_connection"),
+        entity_name=entity_name,
+    )
+    payload["balance_source"] = balance_source
+    payload["bexio_connection"] = bexio_connection
+    if balance_source == "bexio":
+        payload["amount"] = float(payload.get("amount") or 0.0)
+        trigger = "import"
     account_obj = BankAccount(**payload)
-    account_obj.entity = entity.get("name", "")
+    account_obj.entity = entity_name
     await db.bank_accounts.insert_one(account_obj.model_dump())
     actor = resolve_actor_label(user)
+
+    if balance_source == "bexio":
+        await apply_bexio_amount_to_account(
+            account_obj.model_dump(),
+            user=user,
+            note=note or "Initial Bexio sync",
+        )
+        refreshed = await db.bank_accounts.find_one({"id": account_obj.id}, {"_id": 0})
+        if refreshed:
+            account_obj = BankAccount(**refreshed)
+        await capture_cash_balance_snapshot(trigger=trigger, created_by=actor, note=note)
+        return account_obj
+
     await insert_bank_account_audit_log(
         account_id=account_obj.id,
         previous_balance_chf=0.0,
@@ -1310,10 +1509,20 @@ async def create_bank_account(account: BankAccountCreate, user: dict = Depends(g
 
 @api_router.put("/bank-accounts/{account_id}", response_model=BankAccount)
 async def update_bank_account(account_id: str, update: BankAccountUpdate, user: dict = Depends(get_optional_user)):
-    raw_update = update.model_dump(exclude_none=True)
+    raw_update = update.model_dump(exclude_unset=True)
+    # Drop explicit nulls for non-connection fields; keep bexio_connection=None so Auto can clear.
+    if "note" in raw_update and raw_update["note"] is None:
+        raw_update.pop("note")
     note = raw_update.pop("note", None)
     trigger = raw_update.pop("trigger", "manual_adjustment")
-    mutable_fields = {"entity_id", "label", "amount", "is_receivables_financing"}
+    mutable_fields = {
+        "entity_id",
+        "label",
+        "amount",
+        "is_receivables_financing",
+        "balance_source",
+        "bexio_connection",
+    }
     update_data = {k: v for k, v in raw_update.items() if k in mutable_fields}
     if not update_data:
         raise HTTPException(status_code=400, detail="No valid update data")
@@ -1325,14 +1534,47 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate, user: 
     old_amount = existing.get("amount", 0.0)
     new_amount = old_amount
     has_business_change = False
+    next_entity_name = existing.get("entity") or ""
 
     if "entity_id" in update_data:
         next_entity = await db.entities.find_one({"id": update_data["entity_id"]}, {"_id": 0, "name": 1})
         if not next_entity:
             raise HTTPException(status_code=400, detail="Entity not found")
         update_data["entity"] = next_entity.get("name", "")
+        next_entity_name = update_data["entity"]
         if update_data["entity_id"] != existing.get("entity_id"):
             has_business_change = True
+
+    next_source = update_data.get("balance_source", existing.get("balance_source") or "manual")
+    next_connection = update_data.get(
+        "bexio_connection", existing.get("bexio_connection")
+    )
+    if (
+        next_source == "bexio"
+        or "balance_source" in update_data
+        or "bexio_connection" in update_data
+        or "entity_id" in update_data
+    ):
+        resolved = resolve_bexio_connection_for_account(
+            balance_source=next_source,
+            bexio_connection=next_connection,
+            entity_name=next_entity_name,
+        )
+        update_data["balance_source"] = next_source
+        update_data["bexio_connection"] = resolved
+        if (existing.get("balance_source") or "manual") != next_source:
+            has_business_change = True
+        if (existing.get("bexio_connection") or None) != resolved:
+            has_business_change = True
+
+    if next_source == "bexio" and "amount" in update_data:
+        # Amount for Bexio-sourced accounts is owned by sync, not manual edits.
+        if (existing.get("balance_source") or "manual") == "bexio":
+            raise HTTPException(
+                status_code=400,
+                detail="Balance is sourced from Bexio. Switch source to Manual to edit, or refresh to sync.",
+            )
+        update_data.pop("amount", None)
 
     if "amount" in update_data:
         new_amount = update_data["amount"]
@@ -1345,16 +1587,33 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate, user: 
     if "is_receivables_financing" in update_data and bool(update_data["is_receivables_financing"]) != bool(existing.get("is_receivables_financing", False)):
         has_business_change = True
 
-    if not has_business_change:
+    switching_to_bexio = next_source == "bexio" and (existing.get("balance_source") or "manual") != "bexio"
+
+    if not has_business_change and not switching_to_bexio:
         raise HTTPException(status_code=400, detail="No business field changes detected")
 
-    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    result = await db.bank_accounts.find_one_and_update(
-        {"id": account_id}, {"$set": update_data},
-        return_document=True, projection={"_id": 0}
-    )
+    if update_data:
+        update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        result = await db.bank_accounts.find_one_and_update(
+            {"id": account_id}, {"$set": update_data},
+            return_document=True, projection={"_id": 0}
+        )
+    else:
+        result = existing
     if not result:
         raise HTTPException(status_code=404, detail="Bank account not found")
+
+    if next_source == "bexio":
+        await apply_bexio_amount_to_account(result, user=user, note=note)
+        refreshed = await db.bank_accounts.find_one({"id": account_id}, {"_id": 0})
+        result = refreshed or result
+        await capture_cash_balance_snapshot(
+            trigger="import",
+            created_by=resolve_actor_label(user),
+            note=note or "Bexio sync",
+        )
+        return result
+
     if abs(float(new_amount) - float(old_amount)) > 0.009:
         actor = resolve_actor_label(user)
         await insert_bank_account_audit_log(
@@ -1371,6 +1630,50 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate, user: 
         note=note,
     )
     return result
+
+
+@api_router.get("/integrations/bexio/connections")
+async def get_bexio_connections():
+    return list_configured_connections()
+
+
+@api_router.post("/treasury/sync-bexio", response_model=BexioSyncResponse)
+async def sync_treasury_bexio(user: dict = Depends(get_optional_user)):
+    """Refresh all Bexio-sourced bank accounts (pending invoice net totals)."""
+    accounts = await db.bank_accounts.find(
+        {"balance_source": "bexio"},
+        {"_id": 0},
+    ).to_list(200)
+    results: List[BexioSyncAccountResult] = []
+    for account in accounts:
+        results.append(await apply_bexio_amount_to_account(account, user=user))
+    synced = sum(1 for r in results if r.ok)
+    failed = len(results) - synced
+    if results:
+        await capture_cash_balance_snapshot(
+            trigger="import",
+            created_by=resolve_actor_label(user),
+            note="Treasury Bexio refresh",
+        )
+    return BexioSyncResponse(synced=synced, failed=failed, results=results)
+
+
+@api_router.post("/bank-accounts/{account_id}/sync-bexio", response_model=BexioSyncAccountResult)
+async def sync_bank_account_bexio(account_id: str, user: dict = Depends(get_optional_user)):
+    existing = await db.bank_accounts.find_one({"id": account_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Bank account not found")
+    if (existing.get("balance_source") or "manual") != "bexio":
+        raise HTTPException(status_code=400, detail="Account is not sourced from Bexio")
+    result = await apply_bexio_amount_to_account(existing, user=user)
+    if result.ok:
+        await capture_cash_balance_snapshot(
+            trigger="import",
+            created_by=resolve_actor_label(user),
+            note=f"Bexio sync: {existing.get('label')}",
+        )
+    return result
+
 
 @api_router.delete("/bank-accounts/{account_id}")
 async def delete_bank_account(

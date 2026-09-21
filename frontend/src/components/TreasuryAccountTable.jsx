@@ -7,7 +7,15 @@ import {
   formatBalancePreview,
 } from "./amountExpression";
 
-const EDITABLE_FIELDS = ["entity_id", "label", "amount", "is_receivables_financing", "note"];
+const EDITABLE_FIELDS = [
+  "entity_id",
+  "label",
+  "amount",
+  "is_receivables_financing",
+  "note",
+  "balance_source",
+  "bexio_connection",
+];
 
 const inputClass =
   "w-full bg-zinc-950 border border-zinc-700 text-sm rounded px-2 py-1 text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500";
@@ -63,11 +71,17 @@ export const TreasuryAccountTable = ({
   }, [editingCell]);
 
   const startEdit = useCallback((account, field) => {
+    if (field === "amount" && (account.balance_source || "manual") === "bexio") {
+      toast.message("Balance is sourced from Bexio — switch Source to Manual to edit");
+      return;
+    }
     let initial = "";
     if (field === "entity_id") initial = account.entity_id;
     else if (field === "label") initial = account.label;
     else if (field === "amount") initial = formatAmountInput(account.amount);
     else if (field === "note") initial = rowNotes[account.id] || "";
+    else if (field === "balance_source") initial = account.balance_source || "manual";
+    else if (field === "bexio_connection") initial = account.bexio_connection || "";
     setEditValue(initial);
     setEditingCell({ accountId: account.id, field });
     setDirtyIds((prev) => new Set(prev).add(account.id));
@@ -116,6 +130,28 @@ export const TreasuryAccountTable = ({
       const next = !!rawValue;
       if (next !== !!account.is_receivables_financing) {
         updates.is_receivables_financing = next;
+        hasChange = true;
+      }
+    } else if (field === "balance_source") {
+      const next = rawValue === "bexio" ? "bexio" : "manual";
+      if (next !== (account.balance_source || "manual")) {
+        updates.balance_source = next;
+        if (next === "bexio") {
+          updates.trigger = "import";
+          if (!account.bexio_connection) {
+            const entityName = (entities.find((e) => e.id === account.entity_id)?.name || "").toLowerCase();
+            if (entityName.includes("evahomes")) updates.bexio_connection = "evahomes";
+            else if (entityName.includes("evohom")) updates.bexio_connection = "evohom";
+          }
+        }
+        hasChange = true;
+      }
+    } else if (field === "bexio_connection") {
+      const next = rawValue || null;
+      if (next !== (account.bexio_connection || null)) {
+        updates.bexio_connection = next;
+        updates.balance_source = "bexio";
+        updates.trigger = "import";
         hasChange = true;
       }
     } else if (field === "note") {
@@ -169,7 +205,7 @@ export const TreasuryAccountTable = ({
         return next;
       });
     }
-  }, [onSaveAccount, rowNotes]);
+  }, [onSaveAccount, rowNotes, entities]);
 
   const handleKeyDown = (e, account, field) => {
     if (e.key === "Enter") {
@@ -188,6 +224,47 @@ export const TreasuryAccountTable = ({
         saveField(account, field, editValueRef.current);
       }
     }, 150);
+  };
+
+  const renderSourceCell = (account) => {
+    const source = account.balance_source || "manual";
+    return (
+      <div className="space-y-1">
+        <select
+          value={source}
+          onChange={(e) => saveField(account, "balance_source", e.target.value)}
+          className={`${inputClass} text-xs`}
+          data-testid={`inline-source-${account.id}`}
+          title={
+            account.bexio_last_error
+              ? `Bexio error: ${account.bexio_last_error}`
+              : account.bexio_last_synced_at
+                ? `Last synced ${account.bexio_last_synced_at}`
+                : undefined
+          }
+        >
+          <option value="manual">Manual</option>
+          <option value="bexio">Bexio</option>
+        </select>
+        {source === "bexio" && (
+          <select
+            value={account.bexio_connection || ""}
+            onChange={(e) => saveField(account, "bexio_connection", e.target.value)}
+            className={`${inputClass} text-[10px]`}
+            data-testid={`inline-bexio-connection-${account.id}`}
+          >
+            <option value="">Auto</option>
+            <option value="evohom">Evohom</option>
+            <option value="evahomes">Evahomes</option>
+          </select>
+        )}
+        {source === "bexio" && account.bexio_last_error && (
+          <p className="text-[10px] text-rose-400 leading-tight line-clamp-2" title={account.bexio_last_error}>
+            Sync error
+          </p>
+        )}
+      </div>
+    );
   };
 
   const renderEntityCell = (account) => {
@@ -282,6 +359,7 @@ export const TreasuryAccountTable = ({
           <tr className="border-b border-zinc-800 bg-zinc-900/50">
             <SortHeader field="entity" sortField={sortField} sortDir={sortDir} onSort={onSort}>Entity</SortHeader>
             <SortHeader field="label" sortField={sortField} sortDir={sortDir} onSort={onSort}>Account</SortHeader>
+            <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-left py-3 px-3">Source</th>
             <SortHeader field="amount" sortField={sortField} sortDir={sortDir} onSort={onSort}>{"Balance"}</SortHeader>
             <SortHeader field="last_movement" sortField={sortField} sortDir={sortDir} onSort={onSort}>Movement</SortHeader>
             <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-right py-3 px-3">Share</th>
@@ -296,6 +374,7 @@ export const TreasuryAccountTable = ({
             const isDirty = dirtyIds.has(account.id);
             const isSaving = savingIds.has(account.id);
             const noteDisplay = rowNotes[account.id] ? rowNotes[account.id] : "—";
+            const fromBexio = (account.balance_source || "manual") === "bexio";
 
             return (
               <tr
@@ -310,8 +389,26 @@ export const TreasuryAccountTable = ({
                 <td className="py-2 px-3">
                   {renderTextCell(account, "label", account.label, "text-sm text-zinc-200")}
                 </td>
+                <td className="py-2 px-3 align-top">{renderSourceCell(account)}</td>
                 <td className="py-2 px-3">
-                  {renderTextCell(account, "amount", formatCurrency(account.amount), "text-sm font-mono text-zinc-100 tabular-nums")}
+                  {fromBexio ? (
+                    <div>
+                      <span
+                        className="text-sm font-mono text-zinc-100 tabular-nums"
+                        data-testid={`cell-amount-${account.id}`}
+                        title={
+                          account.bexio_invoice_count != null
+                            ? `${account.bexio_invoice_count} invoices · net`
+                            : "Bexio invoice net"
+                        }
+                      >
+                        {formatCurrency(account.amount)}
+                      </span>
+                      <p className="text-[10px] text-emerald-500/80 mt-0.5">Bexio net</p>
+                    </div>
+                  ) : (
+                    renderTextCell(account, "amount", formatCurrency(account.amount), "text-sm font-mono text-zinc-100 tabular-nums")
+                  )}
                 </td>
                 <td
                   className={`py-2.5 px-3 text-xs font-mono tabular-nums ${

@@ -60,6 +60,13 @@ cat > .env << 'EOF'
 MONGO_URL="mongodb+srv://USERNAME:PASSWORD@cluster.mongodb.net"
 DB_NAME="cashpilot"
 CORS_ORIGINS="https://yourdomain.com"
+# Optional: Bexio invoice net sync for Treasury (Personal Access Tokens from developer.bexio.com/pat)
+# BEXIO_PAT_EVOHOM="..."
+# BEXIO_PAT_EVAHOMES="..."
+# Optional shared fallback if both companies share one token:
+# BEXIO_PAT="..."
+# Optional: restrict invoice status IDs (comma-separated). Empty = open residual heuristic.
+# BEXIO_INVOICE_STATUS_IDS=
 EOF
 
 # Test it runs
