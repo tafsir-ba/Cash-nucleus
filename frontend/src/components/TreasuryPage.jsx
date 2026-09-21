@@ -58,6 +58,8 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
   const [accounts, setAccounts] = useState([]);
   const [debts, setDebts] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [debtEditingId, setDebtEditingId] = useState(null);
   const [debtForm, setDebtForm] = useState(emptyDebtForm());
   const [showAddDebt, setShowAddDebt] = useState(false);
@@ -76,27 +78,30 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
   const [adjustmentNote, setAdjustmentNote] = useState("");
 
   const fetchAccounts = useCallback(async () => {
-    try {
-      const response = await axios.get(`${API}/bank-accounts`);
-      setAccounts(response.data);
-    } catch (error) {
-      console.error("Failed to fetch accounts:", error);
-    }
+    const response = await axios.get(`${API}/bank-accounts`);
+    setAccounts(response.data);
   }, []);
 
   const fetchDebts = useCallback(async () => {
-    try {
-      const response = await axios.get(`${API}/treasury/debts`);
-      setDebts(response.data);
-    } catch (error) {
-      console.error("Failed to fetch debts:", error);
-    }
+    const response = await axios.get(`${API}/treasury/debts`);
+    setDebts(response.data);
   }, []);
 
-  useEffect(() => {
-    fetchAccounts();
-    fetchDebts();
+  const loadTreasury = useCallback(async () => {
+    setLoadError(null);
+    try {
+      await Promise.all([fetchAccounts(), fetchDebts()]);
+    } catch (error) {
+      console.error("Failed to load treasury:", error);
+      setLoadError("Unable to load treasury data. Check connection and retry.");
+    } finally {
+      setInitialLoading(false);
+    }
   }, [fetchAccounts, fetchDebts]);
+
+  useEffect(() => {
+    loadTreasury();
+  }, [loadTreasury]);
 
   useEffect(() => {
     if (entities.length > 0 && !formData.entity_id) {
@@ -364,7 +369,33 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
           </button>
         </div>
 
-        {accounts.length > 0 && totalBalance > 0 && (
+        {initialLoading && (
+          <div className="text-sm text-zinc-500 py-8 text-center" data-testid="treasury-loading">
+            Loading treasury...
+          </div>
+        )}
+
+        {loadError && (
+          <div
+            className="border border-rose-500/30 bg-rose-500/10 text-rose-300 text-sm rounded-lg px-4 py-3 flex items-center justify-between gap-3"
+            data-testid="treasury-load-error"
+          >
+            <span>{loadError}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setInitialLoading(true);
+                loadTreasury();
+              }}
+              className="text-xs uppercase tracking-wider text-rose-200 hover:text-white"
+              data-testid="treasury-retry-btn"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {!initialLoading && !loadError && accounts.length > 0 && totalBalance > 0 && (
           <div data-testid="liquidity-bar">
             <p className="text-xs text-zinc-500 uppercase tracking-wider mb-2">Liquidity Distribution</p>
             <div className="flex h-3 rounded-full overflow-hidden gap-0.5">
@@ -397,6 +428,8 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
           </div>
         )}
 
+        {!initialLoading && !loadError && (
+        <>
         <div>
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs text-zinc-500 uppercase tracking-wider">Accounts</p>
@@ -732,6 +765,9 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
             </div>
           )}
         </div>
+
+        </>
+        )}
 
         {showEntityCreate && (
           <div className="fixed inset-0 z-[60] bg-zinc-950/80 flex items-center justify-center">

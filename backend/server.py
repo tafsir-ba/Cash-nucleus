@@ -1792,6 +1792,9 @@ async def create_cash_flow(flow: CashFlowCreate):
         raise HTTPException(status_code=400, detail="Entity not found")
     flow_data = flow.model_dump()
     flow_data["amount"] = normalize_amount_for_category(flow_data["category"], flow_data["amount"])
+    # Denormalize entity name for consumers that read flow.entity directly
+    # (treasury debt list also resolves via entity_map as a fallback).
+    flow_data["entity"] = entity.get("name", "")
     flow_obj = CashFlow(**flow_data)
     await db.cash_flows.insert_one(flow_obj.model_dump())
     await push_undo("create", "cash_flows", [flow_obj.id], description=f"Create: {flow_obj.label}")
