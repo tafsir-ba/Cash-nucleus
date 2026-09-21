@@ -360,6 +360,11 @@ class TreasuryDebtUpdate(BaseModel):
     creditor: Optional[str] = None
     total_debt_chf: Optional[float] = None
 
+class TreasuryDebtCreate(BaseModel):
+    creditor: str
+    total_debt_chf: float
+    entity_id: str
+
 # ============== CASH FLOW MODELS ==============
 class CashFlow(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -1665,6 +1670,33 @@ async def get_treasury_debts(entity_id: Optional[str] = None):
     debts.sort(key=lambda d: d["total_debt_chf"], reverse=True)
     return debts
 
+@api_router.post("/treasury/debts", response_model=CashFlow)
+async def create_treasury_debt(payload: TreasuryDebtCreate):
+    """Create a one-time debt-tagged cash flow from the treasury module."""
+    creditor = (payload.creditor or "").strip()
+    if not creditor:
+        raise HTTPException(status_code=400, detail="Creditor cannot be empty")
+    total_abs = abs(float(payload.total_debt_chf))
+    if total_abs <= 0:
+        raise HTTPException(status_code=400, detail="Total debt must be greater than zero")
+
+    entity = await db.entities.find_one({"id": payload.entity_id})
+    if not entity:
+        raise HTTPException(status_code=400, detail="Entity not found")
+
+    today = date.today().isoformat()
+    return await create_cash_flow(
+        CashFlowCreate(
+            label=creditor,
+            amount=-total_abs,
+            date=today,
+            category=Category.DEBT,
+            certainty=Certainty.MATERIALIZED,
+            recurrence=Recurrence.NONE,
+            entity_id=payload.entity_id,
+        )
+    )
+
 @api_router.put("/treasury/debts/{flow_id}", response_model=CashFlow)
 async def update_treasury_debt(flow_id: str, update: TreasuryDebtUpdate):
     """Update debt from treasury context while preserving underlying cash flow behavior."""
@@ -1701,6 +1733,16 @@ async def update_treasury_debt(flow_id: str, update: TreasuryDebtUpdate):
         raise HTTPException(status_code=400, detail="No valid debt update data")
 
     return await update_cash_flow(flow_id, CashFlowUpdate(**patch))
+
+@api_router.delete("/treasury/debts/{flow_id}")
+async def delete_treasury_debt(flow_id: str):
+    """Delete a debt-tagged cash flow from the treasury module."""
+    flow = await db.cash_flows.find_one({"id": flow_id}, {"_id": 0})
+    if not flow:
+        raise HTTPException(status_code=404, detail="Debt flow not found")
+    if flow.get("category") != Category.DEBT.value:
+        raise HTTPException(status_code=400, detail="Flow is not categorized as debt")
+    return await delete_cash_flow(flow_id)
 
 # ============== CASH FLOW ROUTES ==============
 @api_router.get("/cash-flows")

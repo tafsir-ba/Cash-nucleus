@@ -1,47 +1,34 @@
 import { useState, useEffect, useCallback } from "react";
 import "@/App.css";
 import axios from "axios";
-import { Toaster, toast } from "sonner";
+import { Toaster } from "sonner";
 
-// Components
 import { LoginPage } from "./components/LoginPage";
-import { KPICards } from "./components/KPICards";
-import { ScenarioToggle } from "./components/ScenarioToggle";
-import { ProjectionChart } from "./components/ProjectionChart";
-import { MonthlyTable } from "./components/MonthlyTable";
-import { QuickAddForm } from "./components/QuickAddForm";
-import { MonthlyPLPanel } from "./components/MonthlyPLPanel";
-import { CashFlowTable } from "./components/CashFlowTable";
-import { EntryLogPage } from "./components/EntryLogPage";
-import { DecisionPanel } from "./components/DecisionPanel";
-import { BankAccountsDialog } from "./components/BankAccountsDialog";
-import { TreasuryDrawer } from "./components/TreasuryDrawer";
-import { SettingsDialog } from "./components/SettingsDialog";
-import { EntryLogDialog } from "./components/EntryLogDialog";
-import { EntityFilter } from "./components/EntityFilter";
-import { HorizonSelector } from "./components/HorizonSelector";
-import { BulkActualUploadPage } from "./components/BulkActualUploadPage";
+import { TreasuryPage } from "./components/TreasuryPage";
 import { CashHorizonPage } from "./components/CashHorizonPage";
 
-// Icons
-import { Gear, Bank, ListBullets, ArrowCounterClockwise, SignOut } from "@phosphor-icons/react";
+import { SignOut } from "@phosphor-icons/react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
-const ENABLE_BULK_ACTUALS = String(process.env.REACT_APP_ENABLE_BULK_ACTUALS ?? "true").toLowerCase() !== "false";
 
-// Configure axios to send cookies
 axios.defaults.withCredentials = true;
 
 function App() {
-  // Auth state: null = checking, false = not logged in, object = logged in
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
 
   useEffect(() => {
-    axios.get(`${API}/auth/me`)
-      .then(res => { setUser(res.data); setAuthChecked(true); })
-      .catch(() => { setUser(false); setAuthChecked(true); });
+    axios
+      .get(`${API}/auth/me`)
+      .then((res) => {
+        setUser(res.data);
+        setAuthChecked(true);
+      })
+      .catch(() => {
+        setUser(false);
+        setAuthChecked(true);
+      });
   }, []);
 
   const handleLogout = async () => {
@@ -66,51 +53,9 @@ function App() {
   return <Dashboard user={user} onLogout={handleLogout} />;
 }
 
-function Dashboard({ user, onLogout }) {
-  const [scenario, setScenario] = useState("likely");
-  const [horizon, setHorizon] = useState(12);
-  const [projection, setProjection] = useState(null);
-  const [selectedMonth, setSelectedMonth] = useState(null);
-  const [monthDetails, setMonthDetails] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [hasAccounts, setHasAccounts] = useState(false);
-  const [hasFlows, setHasFlows] = useState(false);
+function Dashboard({ onLogout }) {
   const [entities, setEntities] = useState([]);
-  const [selectedEntityId, setSelectedEntityId] = useState(null);
-  
-  // Dialog states
-  const [bankAccountsOpen, setBankAccountsOpen] = useState(false);
-  const [treasuryOpen, setTreasuryOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [entryLogOpen, setEntryLogOpen] = useState(false);
-  
-  // Tab state + flows for table
-  const [activeTab, setActiveTab] = useState("chart"); // "chart" | "table" | "entries" | "bulk_actuals" | "cash_horizon"
-  const [allFlows, setAllFlows] = useState([]);
-  /** Bumps when any screen mutates cash flows so Bulk Actuals can refetch the flow match list. */
-  const [dataRevision, setDataRevision] = useState(0);
-  
-  // Undo state
-  const [undoInfo, setUndoInfo] = useState(null);
-  
-  const checkUndo = useCallback(async () => {
-    try {
-      const res = await axios.get(`${API}/undo/peek`);
-      setUndoInfo(res.data.has_undo ? res.data : null);
-    } catch { setUndoInfo(null); }
-  }, []);
-  
-  const handleUndo = async () => {
-    try {
-      const res = await axios.post(`${API}/undo`);
-      if (res.data.status === "undone") {
-        toast.success(`Undone: ${res.data.description}`);
-        handleDataChange();
-      }
-    } catch (err) {
-      toast.error("Undo failed");
-    }
-  };
+  const [activeTab, setActiveTab] = useState("treasury"); // "treasury" | "cash_horizon"
 
   const fetchEntities = useCallback(async () => {
     try {
@@ -121,392 +66,75 @@ function Dashboard({ user, onLogout }) {
     }
   }, []);
 
-  const fetchProjection = useCallback(async () => {
-    try {
-      const params = { scenario, horizon };
-      if (selectedEntityId) params.entity_id = selectedEntityId;
-      
-      const response = await axios.get(`${API}/projection`, { params });
-      setProjection(response.data);
-    } catch (error) {
-      console.error("Failed to fetch projection:", error);
-      toast.error("Failed to load projection data");
-    } finally {
-      setLoading(false);
-    }
-  }, [scenario, horizon, selectedEntityId]);
-
-  const checkData = useCallback(async () => {
-    try {
-      const params = selectedEntityId ? { entity_id: selectedEntityId } : {};
-      const [accountsRes, flowsRes] = await Promise.all([
-        axios.get(`${API}/bank-accounts`, { params }),
-        axios.get(`${API}/cash-flows`, { params })
-      ]);
-      setHasAccounts(accountsRes.data.length > 0);
-      setHasFlows(flowsRes.data.length > 0);
-      setAllFlows(flowsRes.data);
-    } catch (error) {
-      console.error("Failed to check data:", error);
-    }
-  }, [selectedEntityId]);
-
-  const fetchMonthDetails = useCallback(async (month) => {
-    if (!month) return;
-    try {
-      const params = { scenario };
-      if (selectedEntityId) params.entity_id = selectedEntityId;
-      
-      const response = await axios.get(`${API}/month-details/${month}`, { params });
-      setMonthDetails(response.data);
-    } catch (error) {
-      console.error("Failed to fetch month details:", error);
-    }
-  }, [scenario, selectedEntityId]);
-
   useEffect(() => {
     fetchEntities();
   }, [fetchEntities]);
 
-  useEffect(() => {
-    fetchProjection();
-    checkData();
-    checkUndo();
-  }, [fetchProjection, checkData, checkUndo]);
-
-  useEffect(() => {
-    if (selectedMonth) {
-      fetchMonthDetails(selectedMonth);
-    } else {
-      setMonthDetails(null);
-    }
-  }, [selectedMonth, fetchMonthDetails]);
-
-  const handleDataChange = () => {
-    fetchProjection();
-    checkData();
-    checkUndo();
-    setDataRevision((r) => r + 1);
-    if (selectedMonth) fetchMonthDetails(selectedMonth);
-  };
-
-  const handleCashFlowAdded = () => {
-    handleDataChange();
-    toast.success("Added");
-  };
-
-  const handleMonthSelect = (month) => {
-    setSelectedMonth(month === selectedMonth ? null : month);
-  };
-
-  const hasData = hasAccounts || hasFlows;
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
-        <div className="text-zinc-400 font-body">Loading...</div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-zinc-950" data-testid="cash-dashboard">
       <Toaster position="top-right" theme="dark" />
-      
-      {/* Header */}
+
       <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-50">
-        <div
-          className={`w-full mx-auto py-4 ${
-            activeTab === "bulk_actuals"
-              ? "max-w-none px-3 sm:px-4 lg:px-6"
-              : "max-w-[1600px] px-4 md:px-6 lg:px-8"
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div>
+        <div className="w-full mx-auto py-4 max-w-[1600px] px-4 md:px-6 lg:px-8">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-4 min-w-0">
               <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-zinc-50 font-heading whitespace-nowrap">
-                  Cash Pilot
-                </h1>
-              </div>
-              
-              <EntityFilter entities={entities} selectedId={selectedEntityId} onChange={setSelectedEntityId} />
-            </div>
-            
-            <div className="flex items-center gap-3">
-              <HorizonSelector value={horizon} onChange={setHorizon} />
-              <ScenarioToggle value={scenario} onChange={setScenario} />
-              
-              <div className="flex items-center gap-2 ml-4 border-l border-zinc-800 pl-4">
-                {undoInfo && (
-                  <button
-                    onClick={handleUndo}
-                    className="p-2 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 rounded-md transition-colors"
-                    title={`Undo: ${undoInfo.description}`}
-                    data-testid="undo-btn"
-                  >
-                    <ArrowCounterClockwise size={20} />
-                  </button>
-                )}
+                Cash Pilot
+              </h1>
+              <div
+                className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 p-0.5 rounded-md"
+                data-testid="view-tabs"
+              >
                 <button
-                  onClick={() => setEntryLogOpen(true)}
-                  className="p-2 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md transition-colors"
-                  title="Entry Log"
-                  data-testid="entry-log-btn"
+                  onClick={() => setActiveTab("treasury")}
+                  className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                    activeTab === "treasury"
+                      ? "bg-zinc-800 text-zinc-100"
+                      : "text-zinc-500 hover:text-zinc-300"
+                  }`}
+                  data-testid="tab-treasury"
                 >
-                  <ListBullets size={20} />
+                  Treasury
                 </button>
                 <button
-                  onClick={() => setTreasuryOpen(true)}
-                  className="p-2 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md transition-colors"
-                  title="Bank Accounts"
-                  data-testid="bank-accounts-btn"
+                  onClick={() => setActiveTab("cash_horizon")}
+                  className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                    activeTab === "cash_horizon"
+                      ? "bg-zinc-800 text-zinc-100"
+                      : "text-zinc-500 hover:text-zinc-300"
+                  }`}
+                  data-testid="tab-cash-horizon"
                 >
-                  <Bank size={20} />
-                </button>
-                <button
-                  onClick={() => setSettingsOpen(true)}
-                  className="p-2 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md transition-colors"
-                  title="Settings"
-                  data-testid="settings-btn"
-                >
-                  <Gear size={20} />
-                </button>
-                <button
-                  onClick={onLogout}
-                  className="p-2 text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-md transition-colors"
-                  title="Sign out"
-                  data-testid="logout-btn"
-                >
-                  <SignOut size={20} />
+                  Cash Horizon
                 </button>
               </div>
             </div>
+
+            <button
+              onClick={onLogout}
+              className="p-2 text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-md transition-colors"
+              title="Sign out"
+              data-testid="logout-btn"
+            >
+              <SignOut size={20} />
+            </button>
           </div>
         </div>
       </header>
 
-      {/* Main Content — full width on Bulk Actuals for the working table */}
       <main
         className={`w-full mx-auto ${
-          activeTab === "bulk_actuals" || activeTab === "cash_horizon"
+          activeTab === "cash_horizon"
             ? "max-w-none px-3 sm:px-4 lg:px-6 py-3"
             : "max-w-[1600px] px-4 md:px-6 lg:px-8 py-6"
         }`}
       >
-        {activeTab !== "bulk_actuals" && activeTab !== "cash_horizon" && (
-          <section className="mb-6">
-            <KPICards
-              projection={projection}
-              hasAccounts={hasAccounts}
-              onAddAccount={() => setBankAccountsOpen(true)}
-              onCashNowClick={() => setTreasuryOpen(true)}
-            />
-          </section>
-        )}
-
-        {/* Tab Switcher: Chart / Cash Flow Table */}
-        <div className="flex items-center gap-1 mb-4 bg-zinc-900 border border-zinc-800 p-0.5 rounded-md w-fit" data-testid="view-tabs">
-          <button
-            onClick={() => setActiveTab("chart")}
-            className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-              activeTab === "chart" ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
-            }`}
-            data-testid="tab-chart"
-          >
-            Projection
-          </button>
-          <button
-            onClick={() => setActiveTab("table")}
-            className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-              activeTab === "table" ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
-            }`}
-            data-testid="tab-table"
-          >
-            Cash Flow Table
-          </button>
-          <button
-            onClick={() => setActiveTab("entries")}
-            className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-              activeTab === "entries" ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
-            }`}
-            data-testid="tab-entries"
-          >
-            Entries
-          </button>
-          {ENABLE_BULK_ACTUALS && (
-            <button
-              onClick={() => setActiveTab("bulk_actuals")}
-              className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-                activeTab === "bulk_actuals" ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
-              }`}
-              data-testid="tab-bulk-actuals"
-            >
-              Bulk Actuals
-            </button>
-          )}
-          <button
-            onClick={() => setActiveTab("cash_horizon")}
-            className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-              activeTab === "cash_horizon" ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
-            }`}
-            data-testid="tab-cash-horizon"
-          >
-            Cash Horizon
-          </button>
-        </div>
-
-        {activeTab === "chart" ? (
-          <>
-            {/* Chart + Quick Add */}
-            <section className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 md:gap-6 mb-6">
-              <div className="min-w-0">
-                <ProjectionChart 
-                  projection={projection} 
-                  selectedMonth={selectedMonth}
-                  onMonthSelect={handleMonthSelect}
-                  hasData={hasData}
-                  horizon={horizon}
-                />
-              </div>
-              <div>
-                <QuickAddForm 
-                  onSuccess={handleCashFlowAdded} 
-                  entities={entities}
-                  onEntitiesChange={fetchEntities}
-                  onOpenBulkActualUpload={ENABLE_BULK_ACTUALS ? () => setActiveTab("bulk_actuals") : null}
-                />
-              </div>
-            </section>
-
-            {/* Table + P&L + Decision Panel */}
-            <section className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 md:gap-6 items-start">
-              <div className="min-w-0">
-                <MonthlyTable 
-                  months={projection?.months || []}
-                  selectedMonth={selectedMonth}
-                  onMonthSelect={handleMonthSelect}
-                  hasData={hasData}
-                />
-              </div>
-              <div className="lg:sticky lg:top-4 space-y-4" data-testid="right-panel-sticky">
-                <DecisionPanel
-                  scenario={scenario}
-                  selectedEntityId={selectedEntityId}
-                  horizon={horizon}
-                  refreshKey={projection?.cash_now}
-                />
-                <MonthlyPLPanel 
-                  monthDetails={monthDetails}
-                  selectedMonth={selectedMonth}
-                  onDataChange={handleDataChange}
-                />
-              </div>
-            </section>
-          </>
-        ) : activeTab === "table" ? (
-          <>
-            {/* Cash Flow Table (Matrix) - full width */}
-            <section className="mb-6">
-              <CashFlowTable
-                scenario={scenario}
-                selectedEntityId={selectedEntityId}
-                horizon={horizon}
-                onDataChange={handleDataChange}
-                refreshKey={projection?.cash_now}
-                entities={entities}
-              />
-            </section>
-
-            {/* Decision Panel + Quick Add side by side, Monthly Breakdown full width below */}
-            <section className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-              <div>
-                <DecisionPanel
-                  scenario={scenario}
-                  selectedEntityId={selectedEntityId}
-                  horizon={horizon}
-                  refreshKey={projection?.cash_now}
-                />
-              </div>
-              <div>
-                <QuickAddForm 
-                  onSuccess={handleCashFlowAdded} 
-                  entities={entities}
-                  onEntitiesChange={fetchEntities}
-                  onOpenBulkActualUpload={ENABLE_BULK_ACTUALS ? () => setActiveTab("bulk_actuals") : null}
-                />
-              </div>
-            </section>
-
-            <section className="mt-4">
-              <MonthlyTable 
-                months={projection?.months || []}
-                selectedMonth={selectedMonth}
-                onMonthSelect={handleMonthSelect}
-                hasData={hasData}
-              />
-            </section>
-          </>
-        ) : activeTab === "entries" ? (
-          /* Full Page Entry Log */
-          <section>
-            <EntryLogPage
-              entities={entities}
-              onDataChange={handleDataChange}
-            />
-          </section>
-        ) : activeTab === "cash_horizon" ? (
-          <section className="min-w-0 w-full">
-            <CashHorizonPage />
-          </section>
-        ) : ENABLE_BULK_ACTUALS ? (
-          <section className="min-w-0 w-full">
-            <BulkActualUploadPage
-              entities={entities}
-              onDataChange={handleDataChange}
-              flowsRefreshKey={dataRevision}
-              onBack={() => setActiveTab("chart")}
-            />
-          </section>
+        {activeTab === "treasury" ? (
+          <TreasuryPage entities={entities} onEntitiesChange={fetchEntities} />
         ) : (
-          <section>
-            <EntryLogPage
-              entities={entities}
-              onDataChange={handleDataChange}
-            />
-          </section>
+          <CashHorizonPage />
         )}
       </main>
-
-      {/* Dialogs */}
-      <TreasuryDrawer
-        open={treasuryOpen}
-        onOpenChange={setTreasuryOpen}
-        onDataChange={handleDataChange}
-        entities={entities}
-        onEntitiesChange={fetchEntities}
-        cashNow={projection?.cash_now}
-      />
-      <BankAccountsDialog 
-        open={bankAccountsOpen} 
-        onOpenChange={setBankAccountsOpen}
-        onDataChange={handleDataChange}
-        entities={entities}
-        onEntitiesChange={fetchEntities}
-      />
-      <SettingsDialog 
-        open={settingsOpen} 
-        onOpenChange={setSettingsOpen}
-        currentBuffer={projection?.safety_buffer || 50000}
-        onDataChange={handleDataChange}
-      />
-      <EntryLogDialog
-        open={entryLogOpen}
-        onOpenChange={setEntryLogOpen}
-        entities={entities}
-        onDataChange={handleDataChange}
-        selectedEntityId={selectedEntityId}
-      />
     </div>
   );
 }
