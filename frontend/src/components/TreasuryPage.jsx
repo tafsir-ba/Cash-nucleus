@@ -682,7 +682,7 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
                   </SelectContent>
                 </Select>
                 <p className="mt-1 text-[10px] text-zinc-600">
-                  Balance = sum of pending invoice net amounts. Synced on Treasury refresh.
+                  Balance = Pending invoice net (CHF, FX-converted). Synced on Treasury refresh.
                 </p>
               </div>
             ) : (

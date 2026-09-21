@@ -9,6 +9,8 @@ import httpx
 BEXIO_API_BASE = os.environ.get("BEXIO_API_BASE", "https://api.bexio.com").rstrip("/")
 DEFAULT_PAGE_SIZE = 500
 MAX_PAGES = 40
+# Bexio Pending tab status (confirmed against live Evohom data).
+DEFAULT_PENDING_STATUS_IDS = (8,)
 
 # Connection keys used by Treasury accounts (Evohom SA / Evahomes SA).
 CONNECTION_EVOHOM = "evohom"
@@ -39,19 +41,33 @@ def _parse_status_ids(raw: Optional[str]) -> Optional[List[int]]:
     return out or None
 
 
+def resolve_pending_status_ids(explicit: Optional[Sequence[int]] = None) -> List[int]:
+    if explicit is not None:
+        return [int(x) for x in explicit]
+    parsed = _parse_status_ids(os.environ.get("BEXIO_INVOICE_STATUS_IDS"))
+    if parsed is not None:
+        return parsed
+    return list(DEFAULT_PENDING_STATUS_IDS)
+
+
 def get_connection_token(connection_id: str) -> str:
-    """Resolve PAT for a named connection from environment."""
+    """
+    Resolve PAT for a named connection from environment.
+
+    Prefer a shared BEXIO_PAT (one token for both Evohom/Evahomes UI slots),
+    with optional per-connection overrides when a second company PAT exists.
+    """
     key = (connection_id or "").strip().lower()
+    shared = (os.environ.get("BEXIO_PAT") or os.environ.get("BEXIO_ACCESS_TOKEN") or "").strip()
     specific = {
         CONNECTION_EVOHOM: os.environ.get("BEXIO_PAT_EVOHOM") or os.environ.get("BEXIO_TOKEN_EVOHOM"),
         CONNECTION_EVAHOMES: os.environ.get("BEXIO_PAT_EVAHOMES") or os.environ.get("BEXIO_TOKEN_EVAHOMES"),
     }.get(key)
-    shared = os.environ.get("BEXIO_PAT") or os.environ.get("BEXIO_ACCESS_TOKEN")
-    token = (specific or shared or "").strip()
+    token = ((specific or "").strip() or shared)
     if not token:
         raise BexioError(
             f"No Bexio PAT configured for connection '{key}'. "
-            f"Set BEXIO_PAT_{key.upper()} or BEXIO_PAT in the backend environment."
+            "Set BEXIO_PAT (shared) or BEXIO_PAT_EVOHOM / BEXIO_PAT_EVAHOMES."
         )
     return token
 
@@ -107,7 +123,7 @@ async def _get_json(
     if resp.status_code == 401:
         raise BexioError(
             "Bexio authorization failed (401). Use a Personal Access Token from "
-            "https://developer.bexio.com/pat (Client ID/Secret alone is not a PAT).",
+            "https://developer.bexio.com/pat.",
             status_code=401,
         )
     if resp.status_code >= 400:
@@ -159,8 +175,42 @@ def _invoice_is_open(invoice: Dict[str, Any], status_ids: Optional[Sequence[int]
             return int(invoice.get("kb_item_status_id")) in set(status_ids)
         except (TypeError, ValueError):
             return False
-    # Heuristic matching Bexio "open" receivables: unpaid residual remains.
     return _as_float(invoice.get("total_remaining_payments")) > 0.009
+
+
+async def fetch_company_currency_id(client: httpx.AsyncClient) -> int:
+    company = await _get_json(client, "/3.0/company")
+    if isinstance(company, dict) and company.get("currency_id") is not None:
+        return int(company["currency_id"])
+    return 1  # CHF fallback
+
+
+async def fetch_exchange_factor_to_base(
+    client: httpx.AsyncClient,
+    currency_id: int,
+    base_currency_id: int,
+) -> float:
+    """Return multiply-factor to convert `currency_id` amounts into company currency."""
+    if int(currency_id) == int(base_currency_id):
+        return 1.0
+    rows = await _get_json(client, f"/3.0/currencies/{currency_id}/exchange_rates")
+    if not isinstance(rows, list):
+        raise BexioError(f"Unexpected exchange rate payload for currency {currency_id}")
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        target = row.get("exchange_currency") or {}
+        target_id = target.get("id") if isinstance(target, dict) else None
+        if target_id is None:
+            continue
+        if int(target_id) == int(base_currency_id):
+            factor = row.get("factor_nr_to_ratio")
+            if factor is None:
+                factor = row.get("factor_nr")
+            return _as_float(factor) or 0.0
+    raise BexioError(
+        f"No exchange rate from currency {currency_id} to company currency {base_currency_id}"
+    )
 
 
 async def fetch_invoices(
@@ -168,13 +218,19 @@ async def fetch_invoices(
     *,
     status_ids: Optional[Sequence[int]] = None,
     page_size: int = DEFAULT_PAGE_SIZE,
+    client: Optional[httpx.AsyncClient] = None,
 ) -> List[Dict[str, Any]]:
     """Fetch invoices, optionally restricted to status IDs via search."""
-    headers = _auth_headers(token)
-    timeout = httpx.Timeout(30.0, connect=10.0)
-    collected: List[Dict[str, Any]] = []
+    owns_client = client is None
+    if owns_client:
+        client = httpx.AsyncClient(
+            headers=_auth_headers(token),
+            timeout=httpx.Timeout(30.0, connect=10.0),
+        )
 
-    async with httpx.AsyncClient(headers=headers, timeout=timeout) as client:
+    collected: List[Dict[str, Any]] = []
+    try:
+        assert client is not None
         if status_ids:
             for status_id in status_ids:
                 offset = 0
@@ -205,8 +261,10 @@ async def fetch_invoices(
                 if len(batch) < page_size:
                     break
                 offset += page_size
+    finally:
+        if owns_client and client is not None:
+            await client.aclose()
 
-    # Deduplicate by invoice id (status search can overlap).
     by_id: Dict[Any, Dict[str, Any]] = {}
     for inv in collected:
         if isinstance(inv, dict) and "id" in inv:
@@ -219,8 +277,9 @@ def sum_invoice_net(
     *,
     status_ids: Optional[Sequence[int]] = None,
     already_filtered: bool = False,
+    fx_by_currency: Optional[Dict[int, float]] = None,
 ) -> Tuple[float, int]:
-    """Sum total_net for open/pending invoices. Returns (sum, count)."""
+    """Sum total_net for open/pending invoices (optionally FX-converted). Returns (sum, count)."""
     total = 0.0
     count = 0
     for inv in invoices:
@@ -228,7 +287,14 @@ def sum_invoice_net(
             continue
         if not already_filtered and not _invoice_is_open(inv, status_ids):
             continue
-        total += _as_float(inv.get("total_net"))
+        amount = _as_float(inv.get("total_net"))
+        if fx_by_currency is not None:
+            try:
+                currency_id = int(inv.get("currency_id") or 0)
+            except (TypeError, ValueError):
+                currency_id = 0
+            amount *= float(fx_by_currency.get(currency_id, 1.0))
+        total += amount
         count += 1
     return round(total, 2), count
 
@@ -239,26 +305,47 @@ async def sum_pending_invoice_net(
     status_ids: Optional[Sequence[int]] = None,
 ) -> Dict[str, Any]:
     """
-    Pull kb_invoice list and return sum of total_net for pending/open invoices.
+    Pull pending kb_invoice rows and return sum of total_net in company currency.
 
-    Matches the Net total on Bexio Sales → Invoices → Pending (open receivables).
+    Matches the Net total on Bexio Sales → Invoices → Pending (incl. FX conversion).
     """
-    resolved_status_ids = status_ids
-    if resolved_status_ids is None:
-        resolved_status_ids = _parse_status_ids(os.environ.get("BEXIO_INVOICE_STATUS_IDS"))
+    resolved_status_ids = resolve_pending_status_ids(status_ids)
+    headers = _auth_headers(token)
+    timeout = httpx.Timeout(30.0, connect=10.0)
 
-    invoices = await fetch_invoices(token, status_ids=resolved_status_ids)
+    async with httpx.AsyncClient(headers=headers, timeout=timeout) as client:
+        base_currency_id = await fetch_company_currency_id(client)
+        invoices = await fetch_invoices(
+            token,
+            status_ids=resolved_status_ids,
+            client=client,
+        )
+        currency_ids = set()
+        for inv in invoices:
+            try:
+                currency_ids.add(int(inv.get("currency_id")))
+            except (TypeError, ValueError):
+                continue
+        fx_by_currency: Dict[int, float] = {}
+        for currency_id in currency_ids:
+            fx_by_currency[currency_id] = await fetch_exchange_factor_to_base(
+                client, currency_id, base_currency_id
+            )
+
     total, count = sum_invoice_net(
         invoices,
         status_ids=resolved_status_ids,
-        already_filtered=resolved_status_ids is not None,
+        already_filtered=True,
+        fx_by_currency=fx_by_currency,
     )
 
     return {
         "amount": total,
         "invoice_count": count,
-        "status_ids": list(resolved_status_ids) if resolved_status_ids else None,
+        "status_ids": list(resolved_status_ids),
         "amount_field": "total_net",
+        "base_currency_id": base_currency_id,
+        "fx_by_currency": {str(k): v for k, v in fx_by_currency.items()},
     }
 
 
