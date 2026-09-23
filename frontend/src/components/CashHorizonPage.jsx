@@ -10,6 +10,7 @@ import {
   CheckCircle,
   ArrowDownLeft,
   ArrowUpRight,
+  ArrowsClockwise,
 } from "@phosphor-icons/react";
 import {
   QUADRANTS,
@@ -74,8 +75,20 @@ const emptyDraft = (quadrant) => ({
   expected_date: toDateInputValue(new Date()),
   days_from_today: 30,
   occurrence_count: 4,
+  amount_source: "manual",
+  amount_source_id: null,
   notes: "",
 });
+
+const sourceOptionValue = (item) => `${item.kind}:${item.ref_id}`;
+
+const sourceKindLabel = (kind) => {
+  if (kind === "treasury_account") return "Treasury";
+  if (kind === "bexio") return "Bexio";
+  if (kind === "treasury_debt") return "Debt";
+  if (kind === "evonucleus_pl") return "Evonucleus";
+  return "Manual";
+};
 
 const amountTone = (value, positiveClass = "text-emerald-400") =>
   value < 0 ? "text-rose-400" : positiveClass;
@@ -113,6 +126,7 @@ const QuadrantWorkspace = ({
   onDelete,
   onReorder,
   savingId,
+  sourceGroups = [],
 }) => {
   const [draft, setDraft] = useState(emptyDraft(quadrant));
   const [dragId, setDragId] = useState(null);
@@ -123,6 +137,11 @@ const QuadrantWorkspace = ({
     setDraft(emptyDraft(quadrant));
     setDragId(null);
   }, [quadrant]);
+
+  const flatSources = useMemo(
+    () => sourceGroups.flatMap((group) => group.items || []),
+    [sourceGroups],
+  );
 
   const handleDrop = (targetId) => {
     if (!dragId || dragId === targetId) return;
@@ -140,13 +159,53 @@ const QuadrantWorkspace = ({
     setDragId(null);
   };
 
+  const applySourceToDraft = (sourceValue) => {
+    if (!sourceValue || sourceValue === "manual") {
+      setDraft((d) => ({
+        ...d,
+        amount_source: "manual",
+        amount_source_id: null,
+      }));
+      return;
+    }
+    const item = flatSources.find((s) => sourceOptionValue(s) === sourceValue);
+    if (!item || !item.enabled) {
+      toast.error(item?.disabled_reason || "Source unavailable");
+      return;
+    }
+    setDraft((d) => ({
+      ...d,
+      amount_source: item.kind,
+      amount_source_id: item.ref_id,
+      amount: item.amount != null ? String(item.amount) : d.amount,
+      label: d.label.trim() ? d.label : item.label,
+    }));
+  };
+
+  const applySourceToEntry = (entry, sourceValue) => {
+    if (!sourceValue || sourceValue === "manual") {
+      onSave(entry.id, { amount_source: "manual", amount_source_id: null });
+      return;
+    }
+    const item = flatSources.find((s) => sourceOptionValue(s) === sourceValue);
+    if (!item || !item.enabled) {
+      toast.error(item?.disabled_reason || "Source unavailable");
+      return;
+    }
+    onSave(entry.id, {
+      amount_source: item.kind,
+      amount_source_id: item.ref_id,
+      label: entry.label?.trim() ? entry.label : item.label,
+    });
+  };
+
   const submitDraft = async () => {
     if (!draft.label.trim()) {
       toast.error("Label is required");
       return;
     }
     const amount = parseAmountInput(draft.amount);
-    if (amount == null) {
+    if (amount == null && draft.amount_source === "manual") {
       toast.error("Enter a valid amount");
       return;
     }
@@ -161,16 +220,27 @@ const QuadrantWorkspace = ({
       toast.error("Enter at least 2 occurrences");
       return;
     }
-    await onAdd({
+    const payload = {
       quadrant,
       label: draft.label.trim(),
-      amount,
       timing_mode: draft.timing_mode,
       expected_date: draft.timing_mode === "date" ? draft.expected_date : null,
       days_from_today: days,
       occurrence_count: occurrenceCount,
       notes: draft.notes?.trim() || null,
-    });
+      amount_source: draft.amount_source || "manual",
+      amount_source_id: draft.amount_source === "manual" ? null : draft.amount_source_id,
+    };
+    if (payload.amount_source === "manual") {
+      if (amount == null) {
+        toast.error("Enter a valid amount");
+        return;
+      }
+      payload.amount = amount;
+    } else if (amount != null) {
+      payload.amount = amount;
+    }
+    await onAdd(payload);
     setDraft(emptyDraft(quadrant));
   };
 
@@ -284,7 +354,24 @@ const QuadrantWorkspace = ({
     );
   };
 
-  const colCount = showNotes ? 8 : 7;
+  const colCount = showNotes ? 9 : 8;
+
+  const renderSourceSelect = (value, onChange) => (
+    <select value={value || "manual"} onChange={(e) => onChange(e.target.value)} className={CELL} title="Amount source">
+      <option value="manual">Manual</option>
+      {sourceGroups.map((group) => (
+        <optgroup key={group.kind} label={group.label}>
+          {(group.items || []).map((item) => (
+            <option key={item.id} value={sourceOptionValue(item)} disabled={!item.enabled}>
+              {item.label}
+              {item.amount != null ? ` · ${formatCHFCompact(item.amount)}` : ""}
+              {!item.enabled ? " (soon)" : ""}
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
+  );
 
   return (
     <div className="surface-card overflow-hidden" data-testid={`quadrant-workspace-${quadrant}`}>
@@ -322,7 +409,8 @@ const QuadrantWorkspace = ({
             <thead className="sticky top-0 z-10 bg-zinc-950/95 backdrop-blur-sm">
               <tr className="border-b border-zinc-800">
                 <th className={`${TH} w-8`} aria-label="Reorder" />
-                <th className={`${TH} min-w-[160px]`}>Label</th>
+                <th className={`${TH} min-w-[140px]`}>Label</th>
+                <th className={`${TH} w-[150px]`}>Source</th>
                 <th className={`${TH} w-[110px]`}>Amount</th>
                 <th className={`${TH} w-[108px]`}>Timing</th>
                 <th className={`${TH} w-[130px]`}>When</th>
@@ -361,6 +449,19 @@ const QuadrantWorkspace = ({
                       className={CELL}
                       placeholder="Label"
                     />
+                  </td>
+                  <td className={TD}>
+                    {renderSourceSelect(
+                      entry.amount_source && entry.amount_source !== "manual" && entry.amount_source_id
+                        ? `${entry.amount_source}:${entry.amount_source_id}`
+                        : "manual",
+                      (value) => applySourceToEntry(entry, value),
+                    )}
+                    {entry.amount_source && entry.amount_source !== "manual" && (
+                      <p className="px-2 pt-0.5 text-[10px] text-zinc-500 truncate" title={entry.amount_source_label || ""}>
+                        {sourceKindLabel(entry.amount_source)}
+                      </p>
+                    )}
                   </td>
                   <td className={TD}>
                     <input
@@ -428,7 +529,7 @@ const QuadrantWorkspace = ({
         </div>
 
         <div className="border-t border-zinc-800 bg-zinc-950/70 px-2 py-2" data-testid="quick-add-form">
-          <div className="grid grid-cols-[auto_minmax(0,1.4fr)_110px_108px_130px_auto] gap-1.5 items-center min-w-[640px]">
+          <div className="grid grid-cols-[auto_minmax(0,1.2fr)_150px_110px_108px_130px_auto] gap-1.5 items-center min-w-[760px]">
             <span className="w-8 flex justify-center text-zinc-600">
               <Plus size={14} />
             </span>
@@ -439,12 +540,25 @@ const QuadrantWorkspace = ({
               className={`${CELL} bg-zinc-950/80 border-zinc-800`}
               placeholder="New label"
             />
+            {renderSourceSelect(
+              draft.amount_source && draft.amount_source !== "manual" && draft.amount_source_id
+                ? `${draft.amount_source}:${draft.amount_source_id}`
+                : "manual",
+              applySourceToDraft,
+            )}
             <input
               type="text"
               inputMode="decimal"
               value={draft.amount}
               onFocus={selectOnFocus}
-              onChange={(e) => setDraft((d) => ({ ...d, amount: e.target.value }))}
+              onChange={(e) =>
+                setDraft((d) => ({
+                  ...d,
+                  amount: e.target.value,
+                  amount_source: "manual",
+                  amount_source_id: null,
+                }))
+              }
               onKeyDown={handleDraftKeyDown}
               className={`${CELL} bg-zinc-950/80 border-zinc-800 font-mono text-right`}
               placeholder="Amount"
@@ -480,19 +594,33 @@ export const CashHorizonPage = () => {
   const [analysis, setAnalysis] = useState(EMPTY_CASH_HORIZON_ANALYSIS);
   const [savingId, setSavingId] = useState(null);
   const [activeQuadrant, setActiveQuadrant] = useState(QUADRANTS[0].id);
+  const [sourceGroups, setSourceGroups] = useState([]);
+  const [refreshingSources, setRefreshingSources] = useState(false);
+
+  const loadSources = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API}/cash-horizon/sources`);
+      setSourceGroups(response.data?.groups || []);
+    } catch {
+      setSourceGroups([]);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await axios.get(`${API}/cash-horizon`);
-      setAnalysis(enrichAnalysisPayload(response.data));
+      const [horizon] = await Promise.all([
+        axios.get(`${API}/cash-horizon`),
+        loadSources(),
+      ]);
+      setAnalysis(enrichAnalysisPayload(horizon.data));
     } catch {
       setError("Unable to load Cash Horizon data.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadSources]);
 
   useEffect(() => {
     load();
@@ -500,6 +628,20 @@ export const CashHorizonPage = () => {
 
   const applyAnalysis = (data) => {
     setAnalysis(enrichAnalysisPayload(data));
+  };
+
+  const refreshLinkedSources = async () => {
+    setRefreshingSources(true);
+    try {
+      const response = await axios.post(`${API}/cash-horizon/refresh-sources`);
+      applyAnalysis(response.data);
+      await loadSources();
+      toast.success("Linked amounts refreshed");
+    } catch {
+      toast.error("Failed to refresh linked sources");
+    } finally {
+      setRefreshingSources(false);
+    }
   };
 
   const patchEntryLocally = (entryId, patch) => {
@@ -775,8 +917,21 @@ export const CashHorizonPage = () => {
             <h2 className="text-sm sm:text-base font-medium tracking-[0.16em] uppercase text-zinc-400">
               Matrix workspace
             </h2>
-            <p className="text-xs text-zinc-600 mt-1">Edit one flow bucket at a time — totals stay visible for all four.</p>
+            <p className="text-xs text-zinc-600 mt-1">
+              Pull amounts from Treasury, Bexio, or debts — works for inflows and outflows.
+            </p>
           </div>
+          <button
+            type="button"
+            onClick={refreshLinkedSources}
+            disabled={refreshingSources}
+            className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 disabled:opacity-50 transition-colors"
+            data-testid="refresh-linked-sources"
+            title="Refresh amounts linked to Treasury / Bexio"
+          >
+            <ArrowsClockwise size={14} className={refreshingSources ? "animate-spin" : ""} />
+            {refreshingSources ? "Refreshing…" : "Refresh linked"}
+          </button>
         </div>
 
         <div
@@ -829,6 +984,7 @@ export const CashHorizonPage = () => {
           onDelete={handleDelete}
           onReorder={handleReorder}
           savingId={savingId}
+          sourceGroups={sourceGroups}
         />
       </section>
     </div>

@@ -32,7 +32,7 @@ from bulk_import_columns import (
 )
 
 from cash_horizon import analyze_cash_horizon, normalize_entry, resolve_expected_date
-
+from cash_horizon_sources import build_source_catalog
 from ops_service_auth import authorize_ops_service_request
 from xlsx_simple import read_first_sheet_as_dict_rows
 from bexio_client import (
@@ -335,6 +335,10 @@ class CashHorizonEntry(BaseModel):
     expected_date: Optional[str] = None
     days_from_today: Optional[int] = None
     occurrence_count: Optional[int] = None
+    amount_source: Literal["manual", "treasury_account", "bexio", "treasury_debt", "evonucleus_pl"] = "manual"
+    amount_source_id: Optional[str] = None
+    amount_source_label: Optional[str] = None
+    amount_synced_at: Optional[str] = None
     notes: Optional[str] = None
     sort_order: int = 0
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -344,11 +348,13 @@ class CashHorizonEntry(BaseModel):
 class CashHorizonEntryCreate(BaseModel):
     quadrant: Literal["confirmed_inflow", "confirmed_outflow", "potential_inflow", "potential_outflow"]
     label: str
-    amount: float
+    amount: Optional[float] = None
     timing_mode: Literal["date", "days", "distributed"] = "date"
     expected_date: Optional[str] = None
     days_from_today: Optional[int] = None
     occurrence_count: Optional[int] = None
+    amount_source: Literal["manual", "treasury_account", "bexio", "treasury_debt", "evonucleus_pl"] = "manual"
+    amount_source_id: Optional[str] = None
     notes: Optional[str] = None
     sort_order: Optional[int] = None
 
@@ -360,8 +366,23 @@ class CashHorizonEntryUpdate(BaseModel):
     expected_date: Optional[str] = None
     days_from_today: Optional[int] = None
     occurrence_count: Optional[int] = None
+    amount_source: Optional[Literal["manual", "treasury_account", "bexio", "treasury_debt", "evonucleus_pl"]] = None
+    amount_source_id: Optional[str] = None
     notes: Optional[str] = None
     sort_order: Optional[int] = None
+
+
+class CashHorizonApplySourceRequest(BaseModel):
+    """Apply a catalog source to a new or existing entry amount."""
+    source_id: str  # e.g. treasury_account:<id> or "manual"
+    entry_id: Optional[str] = None
+    quadrant: Optional[Literal["confirmed_inflow", "confirmed_outflow", "potential_inflow", "potential_outflow"]] = None
+    label: Optional[str] = None
+    timing_mode: Optional[Literal["date", "days", "distributed"]] = None
+    expected_date: Optional[str] = None
+    days_from_today: Optional[int] = None
+    occurrence_count: Optional[int] = None
+    notes: Optional[str] = None
 
 
 class CashHorizonReorderItem(BaseModel):
@@ -1814,6 +1835,186 @@ async def _load_cash_horizon_entries() -> List[dict]:
     return rows
 
 
+async def _list_treasury_debt_rows(entity_id: Optional[str] = None) -> List[dict]:
+    """Shared debt consolidation rows for Treasury UI and Cash Horizon sources."""
+    query = {"category": Category.DEBT.value}
+    if entity_id:
+        query["entity_id"] = entity_id
+
+    flows = await db.cash_flows.find(query, {"_id": 0}).to_list(5000)
+    if not flows:
+        return []
+
+    entity_ids = list({f.get("entity_id") for f in flows if f.get("entity_id")})
+    entity_map = {}
+    if entity_ids:
+        entities = await db.entities.find({"id": {"$in": entity_ids}}, {"_id": 0, "id": 1, "name": 1}).to_list(5000)
+        entity_map = {e["id"]: e["name"] for e in entities}
+
+    debts = []
+    for flow in flows:
+        recurrence = flow.get("recurrence", Recurrence.NONE.value)
+        recurrence_mode = flow.get("recurrence_mode", RecurrenceMode.REPEAT.value)
+        recurrence_count = flow.get("recurrence_count")
+        amount = abs(float(flow.get("amount", 0)))
+
+        if recurrence == Recurrence.QUARTERLY.value:
+            monthly_payment = amount / 3
+            frequency = "quarterly"
+        elif recurrence == Recurrence.MONTHLY.value:
+            monthly_payment = amount
+            frequency = "monthly"
+        else:
+            monthly_payment = amount
+            frequency = "one_time"
+
+        if recurrence == Recurrence.NONE.value:
+            total_debt = amount
+            basis = "One-time amount"
+        elif recurrence_mode == RecurrenceMode.DISTRIBUTE.value:
+            total_debt = amount
+            basis = "Distributed total amount"
+        elif recurrence_count and recurrence_count > 0:
+            total_debt = amount * recurrence_count
+            basis = f"Per-period x {recurrence_count}"
+        else:
+            total_debt = amount
+            basis = "Recurring (no count)"
+
+        debts.append(
+            {
+                "creditor": flow.get("label", "Unnamed debt"),
+                "entity": flow.get("entity") or entity_map.get(flow.get("entity_id", ""), "Unknown"),
+                "entity_id": flow.get("entity_id", ""),
+                "total_debt_chf": round(total_debt, 2),
+                "monthly_payment_chf": round(monthly_payment, 2),
+                "frequency": frequency,
+                "calculation_basis": basis,
+                "source_flow_id": flow.get("id", ""),
+            }
+        )
+    debts.sort(key=lambda d: d["total_debt_chf"], reverse=True)
+    return debts
+
+
+async def _resolve_cash_horizon_amount_source(
+    *,
+    kind: str,
+    ref_id: str,
+    live_bexio: bool = True,
+) -> Dict[str, Any]:
+    """Resolve current amount + label for a Cash Horizon amount source."""
+    if kind == "treasury_account":
+        account = await db.bank_accounts.find_one({"id": ref_id}, {"_id": 0})
+        if not account:
+            raise HTTPException(status_code=404, detail="Treasury account not found")
+        entity = (account.get("entity") or "").strip()
+        label = (account.get("label") or "Account").strip()
+        title = f"{entity} · {label}" if entity else label
+        return {
+            "amount_source": "treasury_account",
+            "amount_source_id": ref_id,
+            "amount_source_label": title,
+            "amount": round(abs(float(account.get("amount") or 0.0)), 2),
+        }
+
+    if kind == "bexio":
+        connections = {c["id"]: c for c in list_configured_connections()}
+        conn = connections.get(ref_id)
+        if not conn or not conn.get("configured"):
+            raise HTTPException(status_code=400, detail="Bexio connection is not configured")
+        amount = None
+        if live_bexio:
+            try:
+                fetched = await fetch_connection_pending_net(ref_id)
+                amount = round(abs(float(fetched.get("amount") or 0.0)), 2)
+            except BexioError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if amount is None:
+            linked = await db.bank_accounts.find_one(
+                {"balance_source": "bexio", "bexio_connection": ref_id},
+                {"_id": 0, "amount": 1},
+            )
+            amount = round(abs(float((linked or {}).get("amount") or 0.0)), 2)
+        return {
+            "amount_source": "bexio",
+            "amount_source_id": ref_id,
+            "amount_source_label": f"{conn.get('label') or ref_id} · pending invoice net",
+            "amount": amount,
+        }
+
+    if kind == "treasury_debt":
+        debts = await _list_treasury_debt_rows()
+        debt = next((d for d in debts if d.get("source_flow_id") == ref_id), None)
+        if not debt:
+            raise HTTPException(status_code=404, detail="Treasury debt not found")
+        creditor = (debt.get("creditor") or "Debt").strip()
+        entity = (debt.get("entity") or "").strip()
+        title = f"{creditor}" + (f" · {entity}" if entity else "")
+        return {
+            "amount_source": "treasury_debt",
+            "amount_source_id": ref_id,
+            "amount_source_label": title,
+            "amount": round(abs(float(debt.get("total_debt_chf") or 0.0)), 2),
+        }
+
+    if kind == "evonucleus_pl":
+        raise HTTPException(status_code=400, detail="Evonucleus P&L is not connected yet")
+
+    raise HTTPException(status_code=400, detail=f"Unsupported amount source '{kind}'")
+
+
+def _manual_source_fields() -> Dict[str, Any]:
+    return {
+        "amount_source": "manual",
+        "amount_source_id": None,
+        "amount_source_label": None,
+        "amount_synced_at": None,
+    }
+
+
+@api_router.get("/cash-horizon/sources")
+async def get_cash_horizon_sources():
+    """List amount sources available for inflows and outflows."""
+    accounts = await db.bank_accounts.find({}, {"_id": 0}).to_list(5000)
+    debts = await _list_treasury_debt_rows()
+    bexio_connections = list_configured_connections()
+    return build_source_catalog(
+        accounts=accounts,
+        debts=debts,
+        bexio_connections=bexio_connections,
+    )
+
+
+@api_router.post("/cash-horizon/refresh-sources", response_model=CashHorizonAnalysisResponse)
+async def refresh_cash_horizon_sources(user: dict = Depends(get_optional_user)):
+    """Re-pull amounts for all entries linked to Treasury / Bexio sources."""
+    entries = await _load_cash_horizon_entries()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for entry in entries:
+        kind = entry.get("amount_source") or "manual"
+        ref_id = entry.get("amount_source_id")
+        if kind == "manual" or not ref_id:
+            continue
+        try:
+            resolved = await _resolve_cash_horizon_amount_source(kind=kind, ref_id=ref_id, live_bexio=True)
+        except HTTPException:
+            continue
+        await db.cash_horizon_entries.update_one(
+            {"id": entry["id"]},
+            {
+                "$set": {
+                    "amount": resolved["amount"],
+                    "amount_source_label": resolved["amount_source_label"],
+                    "amount_synced_at": now_iso,
+                    "updated_at": now_iso,
+                }
+            },
+        )
+    analysis = analyze_cash_horizon(await _load_cash_horizon_entries())
+    return CashHorizonAnalysisResponse(**analysis)
+
+
 @api_router.get("/cash-horizon", response_model=CashHorizonAnalysisResponse)
 async def get_cash_horizon():
     entries = await _load_cash_horizon_entries()
@@ -1828,8 +2029,6 @@ async def create_cash_horizon_entry(
 ):
     if not payload.label.strip():
         raise HTTPException(status_code=400, detail="Label is required")
-    if payload.amount < 0:
-        raise HTTPException(status_code=400, detail="Amount must be non-negative")
     if payload.timing_mode == "date" and not payload.expected_date:
         raise HTTPException(status_code=400, detail="Expected date is required")
     if payload.timing_mode == "days" and payload.days_from_today is None:
@@ -1838,6 +2037,26 @@ async def create_cash_horizon_entry(
         if payload.occurrence_count is None or int(payload.occurrence_count) < 2:
             raise HTTPException(status_code=400, detail="Occurrence count must be at least 2")
 
+    source_fields = _manual_source_fields()
+    amount = payload.amount
+    if payload.amount_source and payload.amount_source != "manual":
+        if not payload.amount_source_id:
+            raise HTTPException(status_code=400, detail="amount_source_id is required for linked sources")
+        resolved = await _resolve_cash_horizon_amount_source(
+            kind=payload.amount_source,
+            ref_id=payload.amount_source_id,
+            live_bexio=True,
+        )
+        amount = resolved["amount"]
+        source_fields = {
+            **resolved,
+            "amount_synced_at": datetime.now(timezone.utc).isoformat(),
+        }
+    if amount is None:
+        raise HTTPException(status_code=400, detail="Amount is required")
+    if amount < 0:
+        raise HTTPException(status_code=400, detail="Amount must be non-negative")
+
     sort_order = payload.sort_order
     if sort_order is None:
         sort_order = await _next_cash_horizon_sort_order(payload.quadrant)
@@ -1845,11 +2064,15 @@ async def create_cash_horizon_entry(
     entry = CashHorizonEntry(
         quadrant=payload.quadrant,
         label=payload.label.strip(),
-        amount=round(float(payload.amount), 2),
+        amount=round(float(amount), 2),
         timing_mode=payload.timing_mode,
         expected_date=payload.expected_date if payload.timing_mode == "date" else None,
         days_from_today=payload.days_from_today if payload.timing_mode == "days" else None,
         occurrence_count=int(payload.occurrence_count) if payload.timing_mode == "distributed" else None,
+        amount_source=source_fields["amount_source"],
+        amount_source_id=source_fields.get("amount_source_id"),
+        amount_source_label=source_fields.get("amount_source_label"),
+        amount_synced_at=source_fields.get("amount_synced_at"),
         notes=(payload.notes or "").strip() or None,
         sort_order=sort_order,
     )
@@ -1896,6 +2119,28 @@ async def update_cash_horizon_entry(
         raise HTTPException(status_code=400, detail="Amount must be non-negative")
     if "notes" in update_data:
         update_data["notes"] = (update_data["notes"] or "").strip() or None
+
+    # Manual amount edit clears source link unless a new source is being set in the same patch.
+    if "amount" in update_data and "amount_source" not in update_data:
+        update_data.update(_manual_source_fields())
+
+    if update_data.get("amount_source") == "manual":
+        update_data.update(_manual_source_fields())
+    elif update_data.get("amount_source") and update_data.get("amount_source") != "manual":
+        ref_id = update_data.get("amount_source_id") or existing.get("amount_source_id")
+        if not ref_id:
+            raise HTTPException(status_code=400, detail="amount_source_id is required for linked sources")
+        resolved = await _resolve_cash_horizon_amount_source(
+            kind=update_data["amount_source"],
+            ref_id=ref_id,
+            live_bexio=True,
+        )
+        update_data.update(
+            {
+                **resolved,
+                "amount_synced_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
     merged = {**existing, **update_data}
     timing_mode = merged.get("timing_mode", "date")
