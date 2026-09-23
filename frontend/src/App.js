@@ -122,13 +122,7 @@ function Dashboard({ onLogout }) {
         </div>
       </header>
 
-      <main
-        className={`w-full mx-auto ${
-          activeTab === "cash_horizon"
-            ? "max-w-none px-3 sm:px-4 lg:px-6 py-3"
-            : "max-w-[1600px] px-4 md:px-6 lg:px-8 py-6"
-        }`}
-      >
+      <main className="w-full mx-auto max-w-[1600px] px-4 md:px-6 lg:px-8 py-6">
         {activeTab === "treasury" ? (
           <TreasuryPage entities={entities} onEntitiesChange={fetchEntities} />
         ) : (
