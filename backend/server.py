@@ -43,6 +43,13 @@ from bexio_client import (
     infer_connection_from_entity_name,
     list_configured_connections,
 )
+from evonucleus_client import (
+    EvonucleusError,
+    fetch_horizon_metrics,
+    fetch_metric_amount,
+    get_metric_def,
+    is_configured as evonucleus_is_configured,
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -1947,7 +1954,29 @@ async def _resolve_cash_horizon_amount_source(
         }
 
     if kind == "evonucleus_pl":
-        raise HTTPException(status_code=400, detail="Evonucleus P&L is not connected yet")
+        if ref_id == "default":
+            raise HTTPException(
+                status_code=400,
+                detail="Pick a specific Evonucleus metric (e.g. invoiced_open, uninvoiced_open, arr_potential)",
+            )
+        if not get_metric_def(ref_id):
+            raise HTTPException(status_code=400, detail=f"Unknown Evonucleus metric '{ref_id}'")
+        if not evonucleus_is_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="Evonucleus P&L is not configured. Set EVONUCLEUS_API_BASE and EVONUCLEUS_OPS_API_KEY.",
+            )
+        try:
+            amount = await fetch_metric_amount(ref_id)
+        except EvonucleusError as exc:
+            raise HTTPException(status_code=exc.status_code or 502, detail=str(exc)) from exc
+        meta = get_metric_def(ref_id) or {}
+        return {
+            "amount_source": "evonucleus_pl",
+            "amount_source_id": ref_id,
+            "amount_source_label": meta.get("label") or ref_id,
+            "amount": amount,
+        }
 
     raise HTTPException(status_code=400, detail=f"Unsupported amount source '{kind}'")
 
@@ -1968,16 +1997,18 @@ async def get_cash_horizon_sources():
     accounts = await db.bank_accounts.find({}, {"_id": 0}).to_list(5000)
     debts = await _list_treasury_debt_rows()
     bexio_connections = list_configured_connections()
+    evonucleus_metrics = await fetch_horizon_metrics()
     return build_source_catalog(
         accounts=accounts,
         debts=debts,
         bexio_connections=bexio_connections,
+        evonucleus_metrics=evonucleus_metrics,
     )
 
 
 @api_router.post("/cash-horizon/refresh-sources", response_model=CashHorizonAnalysisResponse)
 async def refresh_cash_horizon_sources(user: dict = Depends(get_optional_user)):
-    """Re-pull amounts for all entries linked to Treasury / Bexio sources."""
+    """Re-pull amounts for all entries linked to Treasury / Bexio / Evonucleus sources."""
     entries = await _load_cash_horizon_entries()
     now_iso = datetime.now(timezone.utc).isoformat()
     for entry in entries:
