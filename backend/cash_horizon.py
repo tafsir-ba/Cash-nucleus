@@ -60,14 +60,14 @@ def expand_distributed_installments(
     *,
     amount: float,
     occurrence_count: int,
-    today: date,
+    start: date,
 ) -> List[Dict[str, Any]]:
-    """Monthly equal installments starting today (inclusive)."""
+    """Monthly equal installments starting on a fixed start date (inclusive)."""
     count = max(int(occurrence_count or 0), 0)
     amounts = _installment_amounts(float(amount or 0.0), count)
     installments: List[Dict[str, Any]] = []
     for index, slice_amount in enumerate(amounts):
-        due = today + relativedelta(months=index)
+        due = start + relativedelta(months=index)
         due_dt = datetime(due.year, due.month, due.day, 12, 0, 0, tzinfo=timezone.utc)
         installments.append(
             {
@@ -98,8 +98,9 @@ def resolve_expected_date(
         count = int(occurrence_count or 0)
         if count < 1:
             return None
-        # Resolved date = last monthly installment
-        return anchor + relativedelta(months=count - 1)
+        start = _as_date(expected_date) or anchor
+        # Resolved date = last monthly installment from fixed start
+        return start + relativedelta(months=count - 1)
     return _as_date(expected_date)
 
 
@@ -115,9 +116,15 @@ def normalize_entry(entry: Dict[str, Any], today: Optional[date] = None) -> Dict
     else:
         occurrence_count = None
 
+    distribution_start = _as_date(entry.get("expected_date")) if timing_mode == "distributed" else None
+    if timing_mode == "distributed" and distribution_start is None:
+        distribution_start = anchor
+
     resolved = resolve_expected_date(
         timing_mode=timing_mode,
-        expected_date=entry.get("expected_date"),
+        expected_date=entry.get("expected_date") if timing_mode != "distributed" else (
+            distribution_start.isoformat() if distribution_start else None
+        ),
         days_from_today=entry.get("days_from_today"),
         occurrence_count=occurrence_count,
         today=anchor,
@@ -125,11 +132,11 @@ def normalize_entry(entry: Dict[str, Any], today: Optional[date] = None) -> Dict
     amount = round(float(entry.get("amount") or 0.0), 2)
     installments: List[Dict[str, Any]] = []
     per_occurrence = None
-    if timing_mode == "distributed" and occurrence_count and occurrence_count >= 1:
+    if timing_mode == "distributed" and occurrence_count and occurrence_count >= 1 and distribution_start:
         installments = expand_distributed_installments(
             amount=amount,
             occurrence_count=occurrence_count,
-            today=anchor,
+            start=distribution_start,
         )
         per_occurrence = installments[0]["amount"] if installments else None
 
@@ -138,6 +145,11 @@ def normalize_entry(entry: Dict[str, Any], today: Optional[date] = None) -> Dict
         "timing_mode": timing_mode,
         "amount": amount,
         "occurrence_count": occurrence_count,
+        "expected_date": (
+            distribution_start.isoformat()
+            if timing_mode == "distributed" and distribution_start
+            else entry.get("expected_date")
+        ),
         "per_occurrence_amount": per_occurrence,
         "installments": [
             {
@@ -171,6 +183,7 @@ def _entry_amount_up_to(entry: Dict[str, Any], cutoff: date, today: date) -> flo
             return 0.0
         installments = entry.get("installments")
         if not installments:
+            start = _as_date(entry.get("expected_date")) or today
             installments = [
                 {
                     "date": item["date_iso"],
@@ -179,7 +192,7 @@ def _entry_amount_up_to(entry: Dict[str, Any], cutoff: date, today: date) -> flo
                 for item in expand_distributed_installments(
                     amount=float(entry.get("amount") or 0.0),
                     occurrence_count=count,
-                    today=today,
+                    start=start,
                 )
             ]
         total = 0.0
@@ -294,6 +307,7 @@ def _iter_cash_events(entries: List[Dict[str, Any]], today: date) -> List[Dict[s
         if timing_mode == "distributed":
             installments = entry.get("installments") or []
             if not installments:
+                start = _as_date(entry.get("expected_date")) or today
                 installments = [
                     {
                         "date": item["date_iso"],
@@ -303,7 +317,7 @@ def _iter_cash_events(entries: List[Dict[str, Any]], today: date) -> List[Dict[s
                     for item in expand_distributed_installments(
                         amount=float(entry.get("amount") or 0.0),
                         occurrence_count=int(entry.get("occurrence_count") or 0),
-                        today=today,
+                        start=start,
                     )
                 ]
             for index, item in enumerate(installments):

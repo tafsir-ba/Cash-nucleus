@@ -339,6 +339,7 @@ class CashHorizonEntry(BaseModel):
     amount_source_id: Optional[str] = None
     amount_source_label: Optional[str] = None
     amount_synced_at: Optional[str] = None
+    amount_source_error: Optional[str] = None
     notes: Optional[str] = None
     sort_order: int = 0
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -370,19 +371,6 @@ class CashHorizonEntryUpdate(BaseModel):
     amount_source_id: Optional[str] = None
     notes: Optional[str] = None
     sort_order: Optional[int] = None
-
-
-class CashHorizonApplySourceRequest(BaseModel):
-    """Apply a catalog source to a new or existing entry amount."""
-    source_id: str  # e.g. treasury_account:<id> or "manual"
-    entry_id: Optional[str] = None
-    quadrant: Optional[Literal["confirmed_inflow", "confirmed_outflow", "potential_inflow", "potential_outflow"]] = None
-    label: Optional[str] = None
-    timing_mode: Optional[Literal["date", "days", "distributed"]] = None
-    expected_date: Optional[str] = None
-    days_from_today: Optional[int] = None
-    occurrence_count: Optional[int] = None
-    notes: Optional[str] = None
 
 
 class CashHorizonReorderItem(BaseModel):
@@ -1970,6 +1958,7 @@ def _manual_source_fields() -> Dict[str, Any]:
         "amount_source_id": None,
         "amount_source_label": None,
         "amount_synced_at": None,
+        "amount_source_error": None,
     }
 
 
@@ -1998,7 +1987,17 @@ async def refresh_cash_horizon_sources(user: dict = Depends(get_optional_user)):
             continue
         try:
             resolved = await _resolve_cash_horizon_amount_source(kind=kind, ref_id=ref_id, live_bexio=True)
-        except HTTPException:
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else "Source refresh failed"
+            await db.cash_horizon_entries.update_one(
+                {"id": entry["id"]},
+                {
+                    "$set": {
+                        "amount_source_error": detail,
+                        "updated_at": now_iso,
+                    }
+                },
+            )
             continue
         await db.cash_horizon_entries.update_one(
             {"id": entry["id"]},
@@ -2007,6 +2006,7 @@ async def refresh_cash_horizon_sources(user: dict = Depends(get_optional_user)):
                     "amount": resolved["amount"],
                     "amount_source_label": resolved["amount_source_label"],
                     "amount_synced_at": now_iso,
+                    "amount_source_error": None,
                     "updated_at": now_iso,
                 }
             },
@@ -2051,6 +2051,7 @@ async def create_cash_horizon_entry(
         source_fields = {
             **resolved,
             "amount_synced_at": datetime.now(timezone.utc).isoformat(),
+            "amount_source_error": None,
         }
     if amount is None:
         raise HTTPException(status_code=400, detail="Amount is required")
@@ -2061,18 +2062,29 @@ async def create_cash_horizon_entry(
     if sort_order is None:
         sort_order = await _next_cash_horizon_sort_order(payload.quadrant)
 
+    distribution_start = None
+    if payload.timing_mode == "distributed":
+        distribution_start = payload.expected_date or date.today().isoformat()
+
     entry = CashHorizonEntry(
         quadrant=payload.quadrant,
         label=payload.label.strip(),
         amount=round(float(amount), 2),
         timing_mode=payload.timing_mode,
-        expected_date=payload.expected_date if payload.timing_mode == "date" else None,
+        expected_date=(
+            payload.expected_date
+            if payload.timing_mode == "date"
+            else distribution_start
+            if payload.timing_mode == "distributed"
+            else None
+        ),
         days_from_today=payload.days_from_today if payload.timing_mode == "days" else None,
         occurrence_count=int(payload.occurrence_count) if payload.timing_mode == "distributed" else None,
         amount_source=source_fields["amount_source"],
         amount_source_id=source_fields.get("amount_source_id"),
         amount_source_label=source_fields.get("amount_source_label"),
         amount_synced_at=source_fields.get("amount_synced_at"),
+        amount_source_error=source_fields.get("amount_source_error"),
         notes=(payload.notes or "").strip() or None,
         sort_order=sort_order,
     )
@@ -2139,6 +2151,7 @@ async def update_cash_horizon_entry(
             {
                 **resolved,
                 "amount_synced_at": datetime.now(timezone.utc).isoformat(),
+                "amount_source_error": None,
             }
         )
 
@@ -2153,7 +2166,8 @@ async def update_cash_horizon_entry(
         if occ is None or int(occ) < 2:
             raise HTTPException(status_code=400, detail="Occurrence count must be at least 2")
         update_data["occurrence_count"] = int(occ)
-        update_data["expected_date"] = None
+        # Persist fixed distribution start (first installment); do not roll with "today".
+        update_data["expected_date"] = merged.get("expected_date") or date.today().isoformat()
         update_data["days_from_today"] = None
     elif timing_mode == "date":
         update_data["days_from_today"] = None

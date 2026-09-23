@@ -23,16 +23,36 @@ def test_resolve_expected_date_distributed_ends_on_last_month():
     assert resolve_expected_date(
         timing_mode="distributed",
         occurrence_count=4,
+        expected_date="2026-07-08",
         today=TODAY,
     ) == date(2026, 10, 8)
 
 
 def test_distributed_installments_split_evenly():
-    slices = expand_distributed_installments(amount=66000, occurrence_count=4, today=TODAY)
+    slices = expand_distributed_installments(amount=66000, occurrence_count=4, start=TODAY)
     assert len(slices) == 4
     assert [s["amount"] for s in slices] == [16500.0, 16500.0, 16500.0, 16500.0]
     assert slices[0]["date"] == TODAY
     assert slices[3]["date"] == date(2026, 10, 8)
+
+
+def test_distributed_schedule_is_anchored_not_rolling():
+    """Fixed expected_date keeps installments stable when analysis 'today' moves."""
+    entry = {
+        "id": "cogs",
+        "quadrant": "confirmed_outflow",
+        "label": "COGS",
+        "amount": 66000,
+        "timing_mode": "distributed",
+        "occurrence_count": 4,
+        "expected_date": "2026-07-08",
+        "sort_order": 0,
+    }
+    day1 = analyze_cash_horizon([entry], today=date(2026, 7, 8))
+    day2 = analyze_cash_horizon([entry], today=date(2026, 7, 9))
+    dates1 = [i["date"] for i in day1["entries"][0]["installments"]]
+    dates2 = [i["date"] for i in day2["entries"][0]["installments"]]
+    assert dates1 == dates2 == ["2026-07-08", "2026-08-08", "2026-09-08", "2026-10-08"]
 
 
 def test_positions_and_checkpoints():
@@ -122,6 +142,7 @@ def test_distributed_accrues_across_checkpoints():
             "amount": 66000,
             "timing_mode": "distributed",
             "occurrence_count": 4,
+            "expected_date": "2026-07-08",
             "sort_order": 0,
         }
     ]
@@ -129,6 +150,7 @@ def test_distributed_accrues_across_checkpoints():
     assert analysis["positions"]["confirmed_outflows"] == 66000
     entry = analysis["entries"][0]
     assert entry["per_occurrence_amount"] == 16500.0
+    assert entry["expected_date"] == "2026-07-08"
     assert len(entry["installments"]) == 4
 
     today_row = next(c for c in analysis["checkpoints"] if c["day_offset"] == 0)

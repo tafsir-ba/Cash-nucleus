@@ -224,7 +224,10 @@ const QuadrantWorkspace = ({
       quadrant,
       label: draft.label.trim(),
       timing_mode: draft.timing_mode,
-      expected_date: draft.timing_mode === "date" ? draft.expected_date : null,
+      expected_date:
+        draft.timing_mode === "date" || draft.timing_mode === "distributed"
+          ? draft.expected_date || toDateInputValue(new Date())
+          : null,
       days_from_today: days,
       occurrence_count: occurrenceCount,
       notes: draft.notes?.trim() || null,
@@ -253,7 +256,12 @@ const QuadrantWorkspace = ({
 
   const applyTimingModeChange = (entry, timing_mode) => ({
     timing_mode,
-    expected_date: timing_mode === "date" ? entry.expected_date || toDateInputValue(new Date()) : entry.expected_date,
+    expected_date:
+      timing_mode === "date"
+        ? entry.expected_date || toDateInputValue(new Date())
+        : timing_mode === "distributed"
+          ? entry.expected_date || toDateInputValue(new Date())
+          : entry.expected_date,
     days_from_today: timing_mode === "days" ? entry.days_from_today ?? 30 : entry.days_from_today,
     occurrence_count: timing_mode === "distributed" ? entry.occurrence_count || 4 : entry.occurrence_count,
   });
@@ -458,8 +466,15 @@ const QuadrantWorkspace = ({
                       (value) => applySourceToEntry(entry, value),
                     )}
                     {entry.amount_source && entry.amount_source !== "manual" && (
-                      <p className="px-2 pt-0.5 text-[10px] text-zinc-500 truncate" title={entry.amount_source_label || ""}>
-                        {sourceKindLabel(entry.amount_source)}
+                      <p
+                        className={`px-2 pt-0.5 text-[10px] truncate ${
+                          entry.amount_source_error ? "text-rose-400" : "text-zinc-500"
+                        }`}
+                        title={entry.amount_source_error || entry.amount_source_label || ""}
+                      >
+                        {entry.amount_source_error
+                          ? `Error · ${sourceKindLabel(entry.amount_source)}`
+                          : sourceKindLabel(entry.amount_source)}
                       </p>
                     )}
                   </td>
@@ -636,7 +651,16 @@ export const CashHorizonPage = () => {
       const response = await axios.post(`${API}/cash-horizon/refresh-sources`);
       applyAnalysis(response.data);
       await loadSources();
-      toast.success("Linked amounts refreshed");
+      const failed = (response.data?.entries || []).filter((e) => e.amount_source_error);
+      if (failed.length) {
+        toast.error(
+          `Refreshed with ${failed.length} source error${failed.length === 1 ? "" : "s"}: ${
+            failed[0].amount_source_error
+          }`,
+        );
+      } else {
+        toast.success("Linked amounts refreshed");
+      }
     } catch {
       toast.error("Failed to refresh linked sources");
     } finally {

@@ -21,10 +21,26 @@ describe("cashHorizon", () => {
     );
   });
 
-  it("resolves distributed timing to the last monthly occurrence", () => {
+  it("resolves distributed timing from fixed start date", () => {
     expect(
       toDateInputValue(
-        resolveExpectedDate({ timingMode: "distributed", occurrenceCount: 4, today: TODAY }),
+        resolveExpectedDate({
+          timingMode: "distributed",
+          occurrenceCount: 4,
+          expectedDate: "2026-07-08",
+          today: TODAY,
+        }),
+      ),
+    ).toBe("2026-10-08");
+    // Moving "today" must not change end date when start is fixed
+    expect(
+      toDateInputValue(
+        resolveExpectedDate({
+          timingMode: "distributed",
+          occurrenceCount: 4,
+          expectedDate: "2026-07-08",
+          today: new Date(2026, 6, 20),
+        }),
       ),
     ).toBe("2026-10-08");
   });
@@ -82,10 +98,12 @@ describe("cashHorizon", () => {
         amount: 66000,
         timing_mode: "distributed",
         occurrence_count: 4,
+        expected_date: "2026-07-08",
       },
       TODAY,
     );
     expect(distributed.per_occurrence_amount).toBe(16500);
+    expect(distributed.expected_date).toBe("2026-07-08");
     expect(distributed.resolved_date).toBe("2026-10-08");
   });
 });

@@ -80,7 +80,14 @@ export const resolveExpectedDate = ({
   }
   if (mode === "distributed") {
     if (count === "" || count == null || Number.isNaN(Number(count)) || Number(count) < 1) return null;
-    return addMonths(today, Number(count) - 1);
+    const start = dateValue ? asUtcNoon(dateValue) : today;
+    if (!start) return null;
+    // Convert UTC noon Date to local calendar components for addMonths when from asUtcNoon
+    const startLocal =
+      dateValue && start instanceof Date
+        ? new Date(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate())
+        : start;
+    return addMonths(startLocal, Number(count) - 1);
   }
   return asUtcNoon(dateValue);
 };
@@ -140,6 +147,10 @@ export const normalizeEntry = (entry, today = startOfDay()) => {
     amount,
     days_from_today: normalizeDays(entry.days_from_today ?? entry.daysFromToday),
     occurrence_count: occurrenceCount,
+    expected_date:
+      timingMode === "distributed"
+        ? entry.expected_date ?? entry.expectedDate ?? toDateInputValue(today)
+        : entry.expected_date ?? entry.expectedDate,
     per_occurrence_amount: perOccurrence,
     resolved_date: resolved ? toDateInputValue(resolved) : null,
   };
