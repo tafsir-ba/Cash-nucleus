@@ -1,4 +1,4 @@
-"""Cash Horizon amount sources — Treasury, Bexio, and future integrations."""
+"""Cash Horizon amount sources — Treasury, Bexio, Evonucleus P&L, and debts."""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
@@ -22,7 +22,7 @@ SOURCE_GROUP_LABELS = {
     "treasury_account": "Treasury accounts",
     "bexio": "Bexio",
     "treasury_debt": "Treasury debts",
-    "evonucleus_pl": "Evonucleus",
+    "evonucleus_pl": "Evonucleus P&L",
 }
 
 
@@ -38,6 +38,7 @@ def build_source_catalog(
     accounts: List[Dict[str, Any]],
     debts: List[Dict[str, Any]],
     bexio_connections: List[Dict[str, Any]],
+    evonucleus_metrics: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Build pickable amount sources for inflows and outflows."""
     items: List[Dict[str, Any]] = []
@@ -134,25 +135,54 @@ def build_source_catalog(
             }
         )
 
-    items.append(
-        {
-            "id": "evonucleus_pl:default",
-            "kind": "evonucleus_pl",
-            "ref_id": "default",
-            "label": "Evonucleus P&L",
-            "subtitle": "Connect later — not available yet",
-            "amount": None,
-            "enabled": False,
-            "disabled_reason": "Evonucleus P&L is not connected yet",
-            "suggested_quadrants": [
-                "confirmed_inflow",
-                "confirmed_outflow",
-                "potential_inflow",
-                "potential_outflow",
-            ],
-            "meta": {},
-        }
-    )
+    if evonucleus_metrics:
+        for metric in evonucleus_metrics:
+            ref_id = metric.get("ref_id")
+            if not ref_id:
+                continue
+            enabled = bool(metric.get("enabled"))
+            items.append(
+                {
+                    "id": f"evonucleus_pl:{ref_id}",
+                    "kind": "evonucleus_pl",
+                    "ref_id": ref_id,
+                    "label": metric.get("label") or ref_id,
+                    "subtitle": metric.get("subtitle") or "Evonucleus P&L",
+                    "amount": None if metric.get("amount") is None else _round_chf(metric.get("amount")),
+                    "enabled": enabled,
+                    "disabled_reason": None if enabled else (metric.get("disabled_reason") or "Unavailable"),
+                    "suggested_quadrants": list(
+                        metric.get("suggested_quadrants")
+                        or [
+                            "confirmed_inflow",
+                            "confirmed_outflow",
+                            "potential_inflow",
+                            "potential_outflow",
+                        ]
+                    ),
+                    "meta": {"bridge": "evonucleus_pl"},
+                }
+            )
+    else:
+        items.append(
+            {
+                "id": "evonucleus_pl:default",
+                "kind": "evonucleus_pl",
+                "ref_id": "default",
+                "label": "Evonucleus P&L",
+                "subtitle": "Configure EVONUCLEUS_API_BASE + EVONUCLEUS_OPS_API_KEY",
+                "amount": None,
+                "enabled": False,
+                "disabled_reason": "Evonucleus P&L is not configured",
+                "suggested_quadrants": [
+                    "confirmed_inflow",
+                    "confirmed_outflow",
+                    "potential_inflow",
+                    "potential_outflow",
+                ],
+                "meta": {},
+            }
+        )
 
     groups: List[Dict[str, Any]] = []
     for kind in SOURCE_GROUP_ORDER:
