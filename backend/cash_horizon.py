@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
+from dateutil.relativedelta import relativedelta
+
 CashHorizonQuadrant = Literal[
     "confirmed_inflow",
     "confirmed_outflow",
@@ -10,7 +12,7 @@ CashHorizonQuadrant = Literal[
     "potential_outflow",
 ]
 
-TimingMode = Literal["date", "days"]
+TimingMode = Literal["date", "days", "distributed"]
 
 DEFAULT_CHECKPOINT_DAYS = [0, 7, 30, 60, 90, 180, 365]
 
@@ -42,11 +44,49 @@ def _as_date(value: Any) -> Optional[date]:
         return None
 
 
+def _installment_amounts(total: float, count: int) -> List[float]:
+    """Split total into equal installments; last slice absorbs rounding remainder."""
+    if count <= 0:
+        return []
+    if count == 1:
+        return [round(total, 2)]
+    per = round(total / count, 2)
+    amounts = [per] * (count - 1)
+    amounts.append(round(total - per * (count - 1), 2))
+    return amounts
+
+
+def expand_distributed_installments(
+    *,
+    amount: float,
+    occurrence_count: int,
+    today: date,
+) -> List[Dict[str, Any]]:
+    """Monthly equal installments starting today (inclusive)."""
+    count = max(int(occurrence_count or 0), 0)
+    amounts = _installment_amounts(float(amount or 0.0), count)
+    installments: List[Dict[str, Any]] = []
+    for index, slice_amount in enumerate(amounts):
+        due = today + relativedelta(months=index)
+        due_dt = datetime(due.year, due.month, due.day, 12, 0, 0, tzinfo=timezone.utc)
+        installments.append(
+            {
+                "index": index,
+                "date": due,
+                "date_iso": due.isoformat(),
+                "timestamp": int(due_dt.timestamp() * 1000),
+                "amount": slice_amount,
+            }
+        )
+    return installments
+
+
 def resolve_expected_date(
     *,
     timing_mode: TimingMode,
     expected_date: Optional[str] = None,
     days_from_today: Optional[int] = None,
+    occurrence_count: Optional[int] = None,
     today: Optional[date] = None,
 ) -> Optional[date]:
     anchor = today or date.today()
@@ -54,23 +94,60 @@ def resolve_expected_date(
         if days_from_today is None:
             return None
         return anchor + timedelta(days=int(days_from_today))
+    if timing_mode == "distributed":
+        count = int(occurrence_count or 0)
+        if count < 1:
+            return None
+        # Resolved date = last monthly installment
+        return anchor + relativedelta(months=count - 1)
     return _as_date(expected_date)
 
 
 def normalize_entry(entry: Dict[str, Any], today: Optional[date] = None) -> Dict[str, Any]:
     anchor = today or date.today()
     timing_mode: TimingMode = entry.get("timing_mode") or "date"
+    occurrence_count = entry.get("occurrence_count")
+    if occurrence_count is not None and occurrence_count != "":
+        try:
+            occurrence_count = max(int(occurrence_count), 0)
+        except (TypeError, ValueError):
+            occurrence_count = None
+    else:
+        occurrence_count = None
+
     resolved = resolve_expected_date(
         timing_mode=timing_mode,
         expected_date=entry.get("expected_date"),
         days_from_today=entry.get("days_from_today"),
+        occurrence_count=occurrence_count,
         today=anchor,
     )
     amount = round(float(entry.get("amount") or 0.0), 2)
+    installments: List[Dict[str, Any]] = []
+    per_occurrence = None
+    if timing_mode == "distributed" and occurrence_count and occurrence_count >= 1:
+        installments = expand_distributed_installments(
+            amount=amount,
+            occurrence_count=occurrence_count,
+            today=anchor,
+        )
+        per_occurrence = installments[0]["amount"] if installments else None
+
     return {
         **entry,
         "timing_mode": timing_mode,
         "amount": amount,
+        "occurrence_count": occurrence_count,
+        "per_occurrence_amount": per_occurrence,
+        "installments": [
+            {
+                "date": item["date_iso"],
+                "timestamp": item["timestamp"],
+                "amount": item["amount"],
+                "index": item["index"],
+            }
+            for item in installments
+        ],
         "resolved_date": resolved.isoformat() if resolved else None,
     }
 
@@ -85,19 +162,50 @@ def _sum_entries(entries: List[Dict[str, Any]], quadrant: CashHorizonQuadrant) -
     return round(sum(float(e.get("amount") or 0.0) for e in entries if e.get("quadrant") == quadrant), 2)
 
 
+def _entry_amount_up_to(entry: Dict[str, Any], cutoff: date, today: date) -> float:
+    """Amount from one entry that has landed by cutoff (full one-off or accrued distribute)."""
+    timing_mode = entry.get("timing_mode") or "date"
+    if timing_mode == "distributed":
+        count = int(entry.get("occurrence_count") or 0)
+        if count < 1:
+            return 0.0
+        installments = entry.get("installments")
+        if not installments:
+            installments = [
+                {
+                    "date": item["date_iso"],
+                    "amount": item["amount"],
+                }
+                for item in expand_distributed_installments(
+                    amount=float(entry.get("amount") or 0.0),
+                    occurrence_count=count,
+                    today=today,
+                )
+            ]
+        total = 0.0
+        for item in installments:
+            due = _as_date(item.get("date"))
+            if due is not None and due <= cutoff:
+                total += float(item.get("amount") or 0.0)
+        return round(total, 2)
+
+    resolved = _as_date(entry.get("resolved_date"))
+    if resolved is None or resolved > cutoff:
+        return 0.0
+    return round(float(entry.get("amount") or 0.0), 2)
+
+
 def _entries_up_to(
     entries: List[Dict[str, Any]],
     quadrant: CashHorizonQuadrant,
     cutoff: date,
+    today: date,
 ) -> float:
     total = 0.0
     for entry in entries:
         if entry.get("quadrant") != quadrant:
             continue
-        resolved = _as_date(entry.get("resolved_date"))
-        if resolved is None or resolved > cutoff:
-            continue
-        total += float(entry.get("amount") or 0.0)
+        total += _entry_amount_up_to(entry, cutoff, today)
     return round(total, 2)
 
 
@@ -152,10 +260,10 @@ def compute_checkpoints(
     rows: List[Dict[str, Any]] = []
     for offset in days:
         cutoff = anchor + timedelta(days=offset)
-        confirmed_in = _entries_up_to(entries, "confirmed_inflow", cutoff)
-        confirmed_out = _entries_up_to(entries, "confirmed_outflow", cutoff)
-        potential_in = _entries_up_to(entries, "potential_inflow", cutoff)
-        potential_out = _entries_up_to(entries, "potential_outflow", cutoff)
+        confirmed_in = _entries_up_to(entries, "confirmed_inflow", cutoff, anchor)
+        confirmed_out = _entries_up_to(entries, "confirmed_outflow", cutoff, anchor)
+        potential_in = _entries_up_to(entries, "potential_inflow", cutoff, anchor)
+        potential_out = _entries_up_to(entries, "potential_outflow", cutoff, anchor)
         confirmed_net = round(confirmed_in - confirmed_out, 2)
         potential_net = round(potential_in - potential_out, 2)
         combined = round(confirmed_net + potential_net, 2)
@@ -178,30 +286,85 @@ def compute_checkpoints(
     return rows
 
 
-def build_timeline_points(entries: List[Dict[str, Any]], today: Optional[date] = None) -> List[Dict[str, Any]]:
-    anchor = today or date.today()
-    dated = [e for e in entries if _as_date(e.get("resolved_date"))]
-    dated.sort(key=lambda e: (_as_date(e.get("resolved_date")), e.get("sort_order", 0), e.get("label", "")))
-    points: List[Dict[str, Any]] = []
-    confirmed_running = 0.0
-    combined_running = 0.0
-    for entry in dated:
+def _iter_cash_events(entries: List[Dict[str, Any]], today: date) -> List[Dict[str, Any]]:
+    """Flatten entries into dated cash events (one-off or distributed installments)."""
+    events: List[Dict[str, Any]] = []
+    for entry in entries:
+        timing_mode = entry.get("timing_mode") or "date"
+        if timing_mode == "distributed":
+            installments = entry.get("installments") or []
+            if not installments:
+                installments = [
+                    {
+                        "date": item["date_iso"],
+                        "timestamp": item["timestamp"],
+                        "amount": item["amount"],
+                    }
+                    for item in expand_distributed_installments(
+                        amount=float(entry.get("amount") or 0.0),
+                        occurrence_count=int(entry.get("occurrence_count") or 0),
+                        today=today,
+                    )
+                ]
+            for index, item in enumerate(installments):
+                due = _as_date(item.get("date"))
+                if due is None:
+                    continue
+                ts = item.get("timestamp")
+                if ts is None:
+                    due_dt = datetime(due.year, due.month, due.day, 12, 0, 0, tzinfo=timezone.utc)
+                    ts = int(due_dt.timestamp() * 1000)
+                events.append(
+                    {
+                        "id": f"{entry.get('id')}:{index}",
+                        "date": due.isoformat(),
+                        "timestamp": ts,
+                        "label": entry.get("label", ""),
+                        "amount": float(item.get("amount") or 0.0),
+                        "quadrant": entry.get("quadrant"),
+                        "sort_order": entry.get("sort_order", 0),
+                    }
+                )
+            continue
+
         resolved = _as_date(entry.get("resolved_date"))
         if resolved is None:
             continue
-        amount = float(entry.get("amount") or 0.0)
-        quadrant = entry.get("quadrant", "")
-        direction = 1 if quadrant.endswith("_inflow") else -1
-        delta = direction * amount
-        if quadrant.startswith("confirmed"):
-            confirmed_running = round(confirmed_running + delta, 2)
-        combined_running = round(combined_running + delta, 2)
         resolved_dt = datetime(resolved.year, resolved.month, resolved.day, 12, 0, 0, tzinfo=timezone.utc)
-        points.append(
+        events.append(
             {
+                "id": entry.get("id"),
                 "date": resolved.isoformat(),
                 "timestamp": int(resolved_dt.timestamp() * 1000),
                 "label": entry.get("label", ""),
+                "amount": float(entry.get("amount") or 0.0),
+                "quadrant": entry.get("quadrant"),
+                "sort_order": entry.get("sort_order", 0),
+            }
+        )
+    events.sort(key=lambda e: (e["date"], e.get("sort_order", 0), e.get("label", "")))
+    return events
+
+
+def build_timeline_points(entries: List[Dict[str, Any]], today: Optional[date] = None) -> List[Dict[str, Any]]:
+    anchor = today or date.today()
+    events = _iter_cash_events(entries, anchor)
+    points: List[Dict[str, Any]] = []
+    confirmed_running = 0.0
+    combined_running = 0.0
+    for event in events:
+        amount = float(event.get("amount") or 0.0)
+        quadrant = event.get("quadrant", "")
+        direction = 1 if str(quadrant).endswith("_inflow") else -1
+        delta = direction * amount
+        if str(quadrant).startswith("confirmed"):
+            confirmed_running = round(confirmed_running + delta, 2)
+        combined_running = round(combined_running + delta, 2)
+        points.append(
+            {
+                "date": event["date"],
+                "timestamp": event["timestamp"],
+                "label": event.get("label", ""),
                 "quadrant": quadrant,
                 "amount": amount,
                 "confirmed_liquidity": confirmed_running,
@@ -224,26 +387,21 @@ def build_timeline_points(entries: List[Dict[str, Any]], today: Optional[date] =
     return points
 
 
-def build_cash_match_events(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    events: List[Dict[str, Any]] = []
-    for entry in entries:
-        resolved = _as_date(entry.get("resolved_date"))
-        if resolved is None:
-            continue
-        resolved_dt = datetime(resolved.year, resolved.month, resolved.day, 12, 0, 0, tzinfo=timezone.utc)
-        events.append(
-            {
-                "id": entry.get("id"),
-                "date": resolved.isoformat(),
-                "timestamp": int(resolved_dt.timestamp() * 1000),
-                "label": entry.get("label", ""),
-                "amount": float(entry.get("amount") or 0.0),
-                "quadrant": entry.get("quadrant"),
-                "quadrant_label": QUADRANT_LABELS.get(entry.get("quadrant", ""), entry.get("quadrant", "")),
-            }
-        )
-    events.sort(key=lambda e: (e["date"], e.get("label", "")))
-    return events
+def build_cash_match_events(entries: List[Dict[str, Any]], today: Optional[date] = None) -> List[Dict[str, Any]]:
+    anchor = today or date.today()
+    events = _iter_cash_events(entries, anchor)
+    return [
+        {
+            "id": event["id"],
+            "date": event["date"],
+            "timestamp": event["timestamp"],
+            "label": event.get("label", ""),
+            "amount": float(event.get("amount") or 0.0),
+            "quadrant": event.get("quadrant"),
+            "quadrant_label": QUADRANT_LABELS.get(event.get("quadrant", ""), event.get("quadrant", "")),
+        }
+        for event in events
+    ]
 
 
 def _format_chf(amount: float) -> str:
@@ -347,7 +505,7 @@ def analyze_cash_horizon(
         "positions": positions,
         "checkpoints": checkpoints,
         "timeline": build_timeline_points(normalized, anchor),
-        "cash_match_events": build_cash_match_events(normalized),
+        "cash_match_events": build_cash_match_events(normalized, anchor),
         "summary": generate_liquidity_summary(normalized, positions, checkpoints, anchor),
         "entries": normalized,
     }

@@ -3,6 +3,7 @@ import {
   formatResolvedDateLabel,
   normalizeEntry,
   parseAmountInput,
+  parseOccurrenceCount,
   patchEntryForDisplay,
   resolveExpectedDate,
   toDateInputValue,
@@ -18,6 +19,14 @@ describe("cashHorizon", () => {
     expect(toDateInputValue(resolveExpectedDate({ timingMode: "date", expectedDate: "2026-08-15", today: TODAY }))).toBe(
       "2026-08-15",
     );
+  });
+
+  it("resolves distributed timing to the last monthly occurrence", () => {
+    expect(
+      toDateInputValue(
+        resolveExpectedDate({ timingMode: "distributed", occurrenceCount: 4, today: TODAY }),
+      ),
+    ).toBe("2026-10-08");
   });
 
   it("passes through analysis payloads", () => {
@@ -36,12 +45,23 @@ describe("cashHorizon", () => {
         days_from_today: 180,
       }),
     ).toBe("4 Jan 2027");
+    expect(
+      formatResolvedDateLabel({
+        timing_mode: "distributed",
+        occurrence_count: 4,
+        amount: 66000,
+        per_occurrence_amount: 16500,
+        resolved_date: "2026-10-08",
+      }),
+    ).toMatch(/4× 17k\/mo/);
     expect(parseAmountInput("")).toBeNull();
     expect(parseAmountInput("19000")).toBe(19000);
     expect(parseAmountInput("-1")).toBeNull();
+    expect(parseOccurrenceCount("4")).toBe(4);
+    expect(parseOccurrenceCount("1")).toBeNull();
   });
 
-  it("preserves empty amount while editing", () => {
+  it("preserves empty amount while editing and normalizes distributed entries", () => {
     const normalized = normalizeEntry(
       { id: "1", quadrant: "confirmed_inflow", amount: "", timing_mode: "date", expected_date: "2026-08-01" },
       TODAY,
@@ -54,5 +74,18 @@ describe("cashHorizon", () => {
       TODAY,
     );
     expect(patched[0].amount).toBe("");
+
+    const distributed = normalizeEntry(
+      {
+        id: "2",
+        quadrant: "confirmed_outflow",
+        amount: 66000,
+        timing_mode: "distributed",
+        occurrence_count: 4,
+      },
+      TODAY,
+    );
+    expect(distributed.per_occurrence_amount).toBe(16500);
+    expect(distributed.resolved_date).toBe("2026-10-08");
   });
 });

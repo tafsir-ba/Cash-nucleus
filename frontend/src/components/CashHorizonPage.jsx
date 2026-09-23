@@ -19,6 +19,7 @@ import {
   formatCHFCompact,
   formatResolvedDateLabel,
   parseAmountInput,
+  parseOccurrenceCount,
   patchEntryForDisplay,
   reorderEntriesForDisplay,
   toDateInputValue,
@@ -72,6 +73,7 @@ const emptyDraft = (quadrant) => ({
   timing_mode: "date",
   expected_date: toDateInputValue(new Date()),
   days_from_today: 30,
+  occurrence_count: 4,
   notes: "",
 });
 
@@ -153,6 +155,12 @@ const QuadrantWorkspace = ({
       toast.error("Enter valid days");
       return;
     }
+    const occurrenceCount =
+      draft.timing_mode === "distributed" ? parseOccurrenceCount(draft.occurrence_count) : null;
+    if (draft.timing_mode === "distributed" && occurrenceCount == null) {
+      toast.error("Enter at least 2 occurrences");
+      return;
+    }
     await onAdd({
       quadrant,
       label: draft.label.trim(),
@@ -160,6 +168,7 @@ const QuadrantWorkspace = ({
       timing_mode: draft.timing_mode,
       expected_date: draft.timing_mode === "date" ? draft.expected_date : null,
       days_from_today: days,
+      occurrence_count: occurrenceCount,
       notes: draft.notes?.trim() || null,
     });
     setDraft(emptyDraft(quadrant));
@@ -176,7 +185,104 @@ const QuadrantWorkspace = ({
     timing_mode,
     expected_date: timing_mode === "date" ? entry.expected_date || toDateInputValue(new Date()) : entry.expected_date,
     days_from_today: timing_mode === "days" ? entry.days_from_today ?? 30 : entry.days_from_today,
+    occurrence_count: timing_mode === "distributed" ? entry.occurrence_count || 4 : entry.occurrence_count,
   });
+
+  const renderWhenField = (entry) => {
+    if (entry.timing_mode === "date") {
+      return (
+        <input
+          type="date"
+          value={entry.expected_date || ""}
+          onChange={(e) => onUpdateLocal(entry.id, { expected_date: e.target.value })}
+          onBlur={(e) => onSave(entry.id, { expected_date: e.target.value })}
+          className={CELL}
+        />
+      );
+    }
+    if (entry.timing_mode === "distributed") {
+      return (
+        <input
+          type="text"
+          inputMode="numeric"
+          value={entry.occurrence_count === "" ? "" : entry.occurrence_count ?? ""}
+          onFocus={selectOnFocus}
+          onChange={(e) => onUpdateLocal(entry.id, { occurrence_count: e.target.value })}
+          onBlur={(e) => {
+            const count = parseOccurrenceCount(e.target.value);
+            if (count == null) {
+              toast.error("Enter at least 2 occurrences");
+              return;
+            }
+            onSave(entry.id, { occurrence_count: count });
+          }}
+          className={`${CELL} font-mono`}
+          placeholder="# months"
+          title="Number of monthly occurrences"
+        />
+      );
+    }
+    return (
+      <input
+        type="text"
+        inputMode="numeric"
+        value={entry.days_from_today === "" ? "" : entry.days_from_today ?? ""}
+        onFocus={selectOnFocus}
+        onChange={(e) => onUpdateLocal(entry.id, { days_from_today: e.target.value })}
+        onBlur={(e) => {
+          const days = parseAmountInput(e.target.value);
+          if (days == null) {
+            toast.error("Enter valid days");
+            return;
+          }
+          onSave(entry.id, { days_from_today: days });
+        }}
+        className={`${CELL} font-mono`}
+        placeholder="0"
+      />
+    );
+  };
+
+  const renderDraftWhenField = () => {
+    if (draft.timing_mode === "date") {
+      return (
+        <input
+          type="date"
+          value={draft.expected_date}
+          onChange={(e) => setDraft((d) => ({ ...d, expected_date: e.target.value }))}
+          onKeyDown={handleDraftKeyDown}
+          className={`${CELL} bg-zinc-950/80 border-zinc-800`}
+        />
+      );
+    }
+    if (draft.timing_mode === "distributed") {
+      return (
+        <input
+          type="text"
+          inputMode="numeric"
+          value={draft.occurrence_count === "" ? "" : draft.occurrence_count}
+          onFocus={selectOnFocus}
+          onChange={(e) => setDraft((d) => ({ ...d, occurrence_count: e.target.value }))}
+          onKeyDown={handleDraftKeyDown}
+          className={`${CELL} bg-zinc-950/80 border-zinc-800 font-mono`}
+          placeholder="# months"
+          title="Number of monthly occurrences"
+        />
+      );
+    }
+    return (
+      <input
+        type="text"
+        inputMode="numeric"
+        value={draft.days_from_today === "" ? "" : draft.days_from_today}
+        onFocus={selectOnFocus}
+        onChange={(e) => setDraft((d) => ({ ...d, days_from_today: e.target.value }))}
+        onKeyDown={handleDraftKeyDown}
+        className={`${CELL} bg-zinc-950/80 border-zinc-800 font-mono`}
+        placeholder="Days"
+      />
+    );
+  };
 
   const colCount = showNotes ? 8 : 7;
 
@@ -218,9 +324,9 @@ const QuadrantWorkspace = ({
                 <th className={`${TH} w-8`} aria-label="Reorder" />
                 <th className={`${TH} min-w-[160px]`}>Label</th>
                 <th className={`${TH} w-[110px]`}>Amount</th>
-                <th className={`${TH} w-[88px]`}>Timing</th>
+                <th className={`${TH} w-[108px]`}>Timing</th>
                 <th className={`${TH} w-[130px]`}>When</th>
-                <th className={`${TH} w-[110px]`}>Resolved</th>
+                <th className={`${TH} min-w-[140px]`}>Resolved</th>
                 {showNotes && <th className={`${TH} min-w-[140px]`}>Notes</th>}
                 <th className={`${TH} w-10`} aria-label="Delete" />
               </tr>
@@ -287,37 +393,10 @@ const QuadrantWorkspace = ({
                     >
                       <option value="date">Date</option>
                       <option value="days">Days</option>
+                      <option value="distributed">Distributed</option>
                     </select>
                   </td>
-                  <td className={TD}>
-                    {entry.timing_mode === "date" ? (
-                      <input
-                        type="date"
-                        value={entry.expected_date || ""}
-                        onChange={(e) => onUpdateLocal(entry.id, { expected_date: e.target.value })}
-                        onBlur={(e) => onSave(entry.id, { expected_date: e.target.value })}
-                        className={CELL}
-                      />
-                    ) : (
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={entry.days_from_today === "" ? "" : entry.days_from_today ?? ""}
-                        onFocus={selectOnFocus}
-                        onChange={(e) => onUpdateLocal(entry.id, { days_from_today: e.target.value })}
-                        onBlur={(e) => {
-                          const days = parseAmountInput(e.target.value);
-                          if (days == null) {
-                            toast.error("Enter valid days");
-                            return;
-                          }
-                          onSave(entry.id, { days_from_today: days });
-                        }}
-                        className={`${CELL} font-mono`}
-                        placeholder="0"
-                      />
-                    )}
-                  </td>
+                  <td className={TD}>{renderWhenField(entry)}</td>
                   <td className={`${TD} px-2 text-xs text-zinc-500 font-mono whitespace-nowrap`}>
                     {formatResolvedDateLabel(entry)}
                   </td>
@@ -377,27 +456,9 @@ const QuadrantWorkspace = ({
             >
               <option value="date">Date</option>
               <option value="days">Days</option>
+              <option value="distributed">Distributed</option>
             </select>
-            {draft.timing_mode === "date" ? (
-              <input
-                type="date"
-                value={draft.expected_date}
-                onChange={(e) => setDraft((d) => ({ ...d, expected_date: e.target.value }))}
-                onKeyDown={handleDraftKeyDown}
-                className={`${CELL} bg-zinc-950/80 border-zinc-800`}
-              />
-            ) : (
-              <input
-                type="text"
-                inputMode="numeric"
-                value={draft.days_from_today === "" ? "" : draft.days_from_today}
-                onFocus={selectOnFocus}
-                onChange={(e) => setDraft((d) => ({ ...d, days_from_today: e.target.value }))}
-                onKeyDown={handleDraftKeyDown}
-                className={`${CELL} bg-zinc-950/80 border-zinc-800 font-mono`}
-                placeholder="Days"
-              />
-            )}
+            {renderDraftWhenField()}
             <button
               type="button"
               onClick={submitDraft}

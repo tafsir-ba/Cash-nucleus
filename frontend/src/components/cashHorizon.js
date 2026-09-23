@@ -48,6 +48,15 @@ const asUtcNoon = (value) => {
 const startOfDay = (date = new Date()) =>
   new Date(date.getFullYear(), date.getMonth(), date.getDate());
 
+const addMonths = (date, months) => {
+  const d = new Date(date.getTime());
+  const day = d.getDate();
+  d.setMonth(d.getMonth() + months);
+  // Clamp overflow (e.g. Jan 31 + 1 month)
+  if (d.getDate() < day) d.setDate(0);
+  return d;
+};
+
 export const resolveExpectedDate = ({
   timingMode,
   timing_mode,
@@ -55,16 +64,23 @@ export const resolveExpectedDate = ({
   expected_date,
   daysFromToday,
   days_from_today,
+  occurrenceCount,
+  occurrence_count,
   today = startOfDay(),
 }) => {
   const mode = timingMode || timing_mode || "date";
   const days = daysFromToday ?? days_from_today;
   const dateValue = expectedDate ?? expected_date;
+  const count = occurrenceCount ?? occurrence_count;
   if (mode === "days") {
     if (days === "" || days == null || Number.isNaN(Number(days))) return null;
     const d = new Date(today);
     d.setDate(d.getDate() + Number(days));
     return d;
+  }
+  if (mode === "distributed") {
+    if (count === "" || count == null || Number.isNaN(Number(count)) || Number(count) < 1) return null;
+    return addMonths(today, Number(count) - 1);
   }
   return asUtcNoon(dateValue);
 };
@@ -96,20 +112,35 @@ const normalizeDays = (value) => {
   return Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
 };
 
+const normalizeOccurrenceCount = (value) => {
+  if (value === "" || value === null || value === undefined) return value === "" ? "" : null;
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n)) : null;
+};
+
 /** Display-only normalization for in-progress edits; analysis remains backend-driven. */
 export const normalizeEntry = (entry, today = startOfDay()) => {
   const timingMode = entry.timing_mode || entry.timingMode || "date";
+  const occurrenceCount = normalizeOccurrenceCount(entry.occurrence_count ?? entry.occurrenceCount);
+  const amount = normalizeAmount(entry.amount);
   const resolved = resolveExpectedDate({
     timingMode,
     expectedDate: entry.expected_date ?? entry.expectedDate,
     daysFromToday: entry.days_from_today ?? entry.daysFromToday,
+    occurrenceCount,
     today,
   });
+  const perOccurrence =
+    timingMode === "distributed" && occurrenceCount >= 1 && amount !== ""
+      ? Math.round((Number(amount) / occurrenceCount) * 100) / 100
+      : entry.per_occurrence_amount ?? null;
   return {
     ...entry,
     timing_mode: timingMode,
-    amount: normalizeAmount(entry.amount),
+    amount,
     days_from_today: normalizeDays(entry.days_from_today ?? entry.daysFromToday),
+    occurrence_count: occurrenceCount,
+    per_occurrence_amount: perOccurrence,
     resolved_date: resolved ? toDateInputValue(resolved) : null,
   };
 };
@@ -134,6 +165,26 @@ export const reorderEntriesForDisplay = (entries, quadrant, items) => {
 export const enrichAnalysisPayload = (payload) => payload;
 
 export const formatResolvedDateLabel = (entry) => {
+  if (entry?.timing_mode === "distributed") {
+    const count = Number(entry.occurrence_count);
+    if (!Number.isFinite(count) || count < 1) return "—";
+    const per =
+      entry.per_occurrence_amount != null && entry.per_occurrence_amount !== ""
+        ? Number(entry.per_occurrence_amount)
+        : entry.amount !== "" && entry.amount != null
+          ? Number(entry.amount) / count
+          : null;
+    const perLabel = per != null && Number.isFinite(per) ? formatCHFCompact(per) : "—";
+    const end = entry.resolved_date
+      ? asUtcNoon(entry.resolved_date)?.toLocaleDateString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          timeZone: "UTC",
+        })
+      : null;
+    return end ? `${count}× ${perLabel}/mo · ${end}` : `${count}× ${perLabel}/mo`;
+  }
   if (!entry?.resolved_date) return "—";
   const d = asUtcNoon(entry.resolved_date);
   if (!d) return "—";
@@ -144,4 +195,10 @@ export const parseAmountInput = (raw) => {
   if (raw === "" || raw == null) return null;
   const n = Number(String(raw).replace(/'/g, ""));
   return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
+};
+
+export const parseOccurrenceCount = (raw) => {
+  if (raw === "" || raw == null) return null;
+  const n = Number(String(raw).replace(/'/g, ""));
+  return Number.isFinite(n) && n >= 2 ? Math.round(n) : null;
 };

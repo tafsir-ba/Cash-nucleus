@@ -331,9 +331,10 @@ class CashHorizonEntry(BaseModel):
     quadrant: Literal["confirmed_inflow", "confirmed_outflow", "potential_inflow", "potential_outflow"]
     label: str
     amount: float
-    timing_mode: Literal["date", "days"] = "date"
+    timing_mode: Literal["date", "days", "distributed"] = "date"
     expected_date: Optional[str] = None
     days_from_today: Optional[int] = None
+    occurrence_count: Optional[int] = None
     notes: Optional[str] = None
     sort_order: int = 0
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -344,9 +345,10 @@ class CashHorizonEntryCreate(BaseModel):
     quadrant: Literal["confirmed_inflow", "confirmed_outflow", "potential_inflow", "potential_outflow"]
     label: str
     amount: float
-    timing_mode: Literal["date", "days"] = "date"
+    timing_mode: Literal["date", "days", "distributed"] = "date"
     expected_date: Optional[str] = None
     days_from_today: Optional[int] = None
+    occurrence_count: Optional[int] = None
     notes: Optional[str] = None
     sort_order: Optional[int] = None
 
@@ -354,9 +356,10 @@ class CashHorizonEntryCreate(BaseModel):
 class CashHorizonEntryUpdate(BaseModel):
     label: Optional[str] = None
     amount: Optional[float] = None
-    timing_mode: Optional[Literal["date", "days"]] = None
+    timing_mode: Optional[Literal["date", "days", "distributed"]] = None
     expected_date: Optional[str] = None
     days_from_today: Optional[int] = None
+    occurrence_count: Optional[int] = None
     notes: Optional[str] = None
     sort_order: Optional[int] = None
 
@@ -1831,6 +1834,9 @@ async def create_cash_horizon_entry(
         raise HTTPException(status_code=400, detail="Expected date is required")
     if payload.timing_mode == "days" and payload.days_from_today is None:
         raise HTTPException(status_code=400, detail="Days from today is required")
+    if payload.timing_mode == "distributed":
+        if payload.occurrence_count is None or int(payload.occurrence_count) < 2:
+            raise HTTPException(status_code=400, detail="Occurrence count must be at least 2")
 
     sort_order = payload.sort_order
     if sort_order is None:
@@ -1841,8 +1847,9 @@ async def create_cash_horizon_entry(
         label=payload.label.strip(),
         amount=round(float(payload.amount), 2),
         timing_mode=payload.timing_mode,
-        expected_date=payload.expected_date,
-        days_from_today=payload.days_from_today,
+        expected_date=payload.expected_date if payload.timing_mode == "date" else None,
+        days_from_today=payload.days_from_today if payload.timing_mode == "days" else None,
+        occurrence_count=int(payload.occurrence_count) if payload.timing_mode == "distributed" else None,
         notes=(payload.notes or "").strip() or None,
         sort_order=sort_order,
     )
@@ -1896,6 +1903,19 @@ async def update_cash_horizon_entry(
         raise HTTPException(status_code=400, detail="Expected date is required")
     if timing_mode == "days" and merged.get("days_from_today") is None:
         raise HTTPException(status_code=400, detail="Days from today is required")
+    if timing_mode == "distributed":
+        occ = merged.get("occurrence_count")
+        if occ is None or int(occ) < 2:
+            raise HTTPException(status_code=400, detail="Occurrence count must be at least 2")
+        update_data["occurrence_count"] = int(occ)
+        update_data["expected_date"] = None
+        update_data["days_from_today"] = None
+    elif timing_mode == "date":
+        update_data["days_from_today"] = None
+        update_data["occurrence_count"] = None
+    elif timing_mode == "days":
+        update_data["expected_date"] = None
+        update_data["occurrence_count"] = None
 
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.cash_horizon_entries.update_one({"id": entry_id}, {"$set": update_data})
