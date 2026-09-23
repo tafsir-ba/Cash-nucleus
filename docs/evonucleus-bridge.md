@@ -14,7 +14,7 @@ can refresh them.
 | `overdue_ar` | `GET /api/ar/summary` | `overdue_receivables_chf` | Confirmed inflow |
 | `arr_potential` | `GET /api/maintenance/summary` | `annual_recurring_potential` | Potential inflow |
 | `mrr_potential` | `GET /api/maintenance/summary` | `monthly_recurring_potential` | Potential inflow |
-| `vendor_remaining` | `GET /api/vendors/aggregation` | sum of `remaining_chf_reporting` | Confirmed / potential outflow |
+| `vendor_remaining` | `GET /api/vendors/aggregation` | sum of `remaining_chf_reporting` (= Vendor **Remaining (to pay)**) | Confirmed / potential outflow |
 
 In the UI: **Cash Horizon → add/edit entry → Amount source → Evonucleus P&L**.
 

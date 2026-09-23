@@ -95,8 +95,8 @@ def test_build_source_catalog_with_live_evonucleus_metrics():
             },
             {
                 "ref_id": "vendor_remaining",
-                "label": "Vendor costs remaining",
-                "subtitle": "Sum of vendor remaining",
+                "label": "Remaining (to pay)",
+                "subtitle": "Vendor tab KPI — sum of remaining CHF reporting",
                 "amount": 4200,
                 "enabled": True,
                 "suggested_quadrants": ["confirmed_outflow", "potential_outflow"],
