@@ -81,8 +81,8 @@ METRIC_DEFS: Tuple[Dict[str, Any], ...] = (
     },
     {
         "ref_id": "vendor_remaining",
-        "label": "Vendor costs remaining",
-        "subtitle": "Sum of vendor remaining (CHF reporting)",
+        "label": "Remaining (to pay)",
+        "subtitle": "Vendor tab KPI — sum of remaining CHF reporting",
         "path": "/api/vendors/aggregation",
         "field": "_vendor_remaining_sum",
         "suggested_quadrants": ["confirmed_outflow", "potential_outflow"],
