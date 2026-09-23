@@ -428,7 +428,7 @@ const QuadrantWorkspace = ({
         </div>
 
         <div className="border-t border-zinc-800 bg-zinc-950/70 px-2 py-2" data-testid="quick-add-form">
-          <div className="grid grid-cols-[auto_minmax(0,1.4fr)_110px_88px_130px_auto] gap-1.5 items-center min-w-[640px]">
+          <div className="grid grid-cols-[auto_minmax(0,1.4fr)_110px_108px_130px_auto] gap-1.5 items-center min-w-[640px]">
             <span className="w-8 flex justify-center text-zinc-600">
               <Plus size={14} />
             </span>
