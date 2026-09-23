@@ -131,54 +131,7 @@ export const reorderEntriesForDisplay = (entries, quadrant, items) => {
     });
 };
 
-const buildTimestampDomain = (timestamps) => {
-  const valid = timestamps.filter((t) => t != null && !Number.isNaN(t));
-  if (!valid.length) return ["auto", "auto"];
-  const min = Math.min(...valid);
-  const max = Math.max(...valid);
-  if (min === max) {
-    const monthMs = 30 * 24 * 60 * 60 * 1000;
-    return [min - monthMs, max + monthMs];
-  }
-  return [min, max];
-};
-
-export const buildLiquidityChartDomain = (timeline) =>
-  buildTimestampDomain((timeline || []).map((p) => p.timestamp));
-
-export const buildMatchChartDomain = (events, timeline = []) =>
-  buildTimestampDomain([
-    ...(events || []).map((e) => e.timestamp),
-    ...(timeline || []).map((p) => p.timestamp),
-  ]);
-
-export const MATCH_QUADRANT_COLORS = {
-  confirmed_inflow: "#34d399",
-  confirmed_outflow: "#fb7185",
-  potential_inflow: "#38bdf8",
-  potential_outflow: "#fbbf24",
-};
-
-export const buildMatchScatterData = (events) =>
-  (events || [])
-    .filter((e) => e.timestamp != null && !Number.isNaN(e.timestamp))
-    .map((event) => ({
-      ...event,
-      y: event.quadrant.endsWith("_inflow") ? event.amount : -event.amount,
-    }));
-
-export const enrichAnalysisPayload = (payload) => {
-  if (!payload) return payload;
-  const timeline = (payload.timeline || []).map((point) => ({
-    ...point,
-    timestamp: point.timestamp ?? (asUtcNoon(point.date)?.getTime() ?? null),
-  }));
-  const cash_match_events = (payload.cash_match_events || []).map((event) => ({
-    ...event,
-    timestamp: event.timestamp ?? (asUtcNoon(event.date)?.getTime() ?? null),
-  }));
-  return { ...payload, timeline, cash_match_events };
-};
+export const enrichAnalysisPayload = (payload) => payload;
 
 export const formatResolvedDateLabel = (entry) => {
   if (!entry?.resolved_date) return "—";
@@ -191,11 +144,4 @@ export const parseAmountInput = (raw) => {
   if (raw === "" || raw == null) return null;
   const n = Number(String(raw).replace(/'/g, ""));
   return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
-};
-
-export const quadrantToneClass = (quadrant) => {
-  if (quadrant === "confirmed_inflow") return "text-emerald-400 bg-emerald-500/10 border-emerald-500/20";
-  if (quadrant === "confirmed_outflow") return "text-rose-400 bg-rose-500/10 border-rose-500/20";
-  if (quadrant === "potential_inflow") return "text-sky-400 bg-sky-500/10 border-sky-500/20";
-  return "text-amber-400 bg-amber-500/10 border-amber-500/20";
 };

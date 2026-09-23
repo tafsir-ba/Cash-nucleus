@@ -1,6 +1,4 @@
 import {
-  buildMatchChartDomain,
-  buildMatchScatterData,
   enrichAnalysisPayload,
   formatResolvedDateLabel,
   normalizeEntry,
@@ -22,13 +20,12 @@ describe("cashHorizon", () => {
     );
   });
 
-  it("enriches API payloads missing chart timestamps", () => {
-    const enriched = enrichAnalysisPayload({
+  it("passes through analysis payloads", () => {
+    const payload = {
       timeline: [{ date: "2026-08-01", confirmed_liquidity: 1000, combined_liquidity: 1000 }],
       cash_match_events: [{ id: "1", date: "2026-08-01", amount: 1000, quadrant: "confirmed_inflow" }],
-    });
-    expect(enriched.timeline[0].timestamp).toBeGreaterThan(0);
-    expect(enriched.cash_match_events[0].timestamp).toBeGreaterThan(0);
+    };
+    expect(enrichAnalysisPayload(payload)).toBe(payload);
   });
 
   it("formats resolved date labels and parses amounts safely", () => {
@@ -57,32 +54,5 @@ describe("cashHorizon", () => {
       TODAY,
     );
     expect(patched[0].amount).toBe("");
-  });
-
-  it("builds scatter points and chart domain for cash match timeline", () => {
-    const events = [
-      {
-        id: "1",
-        date: "2026-07-31",
-        timestamp: Date.UTC(2026, 6, 31, 12),
-        amount: 38000,
-        quadrant: "confirmed_outflow",
-        label: "Payroll",
-      },
-      {
-        id: "2",
-        date: "2026-08-15",
-        timestamp: Date.UTC(2026, 7, 15, 12),
-        amount: 42000,
-        quadrant: "confirmed_inflow",
-        label: "Invoice",
-      },
-    ];
-    const scatter = buildMatchScatterData(events);
-    expect(scatter).toHaveLength(2);
-    expect(scatter[0].y).toBe(-38000);
-    expect(scatter[1].y).toBe(42000);
-    const domain = buildMatchChartDomain(events, []);
-    expect(domain[0]).toBeLessThan(domain[1]);
   });
 });

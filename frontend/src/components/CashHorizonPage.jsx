@@ -3,32 +3,14 @@ import axios from "axios";
 import { toast } from "sonner";
 import { Plus, Trash, DotsSixVertical, Sparkle } from "@phosphor-icons/react";
 import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-  ReferenceLine,
-  ScatterChart,
-  Scatter,
-  Cell,
-} from "recharts";
-import {
   QUADRANTS,
-  buildLiquidityChartDomain,
-  buildMatchChartDomain,
-  buildMatchScatterData,
   enrichAnalysisPayload,
   EMPTY_CASH_HORIZON_ANALYSIS,
   formatCHF,
   formatCHFCompact,
   formatResolvedDateLabel,
-  MATCH_QUADRANT_COLORS,
   parseAmountInput,
   patchEntryForDisplay,
-  quadrantToneClass,
   reorderEntriesForDisplay,
   toDateInputValue,
 } from "./cashHorizon";
@@ -363,18 +345,6 @@ const QuadrantPanel = ({
   );
 };
 
-const LiquidityTooltip = ({ active, payload }) => {
-  if (!active || !payload?.length) return null;
-  const point = payload[0].payload;
-  return (
-    <div className="bg-zinc-900 border border-zinc-700 rounded-lg p-3 text-xs">
-      <p className="text-zinc-400 mb-1">{point.label || point.date}</p>
-      <p className="text-zinc-100 font-mono">Confirmed: {formatCHF(point.confirmed_liquidity)}</p>
-      <p className="text-zinc-100 font-mono">Combined: {formatCHF(point.combined_liquidity)}</p>
-    </div>
-  );
-};
-
 export const CashHorizonPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -480,21 +450,6 @@ export const CashHorizonPage = () => {
           analysis.entries.filter((entry) => entry.quadrant === id),
         ]),
       ),
-    [analysis],
-  );
-
-  const liquidityDomain = useMemo(
-    () => buildLiquidityChartDomain(analysis.timeline),
-    [analysis],
-  );
-
-  const matchDomain = useMemo(
-    () => buildMatchChartDomain(analysis.cash_match_events, analysis.timeline),
-    [analysis],
-  );
-
-  const matchScatter = useMemo(
-    () => buildMatchScatterData(analysis.cash_match_events),
     [analysis],
   );
 
@@ -604,92 +559,6 @@ export const CashHorizonPage = () => {
               <li key={line}>{line}</li>
             ))}
           </ul>
-        </div>
-      </section>
-
-      <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="chart-container p-4">
-          <h3 className="text-xs uppercase tracking-[0.15em] text-zinc-500 mb-3">Liquidity Timeline</h3>
-          <div className="flex flex-wrap gap-3 mb-2 text-[10px] text-zinc-500">
-            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400" />Confirmed Liquidity</span>
-            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-zinc-100" />Confirmed + Potential</span>
-          </div>
-          <div className="h-[260px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={analysis.timeline} margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                <XAxis
-                  dataKey="timestamp"
-                  type="number"
-                  scale="time"
-                  domain={liquidityDomain}
-                  tickFormatter={(ts) => new Date(ts).toLocaleDateString("en-GB", { month: "short", year: "2-digit" })}
-                  stroke="#71717a"
-                  tick={{ fontSize: 10 }}
-                />
-                <YAxis stroke="#71717a" tick={{ fontSize: 10 }} tickFormatter={formatCHFCompact} width={48} />
-                <Tooltip content={<LiquidityTooltip />} />
-                <ReferenceLine y={0} stroke="#fb7185" strokeDasharray="4 4" strokeOpacity={0.5} />
-                <Line type="linear" dataKey="confirmed_liquidity" stroke="#34d399" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-                <Line type="linear" dataKey="combined_liquidity" stroke="#fafafa" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="chart-container p-4">
-          <h3 className="text-xs uppercase tracking-[0.15em] text-zinc-500 mb-3">Cash Match Timeline</h3>
-          <div className="h-[260px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <ScatterChart data={matchScatter} margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                <XAxis
-                  dataKey="timestamp"
-                  type="number"
-                  scale="time"
-                  domain={matchDomain}
-                  tickFormatter={(ts) => new Date(ts).toLocaleDateString("en-GB", { month: "short", day: "numeric" })}
-                  stroke="#71717a"
-                  tick={{ fontSize: 10 }}
-                />
-                <YAxis
-                  dataKey="y"
-                  type="number"
-                  stroke="#71717a"
-                  tick={{ fontSize: 10 }}
-                  tickFormatter={formatCHFCompact}
-                  width={48}
-                />
-                <Tooltip
-                  cursor={{ strokeDasharray: "3 3" }}
-                  content={({ active, payload }) => {
-                    if (!active || !payload?.length) return null;
-                    const p = payload[0].payload;
-                    return (
-                      <div className="bg-zinc-900 border border-zinc-700 rounded p-2 text-xs">
-                        <p className="text-zinc-300">{p.label}</p>
-                        <p className="text-zinc-100 font-mono">{formatCHF(p.amount)}</p>
-                        <p className="text-zinc-500">{p.quadrant_label}</p>
-                      </div>
-                    );
-                  }}
-                />
-                <ReferenceLine y={0} stroke="#52525b" strokeDasharray="4 4" />
-                <Scatter dataKey="y" fill="#34d399" isAnimationActive={false}>
-                  {matchScatter.map((point) => (
-                    <Cell key={point.id} fill={MATCH_QUADRANT_COLORS[point.quadrant] || "#a1a1aa"} />
-                  ))}
-                </Scatter>
-              </ScatterChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="flex flex-wrap gap-3 mb-2 text-[10px] text-zinc-500">
-            {QUADRANTS.map(({ id, title }) => (
-              <span key={id} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${quadrantToneClass(id)}`}>
-                {title}
-              </span>
-            ))}
-          </div>
         </div>
       </section>
     </div>
