@@ -220,6 +220,10 @@ const QuadrantWorkspace = ({
       toast.error("Enter at least 2 occurrences");
       return;
     }
+    if (draft.timing_mode === "distributed" && !draft.expected_date) {
+      toast.error("Enter a distribution start date");
+      return;
+    }
     const payload = {
       quadrant,
       label: draft.label.trim(),
@@ -280,24 +284,42 @@ const QuadrantWorkspace = ({
     }
     if (entry.timing_mode === "distributed") {
       return (
-        <input
-          type="text"
-          inputMode="numeric"
-          value={entry.occurrence_count === "" ? "" : entry.occurrence_count ?? ""}
-          onFocus={selectOnFocus}
-          onChange={(e) => onUpdateLocal(entry.id, { occurrence_count: e.target.value })}
-          onBlur={(e) => {
-            const count = parseOccurrenceCount(e.target.value);
-            if (count == null) {
-              toast.error("Enter at least 2 occurrences");
-              return;
-            }
-            onSave(entry.id, { occurrence_count: count });
-          }}
-          className={`${CELL} font-mono`}
-          placeholder="# months"
-          title="Number of monthly occurrences"
-        />
+        <div className="flex flex-col gap-1 min-w-[168px]">
+          <input
+            type="date"
+            value={entry.expected_date || ""}
+            onChange={(e) => onUpdateLocal(entry.id, { expected_date: e.target.value })}
+            onBlur={(e) => {
+              if (!e.target.value) {
+                toast.error("Enter a distribution start date");
+                return;
+              }
+              onSave(entry.id, { expected_date: e.target.value });
+            }}
+            className={CELL}
+            title="Distribution start date (first installment)"
+            aria-label="Distribution start date"
+          />
+          <input
+            type="text"
+            inputMode="numeric"
+            value={entry.occurrence_count === "" ? "" : entry.occurrence_count ?? ""}
+            onFocus={selectOnFocus}
+            onChange={(e) => onUpdateLocal(entry.id, { occurrence_count: e.target.value })}
+            onBlur={(e) => {
+              const count = parseOccurrenceCount(e.target.value);
+              if (count == null) {
+                toast.error("Enter at least 2 occurrences");
+                return;
+              }
+              onSave(entry.id, { occurrence_count: count });
+            }}
+            className={`${CELL} font-mono`}
+            placeholder="# months"
+            title="Number of monthly occurrences"
+            aria-label="Number of monthly occurrences"
+          />
+        </div>
       );
     }
     return (
@@ -335,17 +357,29 @@ const QuadrantWorkspace = ({
     }
     if (draft.timing_mode === "distributed") {
       return (
-        <input
-          type="text"
-          inputMode="numeric"
-          value={draft.occurrence_count === "" ? "" : draft.occurrence_count}
-          onFocus={selectOnFocus}
-          onChange={(e) => setDraft((d) => ({ ...d, occurrence_count: e.target.value }))}
-          onKeyDown={handleDraftKeyDown}
-          className={`${CELL} bg-zinc-950/80 border-zinc-800 font-mono`}
-          placeholder="# months"
-          title="Number of monthly occurrences"
-        />
+        <div className="flex flex-col gap-1 min-w-[168px]">
+          <input
+            type="date"
+            value={draft.expected_date}
+            onChange={(e) => setDraft((d) => ({ ...d, expected_date: e.target.value }))}
+            onKeyDown={handleDraftKeyDown}
+            className={`${CELL} bg-zinc-950/80 border-zinc-800`}
+            title="Distribution start date (first installment)"
+            aria-label="Distribution start date"
+          />
+          <input
+            type="text"
+            inputMode="numeric"
+            value={draft.occurrence_count === "" ? "" : draft.occurrence_count}
+            onFocus={selectOnFocus}
+            onChange={(e) => setDraft((d) => ({ ...d, occurrence_count: e.target.value }))}
+            onKeyDown={handleDraftKeyDown}
+            className={`${CELL} bg-zinc-950/80 border-zinc-800 font-mono`}
+            placeholder="# months"
+            title="Number of monthly occurrences"
+            aria-label="Number of monthly occurrences"
+          />
+        </div>
       );
     }
     return (
@@ -421,8 +455,8 @@ const QuadrantWorkspace = ({
                 <th className={`${TH} w-[150px]`}>Source</th>
                 <th className={`${TH} w-[110px]`}>Amount</th>
                 <th className={`${TH} w-[108px]`}>Timing</th>
-                <th className={`${TH} w-[130px]`}>When</th>
-                <th className={`${TH} min-w-[140px]`}>Resolved</th>
+                <th className={`${TH} w-[180px]`}>When</th>
+                <th className={`${TH} min-w-[180px]`}>Resolved</th>
                 {showNotes && <th className={`${TH} min-w-[140px]`}>Notes</th>}
                 <th className={`${TH} w-10`} aria-label="Delete" />
               </tr>
@@ -544,7 +578,7 @@ const QuadrantWorkspace = ({
         </div>
 
         <div className="border-t border-zinc-800 bg-zinc-950/70 px-2 py-2" data-testid="quick-add-form">
-          <div className="grid grid-cols-[auto_minmax(0,1.2fr)_150px_110px_108px_130px_auto] gap-1.5 items-center min-w-[760px]">
+          <div className="grid grid-cols-[auto_minmax(0,1.2fr)_150px_110px_108px_minmax(168px,1fr)_auto] gap-1.5 items-start min-w-[820px]">
             <span className="w-8 flex justify-center text-zinc-600">
               <Plus size={14} />
             </span>
@@ -580,7 +614,13 @@ const QuadrantWorkspace = ({
             />
             <select
               value={draft.timing_mode}
-              onChange={(e) => setDraft((d) => ({ ...d, timing_mode: e.target.value }))}
+              onChange={(e) => {
+                const timing_mode = e.target.value;
+                setDraft((d) => ({
+                  ...d,
+                  ...applyTimingModeChange(d, timing_mode),
+                }));
+              }}
               className={`${CELL} bg-zinc-950/80 border-zinc-800`}
             >
               <option value="date">Date</option>

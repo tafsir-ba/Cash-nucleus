@@ -67,9 +67,19 @@ describe("cashHorizon", () => {
         occurrence_count: 4,
         amount: 66000,
         per_occurrence_amount: 16500,
+        expected_date: "2026-07-08",
         resolved_date: "2026-10-08",
       }),
-    ).toMatch(/4× 17k\/mo/);
+    ).toMatch(/4× 17k\/mo · 8 Jul 2026 → 8 Oct 2026/);
+    expect(
+      formatResolvedDateLabel({
+        timing_mode: "distributed",
+        occurrence_count: 4,
+        amount: 66000,
+        per_occurrence_amount: 16500,
+        resolved_date: "2026-10-08",
+      }),
+    ).toMatch(/4× 17k\/mo · 8 Oct 2026/);
     expect(parseAmountInput("")).toBeNull();
     expect(parseAmountInput("19000")).toBe(19000);
     expect(parseAmountInput("-1")).toBeNull();
@@ -105,5 +115,34 @@ describe("cashHorizon", () => {
     expect(distributed.per_occurrence_amount).toBe(16500);
     expect(distributed.expected_date).toBe("2026-07-08");
     expect(distributed.resolved_date).toBe("2026-10-08");
+  });
+
+  it("defaults distributed start date when missing and keeps deferred starts", () => {
+    const deferred = normalizeEntry(
+      {
+        id: "3",
+        quadrant: "confirmed_outflow",
+        amount: 12000,
+        timing_mode: "distributed",
+        occurrence_count: 12,
+        expected_date: "2027-01-01",
+      },
+      TODAY,
+    );
+    expect(deferred.expected_date).toBe("2027-01-01");
+    expect(deferred.resolved_date).toBe("2027-12-01");
+
+    const missingStart = normalizeEntry(
+      {
+        id: "4",
+        quadrant: "confirmed_outflow",
+        amount: 12000,
+        timing_mode: "distributed",
+        occurrence_count: 3,
+      },
+      TODAY,
+    );
+    expect(missingStart.expected_date).toBe("2026-07-08");
+    expect(missingStart.resolved_date).toBe("2026-09-08");
   });
 });

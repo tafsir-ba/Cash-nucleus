@@ -55,6 +55,29 @@ def test_distributed_schedule_is_anchored_not_rolling():
     assert dates1 == dates2 == ["2026-07-08", "2026-08-08", "2026-09-08", "2026-10-08"]
 
 
+def test_distributed_can_start_in_the_future():
+    """Deferred distributions begin on expected_date, not analysis today."""
+    entry = {
+        "id": "deferred",
+        "quadrant": "confirmed_outflow",
+        "label": "Deferred vendor paydown",
+        "amount": 12000,
+        "timing_mode": "distributed",
+        "occurrence_count": 3,
+        "expected_date": "2027-01-15",
+        "sort_order": 0,
+    }
+    analysis = analyze_cash_horizon([entry], today=date(2026, 9, 24))
+    normalized = analysis["entries"][0]
+    assert normalized["expected_date"] == "2027-01-15"
+    assert [i["date"] for i in normalized["installments"]] == [
+        "2027-01-15",
+        "2027-02-15",
+        "2027-03-15",
+    ]
+    assert normalized["resolved_date"] == "2027-03-15"
+
+
 def test_positions_and_checkpoints():
     entries = [
         {

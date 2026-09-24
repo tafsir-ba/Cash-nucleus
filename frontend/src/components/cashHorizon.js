@@ -186,15 +186,20 @@ export const formatResolvedDateLabel = (entry) => {
           ? Number(entry.amount) / count
           : null;
     const perLabel = per != null && Number.isFinite(per) ? formatCHFCompact(per) : "—";
-    const end = entry.resolved_date
-      ? asUtcNoon(entry.resolved_date)?.toLocaleDateString("en-GB", {
-          day: "numeric",
-          month: "short",
-          year: "numeric",
-          timeZone: "UTC",
-        })
-      : null;
-    return end ? `${count}× ${perLabel}/mo · ${end}` : `${count}× ${perLabel}/mo`;
+    const formatDay = (iso) =>
+      asUtcNoon(iso)?.toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        timeZone: "UTC",
+      }) || null;
+    const start = entry.expected_date ? formatDay(entry.expected_date) : null;
+    const end = entry.resolved_date ? formatDay(entry.resolved_date) : null;
+    if (start && end) {
+      return `${count}× ${perLabel}/mo · ${start} → ${end}`;
+    }
+    if (end) return `${count}× ${perLabel}/mo · ${end}`;
+    return `${count}× ${perLabel}/mo`;
   }
   if (!entry?.resolved_date) return "—";
   const d = asUtcNoon(entry.resolved_date);
