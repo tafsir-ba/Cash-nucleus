@@ -317,6 +317,9 @@ class CashPositionDayEntry(BaseModel):
     created_by: str
     trigger: Literal["manual_adjustment", "import", "system_recalc"]
     note: Optional[str] = None
+    # Full account balances for the day (for multi-series evolution charts).
+    accounts: List[CashBalanceSnapshotAccount] = Field(default_factory=list)
+    # Subset of accounts whose balance moved vs the previous day.
     changed_accounts: List[CashBalanceSnapshotAccount]
 
 
@@ -1764,7 +1767,7 @@ async def get_cash_position_history(
             for a in accounts
             if a.get("account_id")
         }
-        changed_accounts = [
+        day_accounts = [
             CashBalanceSnapshotAccount(
                 account_id=a.get("account_id", ""),
                 account_name=a.get("account_name", ""),
@@ -1777,7 +1780,12 @@ async def get_cash_position_history(
                 ),
             )
             for a in accounts
-            if abs(float(a.get("balance_chf", 0.0)) - float(prev_day_accounts.get(a.get("account_id", ""), 0.0))) > 0.009
+            if a.get("account_id")
+        ]
+        changed_accounts = [
+            a
+            for a in day_accounts
+            if abs(a.movement_chf) > 0.009
         ]
         day_total = round(sum(float(a.get("balance_chf", 0.0)) for a in accounts), 2)
         day_entries.append(
@@ -1789,6 +1797,7 @@ async def get_cash_position_history(
                 created_by=row.get("created_by", "system"),
                 trigger=row.get("trigger", "system_recalc"),
                 note=row.get("note"),
+                accounts=day_accounts,
                 changed_accounts=changed_accounts,
             )
         )
