@@ -12,6 +12,7 @@ import {
 import { Label } from "../components/ui/label";
 import { CashPositionHistoryDialog } from "./CashPositionHistoryDialog";
 import { CashPositionEvolutionChart } from "./CashPositionEvolutionChart";
+import { colorForAccountId } from "./cashPositionChart";
 import { TreasuryAccountTable } from "./TreasuryAccountTable";
 import { inspectBalanceInput, formatBalancePreview } from "./amountExpression";
 
@@ -37,17 +38,6 @@ const formatMovement = (delta) => {
   if (delta < 0) return `−${formatted}`;
   return formatted;
 };
-
-const COLORS = [
-  "bg-zinc-100",
-  "bg-emerald-400",
-  "bg-amber-400",
-  "bg-rose-400",
-  "bg-sky-400",
-  "bg-violet-400",
-  "bg-orange-400",
-  "bg-teal-400",
-];
 
 const emptyDebtForm = () => ({
   creditor: "",
@@ -489,12 +479,13 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
               {sortedAccounts
                 .filter((a) => a.amount > 0)
                 .sort((a, b) => b.amount - a.amount)
-                .map((acc, i) => {
+                .map((acc) => {
                   const pct = (acc.amount / totalBalance) * 100;
+                  const color = colorForAccountId(acc.id, accounts);
                   return (
                     <div
                       key={acc.id}
-                      className={`${COLORS[i % COLORS.length]} rounded-sm transition-all duration-300`}
+                      className={`${color.className} rounded-sm transition-all duration-300`}
                       style={{ width: `${Math.max(pct, 1)}%` }}
                       title={`${acc.label} — ${formatCurrency(acc.amount)} (${pct.toFixed(1)}%)`}
                     />
@@ -505,12 +496,15 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
               {sortedAccounts
                 .filter((a) => a.amount > 0)
                 .sort((a, b) => b.amount - a.amount)
-                .map((acc, i) => (
-                  <span key={acc.id} className="flex items-center gap-1.5 text-xs text-zinc-400">
-                    <span className={`w-2 h-2 rounded-sm ${COLORS[i % COLORS.length]}`} />
-                    {acc.label}
-                  </span>
-                ))}
+                .map((acc) => {
+                  const color = colorForAccountId(acc.id, accounts);
+                  return (
+                    <span key={acc.id} className="flex items-center gap-1.5 text-xs text-zinc-400">
+                      <span className={`w-2 h-2 rounded-sm ${color.className}`} />
+                      {acc.label}
+                    </span>
+                  );
+                })}
             </div>
           </div>
         )}

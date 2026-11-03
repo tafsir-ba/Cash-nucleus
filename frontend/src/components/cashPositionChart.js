@@ -13,19 +13,47 @@ export const TOTAL_SERIES_ID = "__total__";
 
 export const accountSeriesKey = (accountId) => `account_${accountId}`;
 
-/** Stroke colors aligned with the liquidity distribution palette. */
-export const ACCOUNT_CHART_COLORS = [
-  "#f4f4f5", // zinc-100
-  "#34d399", // emerald-400
-  "#fbbf24", // amber-400
-  "#fb7185", // rose-400
-  "#38bdf8", // sky-400
-  "#a78bfa", // violet-400
-  "#fb923c", // orange-400
-  "#2dd4bf", // teal-400
+/**
+ * Single account color palette.
+ * `className` paints the liquidity bar; `hex` paints chart strokes.
+ * Slot assignment is by fixed account order, never by display rank.
+ */
+export const ACCOUNT_COLOR_PALETTE = [
+  { className: "bg-zinc-100", hex: "#f4f4f5" },
+  { className: "bg-emerald-400", hex: "#34d399" },
+  { className: "bg-amber-400", hex: "#fbbf24" },
+  { className: "bg-rose-400", hex: "#fb7185" },
+  { className: "bg-sky-400", hex: "#38bdf8" },
+  { className: "bg-violet-400", hex: "#a78bfa" },
+  { className: "bg-orange-400", hex: "#fb923c" },
+  { className: "bg-teal-400", hex: "#2dd4bf" },
 ];
 
 export const TOTAL_CHART_COLOR = "#e4e4e7";
+
+/**
+ * Fixed color order: unique account ids, sorted, independent of balance
+ * and of whichever array order the caller happened to receive.
+ */
+export const accountsInColorOrder = (accounts = []) => {
+  const seen = new Set();
+  const unique = [];
+  accounts.forEach((account) => {
+    if (!account?.id || seen.has(account.id)) return;
+    seen.add(account.id);
+    unique.push(account);
+  });
+  unique.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  return unique;
+};
+
+/** Palette entry for an account. Same id + same account set => same color. */
+export const colorForAccountId = (accountId, accounts = []) => {
+  if (!accountId) return null;
+  const index = accountsInColorOrder(accounts).findIndex((account) => account.id === accountId);
+  if (index < 0) return null;
+  return ACCOUNT_COLOR_PALETTE[index % ACCOUNT_COLOR_PALETTE.length];
+};
 
 export const buildCashPositionChartData = (days) =>
   days
@@ -111,9 +139,6 @@ export const buildCashPositionAccountOptions = (accounts = [], days = []) => {
         : opt.baseLabel,
   }));
 };
-
-export const colorForAccountIndex = (index) =>
-  ACCOUNT_CHART_COLORS[((index % ACCOUNT_CHART_COLORS.length) + ACCOUNT_CHART_COLORS.length) % ACCOUNT_CHART_COLORS.length];
 
 export const buildCashPositionChartXDomain = (chartData) => {
   if (!chartData.length) return ["auto", "auto"];

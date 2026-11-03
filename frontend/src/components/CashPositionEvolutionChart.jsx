@@ -18,7 +18,7 @@ import {
   buildCashPositionAccountOptions,
   buildCashPositionChartXDomain,
   buildMultiSeriesCashPositionChartData,
-  colorForAccountIndex,
+  colorForAccountId,
   formatChartDate,
 } from "./cashPositionChart";
 
@@ -75,6 +75,10 @@ export const CashPositionEvolutionChart = ({ accounts = [] }) => {
     [accounts, days],
   );
 
+  // Color from the live account list when present so the chart matches the
+  // liquidity bar. Fall back to checkbox options only before accounts load.
+  const colorAccounts = accounts.length > 0 ? accounts : accountOptions;
+
   const chartData = useMemo(
     () => buildMultiSeriesCashPositionChartData(days, [...selectedAccountIds]),
     [days, selectedAccountIds],
@@ -92,17 +96,17 @@ export const CashPositionEvolutionChart = ({ accounts = [] }) => {
         color: TOTAL_CHART_COLOR,
       });
     }
-    accountOptions.forEach((opt, index) => {
+    accountOptions.forEach((opt) => {
       if (!selectedAccountIds.has(opt.id)) return;
       series.push({
         id: opt.id,
         dataKey: accountSeriesKey(opt.id),
         label: opt.label,
-        color: colorForAccountIndex(index),
+        color: colorForAccountId(opt.id, colorAccounts)?.hex,
       });
     });
     return series;
-  }, [showTotal, selectedAccountIds, accountOptions]);
+  }, [showTotal, selectedAccountIds, accountOptions, colorAccounts]);
 
   const toggleAccount = (accountId) => {
     setSelectedAccountIds((prev) => {
@@ -202,8 +206,8 @@ export const CashPositionEvolutionChart = ({ accounts = [] }) => {
           />
           Total cash
         </label>
-        {accountOptions.map((opt, index) => {
-          const color = colorForAccountIndex(index);
+        {accountOptions.map((opt) => {
+          const color = colorForAccountId(opt.id, colorAccounts)?.hex;
           const checked = selectedAccountIds.has(opt.id);
           return (
             <label

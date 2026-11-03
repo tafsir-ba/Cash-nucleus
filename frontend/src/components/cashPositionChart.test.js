@@ -1,13 +1,14 @@
 import {
+  ACCOUNT_COLOR_PALETTE,
   accountSeriesKey,
+  accountsInColorOrder,
   buildCashPositionAccountOptions,
   buildCashPositionChartData,
   buildCashPositionChartXDomain,
   buildMultiSeriesCashPositionChartData,
-  colorForAccountIndex,
+  colorForAccountId,
   formatChartDate,
   parseSnapshotDate,
-  ACCOUNT_CHART_COLORS,
 } from "./cashPositionChart";
 
 describe("cashPositionChart", () => {
@@ -158,7 +159,45 @@ describe("cashPositionChart", () => {
   });
 
   it("cycles account colors from the shared palette", () => {
-    expect(colorForAccountIndex(0)).toBe(ACCOUNT_CHART_COLORS[0]);
-    expect(colorForAccountIndex(ACCOUNT_CHART_COLORS.length)).toBe(ACCOUNT_CHART_COLORS[0]);
+    const accounts = Array.from({ length: ACCOUNT_COLOR_PALETTE.length + 1 }, (_, index) => ({
+      id: `acc-${String(index).padStart(2, "0")}`,
+      amount: index,
+    }));
+    expect(colorForAccountId("acc-00", accounts)).toEqual(ACCOUNT_COLOR_PALETTE[0]);
+    expect(colorForAccountId(accounts[ACCOUNT_COLOR_PALETTE.length].id, accounts)).toEqual(
+      ACCOUNT_COLOR_PALETTE[0],
+    );
+  });
+
+  it("gives the same account the same color on the liquidity bar and the chart", () => {
+    // Largest balance is last in id order, so a rank-based palette would disagree.
+    const accounts = [
+      { id: "z-ubs", label: "UBS V", amount: 900 },
+      { id: "a-post", label: "Post Reserve", amount: 50 },
+      { id: "m-migros", label: "Migros", amount: 0 },
+    ];
+    const shuffled = [accounts[2], accounts[0], accounts[1]];
+
+    expect(accountsInColorOrder(shuffled).map((account) => account.id)).toEqual([
+      "a-post",
+      "m-migros",
+      "z-ubs",
+    ]);
+
+    const liquidityBarColor = colorForAccountId("z-ubs", accounts);
+    const chartColor = colorForAccountId("z-ubs", shuffled);
+
+    expect(liquidityBarColor).toEqual(chartColor);
+    expect(liquidityBarColor).toEqual(ACCOUNT_COLOR_PALETTE[2]);
+    expect(liquidityBarColor.hex).toBe(ACCOUNT_COLOR_PALETTE[2].hex);
+    expect(liquidityBarColor.className).toBe(ACCOUNT_COLOR_PALETTE[2].className);
+    // Display rank 0 (largest balance) must not steal palette slot 0.
+    expect(liquidityBarColor).not.toEqual(ACCOUNT_COLOR_PALETTE[0]);
+
+    const afterBalanceChange = accounts.map((account) =>
+      account.id === "a-post" ? { ...account, amount: 5000 } : account,
+    );
+    expect(colorForAccountId("z-ubs", afterBalanceChange)).toEqual(liquidityBarColor);
+    expect(colorForAccountId("a-post", afterBalanceChange)).toEqual(colorForAccountId("a-post", accounts));
   });
 });
