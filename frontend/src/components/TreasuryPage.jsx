@@ -11,6 +11,7 @@ import {
 } from "../components/ui/select";
 import { Label } from "../components/ui/label";
 import { CashPositionHistoryDialog } from "./CashPositionHistoryDialog";
+import { CashPositionEvolutionChart } from "./CashPositionEvolutionChart";
 import { TreasuryAccountTable } from "./TreasuryAccountTable";
 import { inspectBalanceInput, formatBalancePreview } from "./amountExpression";
 
@@ -475,6 +476,10 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
               Retry
             </button>
           </div>
+        )}
+
+        {!initialLoading && !loadError && (
+          <CashPositionEvolutionChart accounts={accounts} />
         )}
 
         {!initialLoading && !loadError && accounts.length > 0 && totalBalance > 0 && (

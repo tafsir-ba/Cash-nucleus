@@ -82,8 +82,14 @@ def test_treasury_bank_account_and_debt_crud(client):
 
     history = client.get("/api/treasury/cash-position-history")
     assert history.status_code == 200, history.text
-    assert "days" in history.json()
-    assert "account_audit_log" in history.json()
+    body = history.json()
+    assert "days" in body
+    assert "account_audit_log" in body
+    assert body["days"], "expected at least one cash position day after account updates"
+    latest_day = body["days"][-1]
+    assert "accounts" in latest_day
+    assert any(a.get("account_id") == account_id for a in latest_day["accounts"])
+    assert any(a.get("account_id") == account_id for a in latest_day["changed_accounts"])
 
     debt = client.post(
         "/api/treasury/debts",
