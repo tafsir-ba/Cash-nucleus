@@ -346,3 +346,126 @@ def test_refresh_shares_pl_fetch_and_hides_upstream_text(client, monkeypatch):
 
     client.delete(f"/api/cash-horizon/entries/{first}")
     client.delete(f"/api/cash-horizon/entries/{second}")
+
+
+def _assert_anon_401(resp, label: str):
+    assert resp.status_code == 401, f"{label}: {resp.status_code} {resp.text}"
+    assert resp.json() == {"detail": "Not authenticated"}
+
+
+def test_anonymous_reference_routes_rejected(client):
+    saved = client.cookies.get("access_token")
+    client.cookies.clear()
+    flow = {
+        "label": "Nope",
+        "amount": 10,
+        "date": "2026-09-01",
+        "category": "Expense",
+        "certainty": "Sure to happen",
+        "recurrence": "none",
+        "entity_id": "missing",
+    }
+    try:
+        _assert_anon_401(client.get("/api/entities"), "GET entities")
+        _assert_anon_401(client.post("/api/entities", json={"name": "Nope"}), "POST entities")
+        _assert_anon_401(client.put("/api/entities/missing", json={"name": "Nope"}), "PUT entities")
+        _assert_anon_401(client.delete("/api/entities/missing"), "DELETE entities")
+        _assert_anon_401(client.get("/api/settings"), "GET settings")
+        _assert_anon_401(client.put("/api/settings", json={"safety_buffer": 1}), "PUT settings")
+        _assert_anon_401(client.get("/api/integrations/bexio/connections"), "GET bexio connections")
+        _assert_anon_401(client.post("/api/cash-flows", json=flow), "POST cash-flows")
+        _assert_anon_401(
+            client.post("/api/cash-flows/batch", json={"parent": flow, "linked": []}),
+            "POST cash-flows batch",
+        )
+        _assert_anon_401(client.put("/api/cash-flows/missing", json={"label": "Nope"}), "PUT cash-flows")
+        _assert_anon_401(client.delete("/api/cash-flows/missing"), "DELETE cash-flows")
+        _assert_anon_401(
+            client.post(
+                "/api/treasury/debts",
+                json={"creditor": "Nope", "total_debt_chf": 10, "entity_id": "missing"},
+            ),
+            "POST debts",
+        )
+        _assert_anon_401(client.put("/api/treasury/debts/missing", json={"creditor": "Nope"}), "PUT debts")
+        _assert_anon_401(client.delete("/api/treasury/debts/missing"), "DELETE debts")
+        _assert_anon_401(
+            client.put(
+                "/api/flow-occurrences",
+                json={"flow_id": "missing", "month": "2026-09", "actual_amount": 1},
+            ),
+            "PUT flow-occurrences",
+        )
+        _assert_anon_401(
+            client.delete("/api/flow-occurrences", params={"flow_id": "missing", "month": "2026-09"}),
+            "DELETE flow-occurrences",
+        )
+        _assert_anon_401(
+            client.patch("/api/flow-occurrences/history/missing", json={"ignore_in_replay": True}),
+            "PATCH flow-occurrence history",
+        )
+        _assert_anon_401(
+            client.post("/api/bank-accounts", json={"entity_id": "missing", "label": "Nope", "amount": 1}),
+            "POST bank-accounts",
+        )
+        _assert_anon_401(client.put("/api/bank-accounts/missing", json={"amount": 1}), "PUT bank-accounts")
+        _assert_anon_401(client.delete("/api/bank-accounts/missing"), "DELETE bank-accounts")
+        _assert_anon_401(client.post("/api/treasury/sync-bexio"), "POST sync-bexio")
+        _assert_anon_401(client.post("/api/bank-accounts/missing/sync-bexio"), "POST account sync-bexio")
+        _assert_anon_401(client.post("/api/undo"), "POST undo")
+        _assert_anon_401(client.get("/api/undo/peek"), "GET undo peek")
+    finally:
+        client.cookies.clear()
+        if saved:
+            client.cookies.set("access_token", saved)
+
+
+def test_authenticated_reference_routes_still_work(client):
+    listed = client.get("/api/entities")
+    assert listed.status_code == 200, listed.text
+    created = client.post("/api/entities", json={"name": "Session Co"})
+    assert created.status_code == 200, created.text
+    entity_id = created.json()["id"]
+    renamed = client.put(f"/api/entities/{entity_id}", json={"name": "Session Co Renamed"})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["name"] == "Session Co Renamed"
+
+    settings = client.get("/api/settings")
+    assert settings.status_code == 200, settings.text
+    updated_settings = client.put("/api/settings", json={"safety_buffer": 12345})
+    assert updated_settings.status_code == 200, updated_settings.text
+    assert updated_settings.json()["safety_buffer"] == 12345
+
+    connections = client.get("/api/integrations/bexio/connections")
+    assert connections.status_code == 200, connections.text
+
+    flow = client.post(
+        "/api/cash-flows",
+        json={
+            "label": "Session expense",
+            "amount": 80,
+            "date": "2026-09-01",
+            "category": "Expense",
+            "certainty": "Sure to happen",
+            "recurrence": "none",
+            "entity_id": entity_id,
+        },
+    )
+    assert flow.status_code == 200, flow.text
+    flow_id = flow.json()["id"]
+    edited = client.put(f"/api/cash-flows/{flow_id}", json={"label": "Session expense edited"})
+    assert edited.status_code == 200, edited.text
+    occurrence = client.put(
+        "/api/flow-occurrences",
+        json={"flow_id": flow_id, "month": "2026-09", "actual_amount": 70},
+    )
+    assert occurrence.status_code == 200, occurrence.text
+    cleared = client.delete("/api/flow-occurrences", params={"flow_id": flow_id, "month": "2026-09"})
+    assert cleared.status_code == 200, cleared.text
+    deleted_flow = client.delete(f"/api/cash-flows/{flow_id}")
+    assert deleted_flow.status_code == 200, deleted_flow.text
+    deleted_entity = client.delete(f"/api/entities/{entity_id}")
+    assert deleted_entity.status_code == 200, deleted_entity.text
+
+    peek = client.get("/api/undo/peek")
+    assert peek.status_code == 200, peek.text
