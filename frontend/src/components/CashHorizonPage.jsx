@@ -370,10 +370,14 @@ const QuadrantWorkspace = ({
       {sourceGroups.map((group) => (
         <optgroup key={group.kind} label={group.label}>
           {(group.items || []).map((item) => (
-            <option key={item.id} value={sourceOptionValue(item)} disabled={!item.enabled}>
+            <option
+              key={item.id}
+              value={sourceOptionValue(item)}
+              disabled={!item.enabled}
+              title={item.disabled_reason || item.subtitle || ""}
+            >
               {item.label}
               {item.amount != null ? ` · ${formatCHFCompact(item.amount)}` : ""}
-              {!item.enabled ? " (soon)" : ""}
             </option>
           ))}
         </optgroup>

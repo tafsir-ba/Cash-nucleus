@@ -23,11 +23,11 @@ In the UI: **Cash Horizon → add/edit entry → Amount source → Evonucleus P&
 On the Cash Horizon host `backend/.env` (never commit secrets):
 
 ```bash
-# PL base URL (no trailing slash). Local example: http://localhost:8000
-EVONUCLEUS_API_BASE=https://pnl.example.com
-
 # Same key as PL's OPS_SERVICE_API_KEY (read-only machine credential)
 EVONUCLEUS_OPS_API_KEY=<generated-key>
+
+# Optional. Defaults to https://pl.evonucleus.ch
+# EVONUCLEUS_API_BASE=https://pl.evonucleus.ch
 ```
 
 On **pl.evonucleus**, ensure `OPS_SERVICE_API_KEY` is set to the same value and that
@@ -65,7 +65,7 @@ curl -sS -X POST "$CASH_HOST/api/cash-horizon/entries" \
 
 | Symptom | Check |
 |---------|--------|
-| Sources show “not configured” | Both `EVONUCLEUS_API_BASE` and `EVONUCLEUS_OPS_API_KEY` set on cash backend |
+| Sources show “not configured” | `EVONUCLEUS_OPS_API_KEY` set on the cash backend (same value as PL `OPS_SERVICE_API_KEY`) |
 | 401 from refresh | Key mismatch vs PL `OPS_SERVICE_API_KEY` |
 | 403 from refresh | Path not on PL ops allowlist |
 | Stale amount | Use **Refresh sources** on Cash Horizon |

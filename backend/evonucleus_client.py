@@ -12,10 +12,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 # Env (cash-nucleus backend):
-#   EVONUCLEUS_API_BASE   — e.g. https://pnl.example.com or http://localhost:8000
 #   EVONUCLEUS_OPS_API_KEY — same value as PL's OPS_SERVICE_API_KEY
+#   EVONUCLEUS_API_BASE   — optional; defaults to the production PL host
 EVONUCLEUS_API_BASE_ENV = "EVONUCLEUS_API_BASE"
 EVONUCLEUS_OPS_API_KEY_ENV = "EVONUCLEUS_OPS_API_KEY"
+DEFAULT_EVONUCLEUS_API_BASE = "https://pl.evonucleus.ch"
 
 DEFAULT_TIMEOUT_S = 20.0
 
@@ -93,7 +94,8 @@ _METRIC_BY_ID = {m["ref_id"]: m for m in METRIC_DEFS}
 
 
 def get_api_base() -> str:
-    return (os.environ.get(EVONUCLEUS_API_BASE_ENV) or "").strip().rstrip("/")
+    configured = (os.environ.get(EVONUCLEUS_API_BASE_ENV) or "").strip().rstrip("/")
+    return configured or DEFAULT_EVONUCLEUS_API_BASE
 
 
 def get_ops_api_key() -> str:
@@ -101,7 +103,7 @@ def get_ops_api_key() -> str:
 
 
 def is_configured() -> bool:
-    return bool(get_api_base() and get_ops_api_key())
+    return bool(get_ops_api_key())
 
 
 def list_metric_defs() -> List[Dict[str, Any]]:
@@ -181,7 +183,7 @@ async def fetch_payloads(*, paths: Optional[List[str]] = None) -> Dict[str, Any]
     """GET one or more PL paths; return {path: json}."""
     if not is_configured():
         raise EvonucleusError(
-            "Evonucleus P&L is not configured. Set EVONUCLEUS_API_BASE and EVONUCLEUS_OPS_API_KEY."
+            "Evonucleus P&L is not configured. Set EVONUCLEUS_OPS_API_KEY (same as PL OPS_SERVICE_API_KEY)."
         )
     wanted = paths or sorted({m["path"] for m in METRIC_DEFS})
     headers = {
@@ -224,7 +226,7 @@ async def fetch_horizon_metrics() -> List[Dict[str, Any]]:
                 "amount": None,
                 "suggested_quadrants": list(m["suggested_quadrants"]),
                 "enabled": False,
-                "disabled_reason": "Set EVONUCLEUS_API_BASE and EVONUCLEUS_OPS_API_KEY",
+                "disabled_reason": "Set EVONUCLEUS_OPS_API_KEY (same as PL OPS_SERVICE_API_KEY)",
             }
             for m in METRIC_DEFS
         ]

@@ -1973,7 +1973,7 @@ async def _resolve_cash_horizon_amount_source(
         if not evonucleus_is_configured():
             raise HTTPException(
                 status_code=400,
-                detail="Evonucleus P&L is not configured. Set EVONUCLEUS_API_BASE and EVONUCLEUS_OPS_API_KEY.",
+                detail="Evonucleus P&L is not configured. Set EVONUCLEUS_OPS_API_KEY (same as PL OPS_SERVICE_API_KEY).",
             )
         try:
             amount = await fetch_metric_amount(ref_id)
