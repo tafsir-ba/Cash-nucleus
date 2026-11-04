@@ -1171,7 +1171,7 @@ async def restore_record_actual_side_effects(side_effects: dict, actor: Optional
         )
 
 @api_router.post("/undo")
-async def undo_last_action(user: dict = Depends(get_optional_user)):
+async def undo_last_action(user: dict = Depends(get_current_user)):
     """Undo the most recent action. Restores full system state including dependencies."""
     last = await db.undo_stack.find_one({}, {"_id": 0}, sort=[("timestamp", -1)])
     if not last:
@@ -1231,7 +1231,7 @@ async def undo_last_action(user: dict = Depends(get_optional_user)):
     return {"status": "undone", "description": last.get("description", "")}
 
 @api_router.get("/undo/peek")
-async def peek_undo():
+async def peek_undo(_user: dict = Depends(get_current_user)):
     """Peek at the last undoable action."""
     last = await db.undo_stack.find_one({}, {"_id": 0}, sort=[("timestamp", -1)])
     if not last:
@@ -1240,18 +1240,18 @@ async def peek_undo():
 
 # ============== ENTITY ROUTES ==============
 @api_router.get("/entities", response_model=List[Entity])
-async def get_entities():
+async def get_entities(_user: dict = Depends(get_current_user)):
     entities = await db.entities.find({}, {"_id": 0}).to_list(100)
     return entities
 
 @api_router.post("/entities", response_model=Entity)
-async def create_entity(entity: EntityCreate):
+async def create_entity(entity: EntityCreate, _user: dict = Depends(get_current_user)):
     entity_obj = Entity(**entity.model_dump())
     await db.entities.insert_one(entity_obj.model_dump())
     return entity_obj
 
 @api_router.put("/entities/{entity_id}", response_model=Entity)
-async def update_entity(entity_id: str, update: EntityUpdate):
+async def update_entity(entity_id: str, update: EntityUpdate, _user: dict = Depends(get_current_user)):
     update_data = {k: v for k, v in update.model_dump().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="No valid update data")
@@ -1264,7 +1264,7 @@ async def update_entity(entity_id: str, update: EntityUpdate):
     return result
 
 @api_router.delete("/entities/{entity_id}")
-async def delete_entity(entity_id: str):
+async def delete_entity(entity_id: str, _user: dict = Depends(get_current_user)):
     accounts = await db.bank_accounts.count_documents({"entity_id": entity_id})
     flows = await db.cash_flows.count_documents({"entity_id": entity_id})
     if accounts > 0 or flows > 0:
@@ -1486,7 +1486,7 @@ async def get_bank_accounts(entity_id: Optional[str] = None, _user: dict = Depen
     return accounts
 
 @api_router.post("/bank-accounts", response_model=BankAccount)
-async def create_bank_account(account: BankAccountCreate, user: dict = Depends(get_optional_user)):
+async def create_bank_account(account: BankAccountCreate, user: dict = Depends(get_current_user)):
     entity = await db.entities.find_one({"id": account.entity_id})
     if not entity:
         raise HTTPException(status_code=400, detail="Entity not found")
@@ -1534,7 +1534,7 @@ async def create_bank_account(account: BankAccountCreate, user: dict = Depends(g
     return account_obj
 
 @api_router.put("/bank-accounts/{account_id}", response_model=BankAccount)
-async def update_bank_account(account_id: str, update: BankAccountUpdate, user: dict = Depends(get_optional_user)):
+async def update_bank_account(account_id: str, update: BankAccountUpdate, user: dict = Depends(get_current_user)):
     raw_update = update.model_dump(exclude_unset=True)
     # Drop explicit nulls for non-connection fields; keep bexio_connection=None so Auto can clear.
     if "note" in raw_update and raw_update["note"] is None:
@@ -1659,12 +1659,12 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate, user: 
 
 
 @api_router.get("/integrations/bexio/connections")
-async def get_bexio_connections():
+async def get_bexio_connections(_user: dict = Depends(get_current_user)):
     return list_configured_connections()
 
 
 @api_router.post("/treasury/sync-bexio", response_model=BexioSyncResponse)
-async def sync_treasury_bexio(user: dict = Depends(get_optional_user)):
+async def sync_treasury_bexio(user: dict = Depends(get_current_user)):
     """Refresh all Bexio-sourced bank accounts (pending invoice net totals)."""
     accounts = await db.bank_accounts.find(
         {"balance_source": "bexio"},
@@ -1685,7 +1685,7 @@ async def sync_treasury_bexio(user: dict = Depends(get_optional_user)):
 
 
 @api_router.post("/bank-accounts/{account_id}/sync-bexio", response_model=BexioSyncAccountResult)
-async def sync_bank_account_bexio(account_id: str, user: dict = Depends(get_optional_user)):
+async def sync_bank_account_bexio(account_id: str, user: dict = Depends(get_current_user)):
     existing = await db.bank_accounts.find_one({"id": account_id}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Bank account not found")
@@ -1706,7 +1706,7 @@ async def delete_bank_account(
     account_id: str,
     note: Optional[str] = Query(default=None),
     trigger: Literal["manual_adjustment", "import", "system_recalc"] = Query(default="manual_adjustment"),
-    user: dict = Depends(get_optional_user),
+    user: dict = Depends(get_current_user),
 ):
     existing = await db.bank_accounts.find_one({"id": account_id}, {"_id": 0})
     if not existing:
@@ -2343,7 +2343,7 @@ async def get_treasury_debts(entity_id: Optional[str] = None, _user: dict = Depe
     return debts
 
 @api_router.post("/treasury/debts", response_model=CashFlow)
-async def create_treasury_debt(payload: TreasuryDebtCreate):
+async def create_treasury_debt(payload: TreasuryDebtCreate, _user: dict = Depends(get_current_user)):
     """Create a one-time debt-tagged cash flow from the treasury module."""
     creditor = (payload.creditor or "").strip()
     if not creditor:
@@ -2370,7 +2370,7 @@ async def create_treasury_debt(payload: TreasuryDebtCreate):
     )
 
 @api_router.put("/treasury/debts/{flow_id}", response_model=CashFlow)
-async def update_treasury_debt(flow_id: str, update: TreasuryDebtUpdate):
+async def update_treasury_debt(flow_id: str, update: TreasuryDebtUpdate, _user: dict = Depends(get_current_user)):
     """Update debt from treasury context while preserving underlying cash flow behavior."""
     flow = await db.cash_flows.find_one({"id": flow_id}, {"_id": 0})
     if not flow:
@@ -2407,7 +2407,7 @@ async def update_treasury_debt(flow_id: str, update: TreasuryDebtUpdate):
     return await update_cash_flow(flow_id, CashFlowUpdate(**patch))
 
 @api_router.delete("/treasury/debts/{flow_id}")
-async def delete_treasury_debt(flow_id: str):
+async def delete_treasury_debt(flow_id: str, _user: dict = Depends(get_current_user)):
     """Delete a debt-tagged cash flow from the treasury module."""
     flow = await db.cash_flows.find_one({"id": flow_id}, {"_id": 0})
     if not flow:
@@ -2458,7 +2458,7 @@ async def get_cash_flows_with_linked(entity_id: Optional[str] = None, _user: dic
     return result
 
 @api_router.post("/cash-flows", response_model=CashFlow)
-async def create_cash_flow(flow: CashFlowCreate):
+async def create_cash_flow(flow: CashFlowCreate, _user: dict = Depends(get_current_user)):
     entity = await db.entities.find_one({"id": flow.entity_id})
     if not entity:
         raise HTTPException(status_code=400, detail="Entity not found")
@@ -2473,7 +2473,7 @@ async def create_cash_flow(flow: CashFlowCreate):
     return flow_obj
 
 @api_router.post("/cash-flows/batch")
-async def create_cash_flow_batch(batch: CashFlowBatchCreate):
+async def create_cash_flow_batch(batch: CashFlowBatchCreate, _user: dict = Depends(get_current_user)):
     """Create parent + linked flows. Children inherit recurrence from parent."""
     entity = await db.entities.find_one({"id": batch.parent.entity_id})
     if not entity:
@@ -2521,7 +2521,7 @@ async def create_cash_flow_batch(batch: CashFlowBatchCreate):
     # Note: undo tracking done above after all inserts
 
 @api_router.put("/cash-flows/{flow_id}", response_model=CashFlow)
-async def update_cash_flow(flow_id: str, update: CashFlowUpdate):
+async def update_cash_flow(flow_id: str, update: CashFlowUpdate, _user: dict = Depends(get_current_user)):
     """Update flow. Propagate changes to children for parent flows."""
     update_data = {k: v for k, v in update.model_dump().items() if v is not None}
     if not update_data:
@@ -2604,7 +2604,7 @@ async def update_cash_flow(flow_id: str, update: CashFlowUpdate):
     return result
 
 @api_router.delete("/cash-flows/{flow_id}")
-async def delete_cash_flow(flow_id: str, delete_linked: bool = False):
+async def delete_cash_flow(flow_id: str, delete_linked: bool = False, _user: dict = Depends(get_current_user)):
     """Delete flow. Optionally delete linked children or orphan them."""
     # Snapshot for undo — ALWAYS snapshot children for full state restore
     current = await db.cash_flows.find_one({"id": flow_id}, {"_id": 0})
@@ -2805,7 +2805,7 @@ async def upsert_flow_occurrence(
     return response
 
 @api_router.put("/flow-occurrences")
-async def set_flow_occurrence(update: FlowOccurrenceUpdate, user: dict = Depends(get_optional_user)):
+async def set_flow_occurrence(update: FlowOccurrenceUpdate, user: dict = Depends(get_current_user)):
     return await upsert_flow_occurrence(
         update,
         suppress_undo=False,
@@ -2820,7 +2820,7 @@ async def set_flow_occurrence(update: FlowOccurrenceUpdate, user: dict = Depends
     )
 
 @api_router.delete("/flow-occurrences")
-async def clear_flow_occurrence(flow_id: str, month: str, user: dict = Depends(get_optional_user)):
+async def clear_flow_occurrence(flow_id: str, month: str, user: dict = Depends(get_current_user)):
     """Clear actual recording for a flow occurrence (revert to planned). Pushes undo."""
     # Snapshot for undo
     prev_occurrence = await db.flow_occurrences.find_one(
@@ -2903,7 +2903,7 @@ async def load_events_ordered_for_replay(flow_id: str, month: str) -> List[Dict[
 async def patch_flow_occurrence_history_event(
     event_id: str,
     body: FlowOccurrenceHistoryPatch,
-    user: dict = Depends(get_optional_user),
+    user: dict = Depends(get_current_user),
 ):
     """Update bulk merge mode (Replace vs Add) and/or mark a mistaken clear so it is skipped on replay."""
     if not user:
@@ -3689,7 +3689,7 @@ async def discard_actual_import(batch_id: str, user: dict = Depends(get_current_
 
 # ============== SETTINGS ROUTES ==============
 @api_router.get("/settings", response_model=Settings)
-async def get_settings():
+async def get_settings(_user: dict = Depends(get_current_user)):
     settings = await db.settings.find_one({"id": "settings"}, {"_id": 0})
     if not settings:
         default = Settings()
@@ -3698,7 +3698,7 @@ async def get_settings():
     return settings
 
 @api_router.put("/settings", response_model=Settings)
-async def update_settings(update: SettingsUpdate):
+async def update_settings(update: SettingsUpdate, _user: dict = Depends(get_current_user)):
     result = await db.settings.find_one_and_update(
         {"id": "settings"},
         {"$set": {"safety_buffer": update.safety_buffer}},

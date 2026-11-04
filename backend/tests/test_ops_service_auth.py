@@ -122,6 +122,9 @@ def test_valid_key_cannot_mutate(client: TestClient, method: str, path: str, kwa
 def test_valid_key_cannot_read_non_allowlisted_get(client: TestClient):
     resp = client.get("/api/actual-imports", headers=SERVICE_HEADERS)
     assert resp.status_code == 403, resp.text
+    bexio = client.get("/api/integrations/bexio/connections", headers=SERVICE_HEADERS)
+    assert bexio.status_code == 403, bexio.text
+    assert "read-only" in bexio.json()["detail"].lower()
 
 
 def test_missing_key_auth_me_401():
