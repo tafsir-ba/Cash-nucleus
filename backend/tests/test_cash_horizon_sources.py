@@ -109,7 +109,27 @@ def test_build_source_catalog_with_live_evonucleus_metrics():
     assert items["evonucleus_pl:uninvoiced_open"]["amount"] == 67577
     assert items["evonucleus_pl:arr_potential"]["amount"] == 5835.0
     assert items["evonucleus_pl:vendor_remaining"]["enabled"] is True
+    assert items["evonucleus_pl:vendor_remaining"]["amount"] == 4200
     assert "confirmed_outflow" in items["evonucleus_pl:vendor_remaining"]["suggested_quadrants"]
     group = next(g for g in catalog["groups"] if g["kind"] == "evonucleus_pl")
     assert group["label"] == "Evonucleus P&L"
     assert len(group["items"]) == 4
+
+
+def test_catalog_keeps_negative_vendor_remaining():
+    catalog = build_source_catalog(
+        accounts=[],
+        debts=[],
+        bexio_connections=[],
+        evonucleus_metrics=[
+            {
+                "ref_id": "vendor_remaining",
+                "label": "Remaining (to pay)",
+                "amount": -40.5,
+                "enabled": True,
+                "suggested_quadrants": ["confirmed_outflow"],
+            }
+        ],
+    )
+    item = next(i for i in catalog["items"] if i["id"] == "evonucleus_pl:vendor_remaining")
+    assert item["amount"] == -40.5

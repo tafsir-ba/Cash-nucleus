@@ -28,6 +28,14 @@ import {
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
+function sourceErrorMessage(raw) {
+  if (!raw) return "Source unavailable";
+  const text = String(raw);
+  if (text === "evonucleus_not_configured") return "Evonucleus P&L is not configured";
+  if (text.startsWith("evonucleus_")) return "Evonucleus P&L is unavailable";
+  return text;
+}
+
 const QUADRANT_META = {
   confirmed_inflow: {
     accent: "text-emerald-400",
@@ -170,7 +178,7 @@ const QuadrantWorkspace = ({
     }
     const item = flatSources.find((s) => sourceOptionValue(s) === sourceValue);
     if (!item || !item.enabled) {
-      toast.error(item?.disabled_reason || "Source unavailable");
+      toast.error(sourceErrorMessage(item?.disabled_reason) || "Source unavailable");
       return;
     }
     setDraft((d) => ({
@@ -189,7 +197,7 @@ const QuadrantWorkspace = ({
     }
     const item = flatSources.find((s) => sourceOptionValue(s) === sourceValue);
     if (!item || !item.enabled) {
-      toast.error(item?.disabled_reason || "Source unavailable");
+      toast.error(sourceErrorMessage(item?.disabled_reason) || "Source unavailable");
       return;
     }
     onSave(entry.id, {
@@ -474,7 +482,11 @@ const QuadrantWorkspace = ({
                         className={`px-2 pt-0.5 text-[10px] truncate ${
                           entry.amount_source_error ? "text-rose-400" : "text-zinc-500"
                         }`}
-                        title={entry.amount_source_error || entry.amount_source_label || ""}
+                        title={
+                          entry.amount_source_error
+                            ? sourceErrorMessage(entry.amount_source_error)
+                            : entry.amount_source_label || ""
+                        }
                       >
                         {entry.amount_source_error
                           ? `Error · ${sourceKindLabel(entry.amount_source)}`
@@ -659,7 +671,7 @@ export const CashHorizonPage = () => {
       if (failed.length) {
         toast.error(
           `Refreshed with ${failed.length} source error${failed.length === 1 ? "" : "s"}: ${
-            failed[0].amount_source_error
+            sourceErrorMessage(failed[0].amount_source_error)
           }`,
         );
       } else {

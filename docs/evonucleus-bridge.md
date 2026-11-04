@@ -14,7 +14,7 @@ can refresh them.
 | `overdue_ar` | `GET /api/ar/summary` | `overdue_receivables_chf` | Confirmed inflow |
 | `arr_potential` | `GET /api/maintenance/summary` | `annual_recurring_potential` | Potential inflow |
 | `mrr_potential` | `GET /api/maintenance/summary` | `monthly_recurring_potential` | Potential inflow |
-| `vendor_remaining` | `GET /api/vendors/aggregation` | sum of `remaining_chf_reporting` (= Vendor **Remaining (to pay)**) | Confirmed / potential outflow |
+| `vendor_remaining` | `GET /api/vendors/aggregation` | signed sum of `remaining_chf_reporting` (fallback `remaining_chf`) — same as the Vendor tab **Remaining (to pay)** KPI | Confirmed / potential outflow |
 
 In the UI: **Cash Horizon → add/edit entry → Amount source → Evonucleus P&L**.
 
@@ -46,6 +46,23 @@ Restart cash-nucleus backend after changing env.
 
 Auth to PL uses `X-Ops-Api-Key`. No write access to PL is required or used.
 
+Cash Horizon reads and the refresh that calls PL require a logged-in Cash session
+(the same cookie/`Authorization` check as the rest of the money routes). The ops
+service key stays read-only and is not granted the P&L source catalog.
+
+### Remaining (to pay)
+
+`GET /api/vendors/aggregation` returns one row per vendor. It does not include a
+portfolio total. The P&L Vendor tab defines **Remaining (to pay)** as the sum of
+each row's `remaining_chf_reporting` (fallback `remaining_chf`). That sum is
+signed: a credit reduces what is owed. Cash uses that sum as-is and does not
+take `abs` or recompute cost minus paid. A separate P&L field is unnecessary
+while this row contract is the definition the Vendor tab already uses.
+
+Upstream P&L failures are logged with a short code (`evonucleus_unavailable`,
+`evonucleus_not_configured`, `evonucleus_unknown_metric`). Horizon rows store
+that code. The UI shows a generic message, not the upstream body.
+
 ## Example: create an inflow linked to Invoiced (Open)
 
 ```bash
@@ -65,7 +82,7 @@ curl -sS -X POST "$CASH_HOST/api/cash-horizon/entries" \
 
 | Symptom | Check |
 |---------|--------|
-| Sources show “not configured” | `EVONUCLEUS_OPS_API_KEY` set on the cash backend (same value as PL `OPS_SERVICE_API_KEY`) |
-| 401 from refresh | Key mismatch vs PL `OPS_SERVICE_API_KEY` |
-| 403 from refresh | Path not on PL ops allowlist |
-| Stale amount | Use **Refresh sources** on Cash Horizon |
+| 401 on sources, horizon, bank accounts, or refresh | Cash session cookie (or Bearer access token) is missing. These routes require login. |
+| Sources show “not configured” / row code `evonucleus_not_configured` | `EVONUCLEUS_OPS_API_KEY` set on the cash backend (same value as PL `OPS_SERVICE_API_KEY`) |
+| Row code `evonucleus_unavailable` | PL rejected or failed the ops call. Cash logs the upstream status; the UI does not show the body. Check the key and the PL ops allowlist. |
+| Stale amount | Use **Refresh linked** on Cash Horizon while logged in. |
