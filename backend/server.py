@@ -44,9 +44,13 @@ from bexio_client import (
     list_configured_connections,
 )
 from evonucleus_client import (
+    CODE_NOT_CONFIGURED,
+    CODE_UNKNOWN_METRIC,
+    CODE_UNAVAILABLE,
     EvonucleusError,
     fetch_horizon_metrics,
     fetch_metric_amount,
+    fetch_metric_amounts,
     get_metric_def,
     is_configured as evonucleus_is_configured,
 )
@@ -1476,7 +1480,7 @@ async def insert_bank_account_audit_log(
 
 # ============== BANK ACCOUNT ROUTES ==============
 @api_router.get("/bank-accounts", response_model=List[BankAccount])
-async def get_bank_accounts(entity_id: Optional[str] = None):
+async def get_bank_accounts(entity_id: Optional[str] = None, _user: dict = Depends(get_current_user)):
     query = {"entity_id": entity_id} if entity_id else {}
     accounts = await db.bank_accounts.find(query, {"_id": 0}).to_list(100)
     return accounts
@@ -1728,6 +1732,7 @@ async def get_cash_position_history(
     entity_id: Optional[str] = None,
     account_id: Optional[str] = None,
     limit_days: int = 60,
+    _user: dict = Depends(get_current_user),
 ):
     docs = await db.cash_balance_snapshots.find(
         {"snapshot_type": "daily_cash_position"},
@@ -1963,22 +1968,15 @@ async def _resolve_cash_horizon_amount_source(
         }
 
     if kind == "evonucleus_pl":
-        if ref_id == "default":
-            raise HTTPException(
-                status_code=400,
-                detail="Pick a specific Evonucleus metric (e.g. invoiced_open, uninvoiced_open, arr_potential)",
-            )
-        if not get_metric_def(ref_id):
-            raise HTTPException(status_code=400, detail=f"Unknown Evonucleus metric '{ref_id}'")
+        if ref_id == "default" or not get_metric_def(ref_id):
+            raise HTTPException(status_code=400, detail=CODE_UNKNOWN_METRIC)
         if not evonucleus_is_configured():
-            raise HTTPException(
-                status_code=400,
-                detail="Evonucleus P&L is not configured. Set EVONUCLEUS_OPS_API_KEY (same as PL OPS_SERVICE_API_KEY).",
-            )
+            raise HTTPException(status_code=400, detail=CODE_NOT_CONFIGURED)
         try:
             amount = await fetch_metric_amount(ref_id)
         except EvonucleusError as exc:
-            raise HTTPException(status_code=exc.status_code or 502, detail=str(exc)) from exc
+            logging.warning("evonucleus resolve failed code=%s detail=%s", exc.code, exc)
+            raise HTTPException(status_code=502, detail=exc.code or CODE_UNAVAILABLE) from exc
         meta = get_metric_def(ref_id) or {}
         return {
             "amount_source": "evonucleus_pl",
@@ -2001,7 +1999,7 @@ def _manual_source_fields() -> Dict[str, Any]:
 
 
 @api_router.get("/cash-horizon/sources")
-async def get_cash_horizon_sources():
+async def get_cash_horizon_sources(_user: dict = Depends(get_current_user)):
     """List amount sources available for inflows and outflows."""
     accounts = await db.bank_accounts.find({}, {"_id": 0}).to_list(5000)
     debts = await _list_treasury_debt_rows()
@@ -2015,25 +2013,76 @@ async def get_cash_horizon_sources():
     )
 
 
+def _source_error_code(exc: HTTPException) -> str:
+    detail = exc.detail if isinstance(exc.detail, str) else ""
+    if detail.startswith("evonucleus_"):
+        return detail
+    if detail:
+        return detail
+    return "source_refresh_failed"
+
+
 @api_router.post("/cash-horizon/refresh-sources", response_model=CashHorizonAnalysisResponse)
-async def refresh_cash_horizon_sources(user: dict = Depends(get_optional_user)):
+async def refresh_cash_horizon_sources(_user: dict = Depends(get_current_user)):
     """Re-pull amounts for all entries linked to Treasury / Bexio / Evonucleus sources."""
     entries = await _load_cash_horizon_entries()
     now_iso = datetime.now(timezone.utc).isoformat()
+    pl_ids = [
+        entry.get("amount_source_id")
+        for entry in entries
+        if (entry.get("amount_source") or "manual") == "evonucleus_pl" and entry.get("amount_source_id")
+    ]
+    pl_amounts: Dict[str, float] = {}
+    pl_error_code: Optional[str] = None
+    if pl_ids:
+        if not evonucleus_is_configured():
+            pl_error_code = CODE_NOT_CONFIGURED
+        else:
+            try:
+                pl_amounts = await fetch_metric_amounts([ref for ref in pl_ids if ref])
+            except EvonucleusError as exc:
+                logging.warning("evonucleus refresh failed code=%s detail=%s", exc.code, exc)
+                pl_error_code = exc.code or CODE_UNAVAILABLE
     for entry in entries:
         kind = entry.get("amount_source") or "manual"
         ref_id = entry.get("amount_source_id")
         if kind == "manual" or not ref_id:
             continue
-        try:
-            resolved = await _resolve_cash_horizon_amount_source(kind=kind, ref_id=ref_id, live_bexio=True)
-        except HTTPException as exc:
-            detail = exc.detail if isinstance(exc.detail, str) else "Source refresh failed"
+        if kind == "evonucleus_pl":
+            if pl_error_code:
+                error_code = pl_error_code
+            elif ref_id not in pl_amounts:
+                error_code = CODE_UNKNOWN_METRIC
+            else:
+                error_code = None
+            if error_code:
+                await db.cash_horizon_entries.update_one(
+                    {"id": entry["id"]},
+                    {"$set": {"amount_source_error": error_code, "updated_at": now_iso}},
+                )
+                continue
+            meta = get_metric_def(ref_id) or {}
             await db.cash_horizon_entries.update_one(
                 {"id": entry["id"]},
                 {
                     "$set": {
-                        "amount_source_error": detail,
+                        "amount": pl_amounts[ref_id],
+                        "amount_source_label": meta.get("label") or ref_id,
+                        "amount_synced_at": now_iso,
+                        "amount_source_error": None,
+                        "updated_at": now_iso,
+                    }
+                },
+            )
+            continue
+        try:
+            resolved = await _resolve_cash_horizon_amount_source(kind=kind, ref_id=ref_id, live_bexio=True)
+        except HTTPException as exc:
+            await db.cash_horizon_entries.update_one(
+                {"id": entry["id"]},
+                {
+                    "$set": {
+                        "amount_source_error": _source_error_code(exc),
                         "updated_at": now_iso,
                     }
                 },
@@ -2056,7 +2105,7 @@ async def refresh_cash_horizon_sources(user: dict = Depends(get_optional_user)):
 
 
 @api_router.get("/cash-horizon", response_model=CashHorizonAnalysisResponse)
-async def get_cash_horizon():
+async def get_cash_horizon(_user: dict = Depends(get_current_user)):
     entries = await _load_cash_horizon_entries()
     analysis = analyze_cash_horizon(entries)
     return CashHorizonAnalysisResponse(**analysis)
@@ -2065,7 +2114,7 @@ async def get_cash_horizon():
 @api_router.post("/cash-horizon/entries", response_model=CashHorizonAnalysisResponse)
 async def create_cash_horizon_entry(
     payload: CashHorizonEntryCreate,
-    user: dict = Depends(get_optional_user),
+    _user: dict = Depends(get_current_user),
 ):
     if not payload.label.strip():
         raise HTTPException(status_code=400, detail="Label is required")
@@ -2095,7 +2144,8 @@ async def create_cash_horizon_entry(
         }
     if amount is None:
         raise HTTPException(status_code=400, detail="Amount is required")
-    if amount < 0:
+    linked_pl = (payload.amount_source or "manual") == "evonucleus_pl"
+    if amount < 0 and not linked_pl:
         raise HTTPException(status_code=400, detail="Amount must be non-negative")
 
     sort_order = payload.sort_order
@@ -2136,7 +2186,7 @@ async def create_cash_horizon_entry(
 @api_router.put("/cash-horizon/entries/reorder", response_model=CashHorizonAnalysisResponse)
 async def reorder_cash_horizon_entries(
     payload: CashHorizonReorderRequest,
-    user: dict = Depends(get_optional_user),
+    _user: dict = Depends(get_current_user),
 ):
     for item in payload.items:
         await db.cash_horizon_entries.update_one(
@@ -2156,7 +2206,7 @@ async def reorder_cash_horizon_entries(
 async def update_cash_horizon_entry(
     entry_id: str,
     payload: CashHorizonEntryUpdate,
-    user: dict = Depends(get_optional_user),
+    _user: dict = Depends(get_current_user),
 ):
     existing = await db.cash_horizon_entries.find_one({"id": entry_id}, {"_id": 0})
     if not existing:
@@ -2167,7 +2217,7 @@ async def update_cash_horizon_entry(
         update_data["label"] = update_data["label"].strip()
         if not update_data["label"]:
             raise HTTPException(status_code=400, detail="Label is required")
-    if "amount" in update_data and update_data["amount"] < 0:
+    if "amount" in update_data and update_data["amount"] < 0 and update_data.get("amount_source", existing.get("amount_source")) != "evonucleus_pl":
         raise HTTPException(status_code=400, detail="Amount must be non-negative")
     if "notes" in update_data:
         update_data["notes"] = (update_data["notes"] or "").strip() or None
@@ -2223,7 +2273,7 @@ async def update_cash_horizon_entry(
 
 
 @api_router.delete("/cash-horizon/entries/{entry_id}", response_model=CashHorizonAnalysisResponse)
-async def delete_cash_horizon_entry(entry_id: str, user: dict = Depends(get_optional_user)):
+async def delete_cash_horizon_entry(entry_id: str, _user: dict = Depends(get_current_user)):
     result = await db.cash_horizon_entries.delete_one({"id": entry_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Entry not found")
@@ -2232,7 +2282,7 @@ async def delete_cash_horizon_entry(entry_id: str, user: dict = Depends(get_opti
 
 
 @api_router.get("/treasury/debts", response_model=List[DebtConsolidationItem])
-async def get_treasury_debts(entity_id: Optional[str] = None):
+async def get_treasury_debts(entity_id: Optional[str] = None, _user: dict = Depends(get_current_user)):
     """Derived debt consolidation view from existing debt-tagged cash flows."""
     query = {"category": Category.DEBT.value}
     if entity_id:
@@ -2368,7 +2418,7 @@ async def delete_treasury_debt(flow_id: str):
 
 # ============== CASH FLOW ROUTES ==============
 @api_router.get("/cash-flows")
-async def get_cash_flows(entity_id: Optional[str] = None):
+async def get_cash_flows(entity_id: Optional[str] = None, _user: dict = Depends(get_current_user)):
     query = {"entity_id": entity_id} if entity_id else {}
     flows = await db.cash_flows.find(query, {"_id": 0}).to_list(5000)
     # Calculate dynamic amounts for percentage-based flows
@@ -2378,7 +2428,7 @@ async def get_cash_flows(entity_id: Optional[str] = None):
     return result
 
 @api_router.get("/cash-flows/with-linked")
-async def get_cash_flows_with_linked(entity_id: Optional[str] = None):
+async def get_cash_flows_with_linked(entity_id: Optional[str] = None, _user: dict = Depends(get_current_user)):
     """Get all cash flows grouped by parent-child, with dynamic amount calculation."""
     query = {"entity_id": entity_id} if entity_id else {}
     flows = await db.cash_flows.find(query, {"_id": 0}).to_list(1000)
@@ -2584,7 +2634,11 @@ async def delete_cash_flow(flow_id: str, delete_linked: bool = False):
 
 # ============== FLOW OCCURRENCE ROUTES ==============
 @api_router.get("/flow-occurrences")
-async def get_flow_occurrences(month: Optional[str] = None, flow_id: Optional[str] = None):
+async def get_flow_occurrences(
+    month: Optional[str] = None,
+    flow_id: Optional[str] = None,
+    _user: dict = Depends(get_current_user),
+):
     """Get occurrence records (actuals + variance actions). Filter by month and/or flow_id."""
     query = {}
     if month:
@@ -2955,7 +3009,7 @@ async def get_flow_occurrence_history(
     flow_id: str,
     month: Optional[str] = None,
     limit: int = 100,
-    user: dict = Depends(get_optional_user),
+    _user: dict = Depends(get_current_user),
 ):
     """Return the audit trail of writes to a flow occurrence.
 
@@ -3906,7 +3960,8 @@ def compute_month_openings(
 async def get_projection(
     scenario: str = "likely",
     entity_id: Optional[str] = Query(None, description="Filter by entity"),
-    horizon: int = Query(12, description="Projection horizon in months (12, 24, or 36)")
+    horizon: int = Query(12, description="Projection horizon in months (12, 24, or 36)"),
+    _user: dict = Depends(get_current_user),
 ):
     """Single projection engine - all UI components use this."""
     # Validate horizon
@@ -4090,7 +4145,8 @@ async def get_projection(
 async def get_projection_matrix(
     scenario: str = "likely",
     entity_id: Optional[str] = Query(None),
-    horizon: int = Query(12)
+    horizon: int = Query(12),
+    _user: dict = Depends(get_current_user),
 ):
     """Matrix data derived from the SAME projection engine. No independent computation."""
     if horizon not in [12, 24, 36]:
@@ -4366,7 +4422,8 @@ async def delete_cash_month_snapshot(
 async def get_negative_month_drivers(
     scenario: str = "likely",
     entity_id: Optional[str] = Query(None),
-    horizon: int = Query(12)
+    horizon: int = Query(12),
+    _user: dict = Depends(get_current_user),
 ):
     """Top drivers of negative months. Uses projection engine values only. Aggregates by flow label."""
     if horizon not in [12, 24, 36]:
@@ -4489,7 +4546,8 @@ async def get_negative_month_drivers(
 @api_router.get("/projection/scenario-delta")
 async def get_scenario_delta(
     entity_id: Optional[str] = Query(None),
-    horizon: int = Query(12)
+    horizon: int = Query(12),
+    _user: dict = Depends(get_current_user),
 ):
     """Gap = Likely cash_balance - Committed cash_balance per month. Uses same projection engine."""
     if horizon not in [12, 24, 36]:
@@ -4540,7 +4598,8 @@ async def get_scenario_delta(
 @api_router.get("/projection/runway")
 async def get_cash_runway(
     entity_id: Optional[str] = Query(None),
-    horizon: int = Query(36)
+    horizon: int = Query(36),
+    _user: dict = Depends(get_current_user),
 ):
     """Cash runway = first month where cash_balance < 0. Returns months from now + breach month."""
     if horizon not in [12, 24, 36]:
@@ -4584,7 +4643,8 @@ async def get_cash_runway(
 async def get_month_details(
     month: str,
     scenario: str = "likely",
-    entity_id: Optional[str] = None
+    entity_id: Optional[str] = None,
+    _user: dict = Depends(get_current_user),
 ):
     flow_query = {"entity_id": entity_id} if entity_id else {}
     flows = await db.cash_flows.find(flow_query, {"_id": 0}).to_list(1000)
@@ -4649,7 +4709,7 @@ async def get_month_details(
     }
 
 @api_router.get("/variance-summary")
-async def get_variance_summary(entity_id: Optional[str] = None):
+async def get_variance_summary(entity_id: Optional[str] = None, _user: dict = Depends(get_current_user)):
     """Global variance tracking: total variance, total carried forward, total written off."""
     query = {}
     if entity_id:

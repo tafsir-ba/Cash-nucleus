@@ -47,6 +47,18 @@ def test_extract_ar_and_arr_amounts():
     assert extract_metric_amount("vendor_remaining", payloads) == 1250.5
 
 
+def test_vendor_remaining_uses_signed_pl_sum_not_abs():
+    """A credit must reduce Remaining (to pay), matching the P&L Vendor tab."""
+    payloads = {
+        "/api/vendors/aggregation": [
+            {"remaining_chf_reporting": 1000.5},
+            {"remaining_chf_reporting": -250},
+            {"remaining_chf": 10},
+        ],
+    }
+    assert extract_metric_amount("vendor_remaining", payloads) == 760.5
+
+
 def test_extract_unknown_metric_raises():
     with pytest.raises(EvonucleusError, match="Unknown"):
         extract_metric_amount("nope", {})

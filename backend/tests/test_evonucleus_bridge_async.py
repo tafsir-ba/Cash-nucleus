@@ -91,3 +91,56 @@ async def test_unconfigured_returns_disabled_rows(monkeypatch):
     rows = await client.fetch_horizon_metrics()
     assert rows
     assert all(r["enabled"] is False for r in rows)
+    assert all(r["error_code"] == "evonucleus_not_configured" for r in rows)
+    assert all(r["disabled_reason"] == "Evonucleus P&L is not configured" for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_vendor_remaining_credit_reduces_total(configured, monkeypatch):
+    routes = {
+        "/api/vendors/aggregation": [
+            {"remaining_chf_reporting": 1000},
+            {"remaining_chf_reporting": -400},
+        ],
+    }
+    monkeypatch.setattr(client.httpx, "AsyncClient", lambda **kw: _FakeAsyncClient(routes, **kw))
+    assert await client.fetch_metric_amount("vendor_remaining") == 600.0
+
+
+@pytest.mark.asyncio
+async def test_fetch_payloads_requests_distinct_paths_together(configured, monkeypatch):
+    seen = []
+
+    class _RecordingClient(_FakeAsyncClient):
+        async def get(self, path: str):
+            seen.append(path)
+            return await super().get(path)
+
+    routes = {
+        "/api/ar/summary": {"invoiced_amount_chf": 1, "uninvoiced_amount_chf": 2},
+        "/api/maintenance/summary": {"annual_recurring_potential": 3},
+    }
+    monkeypatch.setattr(client.httpx, "AsyncClient", lambda **kw: _RecordingClient(routes, **kw))
+    amounts = await client.fetch_metric_amounts(["invoiced_open", "uninvoiced_open", "arr_potential"])
+    assert amounts == {"invoiced_open": 1.0, "uninvoiced_open": 2.0, "arr_potential": 3.0}
+    assert seen.count("/api/ar/summary") == 1
+    assert seen.count("/api/maintenance/summary") == 1
+    assert len(seen) == 2
+
+
+@pytest.mark.asyncio
+async def test_upstream_error_is_not_copied_into_catalog(configured, monkeypatch):
+    secret = "SECRET_UPSTREAM_VENDOR_BODY"
+    routes = {
+        "/api/ar/summary": (500, {"detail": secret}),
+        "/api/maintenance/summary": (500, {"detail": secret}),
+        "/api/vendors/aggregation": (500, {"detail": secret}),
+    }
+    monkeypatch.setattr(client.httpx, "AsyncClient", lambda **kw: _FakeAsyncClient(routes, **kw))
+    rows = await client.fetch_horizon_metrics()
+    blob = str(rows)
+    assert secret not in blob
+    assert rows
+    assert all(r["enabled"] is False for r in rows)
+    assert all(r["error_code"] == "evonucleus_unavailable" for r in rows)
+    assert all(r["disabled_reason"] == "Evonucleus P&L is unavailable" for r in rows)

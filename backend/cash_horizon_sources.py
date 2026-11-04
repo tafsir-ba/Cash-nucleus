@@ -33,6 +33,16 @@ def _round_chf(value: Any) -> float:
         return 0.0
 
 
+def _signed_source_amount(value: Any) -> Optional[float]:
+    """Keep a P&L figure's sign. Credits must not be flipped into amounts owed."""
+    if value is None or value == "":
+        return None
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+
+
 def build_source_catalog(
     *,
     accounts: List[Dict[str, Any]],
@@ -148,7 +158,7 @@ def build_source_catalog(
                     "ref_id": ref_id,
                     "label": metric.get("label") or ref_id,
                     "subtitle": metric.get("subtitle") or "Evonucleus P&L",
-                    "amount": None if metric.get("amount") is None else _round_chf(metric.get("amount")),
+                    "amount": _signed_source_amount(metric.get("amount")),
                     "enabled": enabled,
                     "disabled_reason": None if enabled else (metric.get("disabled_reason") or "Unavailable"),
                     "suggested_quadrants": list(
