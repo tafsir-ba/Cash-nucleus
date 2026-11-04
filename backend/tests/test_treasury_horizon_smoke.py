@@ -414,6 +414,14 @@ def test_anonymous_reference_routes_rejected(client):
         _assert_anon_401(client.post("/api/bank-accounts/missing/sync-bexio"), "POST account sync-bexio")
         _assert_anon_401(client.post("/api/undo"), "POST undo")
         _assert_anon_401(client.get("/api/undo/peek"), "GET undo peek")
+        _assert_anon_401(
+            client.get("/api/meta/cash-flow", params={"entity_id": "missing-entity"}),
+            "GET meta cash-flow with entity",
+        )
+        public_labels = client.get("/api/meta/cash-flow")
+        assert public_labels.status_code == 200, public_labels.text
+        assert "missing-entity" not in public_labels.text
+        assert "does not exist" not in public_labels.text
     finally:
         client.cookies.clear()
         if saved:
@@ -464,8 +472,61 @@ def test_authenticated_reference_routes_still_work(client):
     assert cleared.status_code == 200, cleared.text
     deleted_flow = client.delete(f"/api/cash-flows/{flow_id}")
     assert deleted_flow.status_code == 200, deleted_flow.text
+    meta = client.get("/api/meta/cash-flow", params={"entity_id": entity_id})
+    assert meta.status_code == 200, meta.text
+    assert "categories" in meta.json()
+    missing_meta = client.get("/api/meta/cash-flow", params={"entity_id": "does-not-exist"})
+    assert missing_meta.status_code == 400, missing_meta.text
     deleted_entity = client.delete(f"/api/entities/{entity_id}")
     assert deleted_entity.status_code == 200, deleted_entity.text
 
     peek = client.get("/api/undo/peek")
     assert peek.status_code == 200, peek.text
+
+
+def test_login_rate_limit_blocks_password_checks_and_allows_a_normal_login(client, monkeypatch):
+    limiter = server.login_rate_limiter
+    previous_max = limiter.max_attempts
+    checks = {"n": 0}
+
+    def counting_verify(plain: str, hashed: str) -> bool:
+        checks["n"] += 1
+        return server.bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+
+    monkeypatch.setattr(server, "verify_password", counting_verify)
+    limiter.reset()
+    limiter.max_attempts = 3
+    saved = client.cookies.get("access_token")
+    client.cookies.clear()
+    try:
+        for _ in range(3):
+            failed = client.post(
+                "/api/auth/login",
+                json={"email": "admin@example.com", "password": "not-the-password"},
+            )
+            assert failed.status_code == 401, failed.text
+            assert failed.json() == {"detail": "Invalid email or password"}
+        assert checks["n"] == 3
+
+        blocked = client.post(
+            "/api/auth/login",
+            json={"email": "admin@example.com", "password": "admin123"},
+        )
+        assert blocked.status_code == 429, blocked.text
+        assert blocked.json() == {"detail": "Too many login attempts"}
+        assert blocked.headers.get("retry-after")
+        assert checks["n"] == 3
+
+        limiter.reset()
+        ok = client.post(
+            "/api/auth/login",
+            json={"email": "admin@example.com", "password": "admin123"},
+        )
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["email"] == "admin@example.com"
+        assert checks["n"] == 4
+    finally:
+        limiter.max_attempts = previous_max
+        limiter.reset()
+        if "access_token" not in client.cookies and saved:
+            client.cookies.set("access_token", saved)
