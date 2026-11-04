@@ -32,6 +32,7 @@ from bulk_import_columns import (
 )
 
 from cash_horizon import analyze_cash_horizon, normalize_entry, resolve_expected_date
+from login_rate_limit import client_ip, login_rate_limiter
 from cash_horizon_sources import build_source_catalog
 from ops_service_auth import authorize_ops_service_request
 from xlsx_simple import read_first_sheet_as_dict_rows
@@ -144,19 +145,6 @@ async def get_current_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
-
-async def get_optional_user(request: Request) -> dict:
-    """Same as get_current_user but returns {} for unauthenticated callers.
-
-    Used on endpoints that historically don't require auth (PUT/DELETE
-    /flow-occurrences, batched cash-flow writes) so we can still attribute an
-    actor to audit events when the caller happens to be authenticated, without
-    breaking existing clients/tests that hit these endpoints anonymously.
-    """
-    try:
-        return await get_current_user(request)
-    except HTTPException:
-        return {}
 
 class LoginRequest(BaseModel):
     email: str
@@ -3707,9 +3695,16 @@ async def update_settings(update: SettingsUpdate, _user: dict = Depends(get_curr
     return result
 
 @api_router.get("/meta/cash-flow")
-async def get_cash_flow_meta(entity_id: Optional[str] = None):
+async def get_cash_flow_meta(request: Request, entity_id: Optional[str] = None):
+    """Global category labels are public. An entity id needs a Cash session.
+
+    With an entity id this route otherwise reveals whether that entity exists
+    and which category names its flows use.
+    """
     global_cats = [c.value for c in Category]
+    entity_id = (entity_id or "").strip()
     if entity_id:
+        await get_current_user(request)
         entity_exists = await db.entities.find_one({"id": entity_id}, {"_id": 0, "id": 1})
         if not entity_exists:
             raise HTTPException(status_code=400, detail="entity_id does not exist")
@@ -4785,6 +4780,12 @@ async def root():
 @api_router.post("/auth/login")
 async def login(req: LoginRequest, response: Response, request: Request):
     email = req.email.strip().lower()
+    if not login_rate_limiter.allow(ip=client_ip(request), email=email):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts",
+            headers={"Retry-After": str(login_rate_limiter.retry_after_seconds())},
+        )
     user = await db.users.find_one({"email": email}, {"_id": 0})
     if not user or not verify_password(req.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
