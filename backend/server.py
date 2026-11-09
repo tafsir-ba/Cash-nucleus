@@ -206,6 +206,32 @@ BalanceSource = Literal["manual", "bexio"]
 BexioConnectionId = Literal["evohom", "evahomes"]
 
 
+ACCOUNT_NOTES_MAX_LENGTH = 500
+
+
+def normalize_account_notes(value: Any, *, enforce_limit: bool = True) -> Optional[str]:
+    """Canonical treasury-account note. Input validation enforces the length cap; stored values can be read back without it."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        if enforce_limit:
+            raise ValueError("Notes must be a string")
+        return None
+    text = value.strip()
+    if enforce_limit and len(text) > ACCOUNT_NOTES_MAX_LENGTH:
+        raise ValueError(f"Notes must be {ACCOUNT_NOTES_MAX_LENGTH} characters or fewer")
+    return text or None
+
+
+class _BankAccountNotesInput(BaseModel):
+    notes: Optional[str] = None
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def _normalize_notes(cls, value):
+        return normalize_account_notes(value)
+
+
 class BankAccount(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -226,14 +252,13 @@ class BankAccount(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
-class BankAccountCreate(BaseModel):
+class BankAccountCreate(_BankAccountNotesInput):
     entity_id: str
     label: str
     amount: float = 0.0
     is_receivables_financing: bool = False
     balance_source: BalanceSource = "manual"
     bexio_connection: Optional[BexioConnectionId] = None
-    notes: Optional[str] = None
     note: Optional[str] = None
     trigger: Literal["manual_adjustment", "import", "system_recalc"] = "manual_adjustment"
 
@@ -244,14 +269,13 @@ class BankAccountCreate(BaseModel):
             return None
         return value
 
-class BankAccountUpdate(BaseModel):
+class BankAccountUpdate(_BankAccountNotesInput):
     entity_id: Optional[str] = None
     label: Optional[str] = None
     amount: Optional[float] = None
     is_receivables_financing: Optional[bool] = None
     balance_source: Optional[BalanceSource] = None
     bexio_connection: Optional[BexioConnectionId] = None
-    notes: Optional[str] = None
     note: Optional[str] = None
     trigger: Literal["manual_adjustment", "import", "system_recalc"] = "manual_adjustment"
 
@@ -1495,7 +1519,6 @@ async def create_bank_account(account: BankAccountCreate, user: dict = Depends(g
     )
     payload["balance_source"] = balance_source
     payload["bexio_connection"] = bexio_connection
-    payload["notes"] = (payload.get("notes") or "").strip() or None
     if balance_source == "bexio":
         payload["amount"] = float(payload.get("amount") or 0.0)
         trigger = "import"
@@ -1556,12 +1579,15 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate, user: 
     old_amount = existing.get("amount", 0.0)
     new_amount = old_amount
     has_business_change = False
+    notes_changed = False
     next_entity_name = existing.get("entity") or ""
 
+    # Notes are account metadata. They persist, but they are not a cash movement.
     if "notes" in update_data:
-        update_data["notes"] = (update_data["notes"] or "").strip() or None
-        if update_data["notes"] != ((existing.get("notes") or "").strip() or None):
-            has_business_change = True
+        update_data["notes"] = normalize_account_notes(update_data.get("notes"))
+        notes_changed = update_data["notes"] != normalize_account_notes(
+            existing.get("notes"), enforce_limit=False
+        )
 
     if "entity_id" in update_data:
         next_entity = await db.entities.find_one({"id": update_data["entity_id"]}, {"_id": 0, "name": 1})
@@ -1597,11 +1623,19 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate, user: 
     if next_source == "bexio" and "amount" in update_data:
         # Amount for Bexio-sourced accounts is owned by sync, not manual edits.
         if (existing.get("balance_source") or "manual") == "bexio":
-            raise HTTPException(
-                status_code=400,
-                detail="Balance is sourced from Bexio. Switch source to Manual to edit, or refresh to sync.",
-            )
-        update_data.pop("amount", None)
+            try:
+                echoed_amount = float(update_data["amount"])
+            except (TypeError, ValueError):
+                echoed_amount = None
+            if echoed_amount is None or abs(echoed_amount - float(old_amount or 0.0)) > 0.009:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Balance is sourced from Bexio. Switch source to Manual to edit, or refresh to sync.",
+                )
+            # Clients echo the current balance alongside a note or label edit.
+            update_data.pop("amount", None)
+        else:
+            update_data.pop("amount", None)
 
     if "amount" in update_data:
         new_amount = update_data["amount"]
@@ -1615,9 +1649,14 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate, user: 
         has_business_change = True
 
     switching_to_bexio = next_source == "bexio" and (existing.get("balance_source") or "manual") != "bexio"
+    # Cash snapshot, audit row, and Bexio re-sync follow balance/source changes only.
+    record_cash_effects = has_business_change or switching_to_bexio
 
-    if not has_business_change and not switching_to_bexio:
+    if not record_cash_effects and not notes_changed:
         raise HTTPException(status_code=400, detail="No business field changes detected")
+
+    if not record_cash_effects:
+        update_data = {"notes": update_data.get("notes")}
 
     if update_data:
         update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -1629,6 +1668,9 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate, user: 
         result = existing
     if not result:
         raise HTTPException(status_code=404, detail="Bank account not found")
+
+    if not record_cash_effects:
+        return result
 
     if next_source == "bexio":
         await apply_bexio_amount_to_account(result, user=user, note=note)

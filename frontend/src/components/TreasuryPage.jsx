@@ -236,6 +236,10 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
     if (payload.balance_source !== "bexio") {
       payload.bexio_connection = null;
     }
+    // Bexio owns the balance. Echoing it on a note or label save is not an edit.
+    if (updates.amount === undefined && payload.balance_source === "bexio") {
+      delete payload.amount;
+    }
 
     try {
       await axios.put(`${API}/bank-accounts/${accountId}`, payload);

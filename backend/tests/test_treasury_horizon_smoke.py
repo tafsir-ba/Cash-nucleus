@@ -5,6 +5,7 @@ Run: cd backend && python3 -m pytest tests/test_treasury_horizon_smoke.py -q
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 
@@ -237,6 +238,191 @@ def test_cash_horizon_entry_crud(client):
     deleted = client.delete(f"/api/cash-horizon/entries/{entry_id}")
     assert deleted.status_code == 200, deleted.text
     assert all(e["id"] != entry_id for e in deleted.json()["entries"])
+
+
+def _count_docs(collection: str, query: dict | None = None) -> int:
+    return asyncio.run(server.db[collection].count_documents(query or {}))
+
+
+def test_note_only_update_skips_snapshot_audit_and_bexio_sync(client, monkeypatch):
+    """A note edit is metadata: no cash snapshot, no audit row, no accounting re-sync."""
+    os.environ["BEXIO_PAT_EVOHOM"] = "test-pat-evohom"
+    sync_calls = []
+    real_apply = server.apply_bexio_amount_to_account
+
+    async def counting_apply(account, *args, **kwargs):
+        sync_calls.append(account.get("id"))
+        return await real_apply(account, *args, **kwargs)
+
+    async def fake_fetch(connection_id: str):
+        return {
+            "amount": 64022.0,
+            "invoice_count": 4,
+            "status_ids": None,
+            "amount_field": "total_net",
+            "connection_id": connection_id,
+        }
+
+    monkeypatch.setattr(server, "apply_bexio_amount_to_account", counting_apply)
+    monkeypatch.setattr(server, "fetch_connection_pending_net", fake_fetch)
+
+    ent = client.post("/api/entities", json={"name": "Evohom SA"})
+    assert ent.status_code == 200, ent.text
+    entity_id = ent.json()["id"]
+
+    created = client.post(
+        "/api/bank-accounts",
+        json={
+            "entity_id": entity_id,
+            "label": "Bexio Acc. Receivables",
+            "amount": 0,
+            "balance_source": "bexio",
+            "bexio_connection": "evohom",
+            "is_receivables_financing": True,
+        },
+    )
+    assert created.status_code == 200, created.text
+    account = created.json()
+    account_id = account["id"]
+    assert account["amount"] == 64022.0
+    assert sync_calls == [account_id]
+
+    snapshots_before = _count_docs("cash_balance_snapshots")
+    audits_before = _count_docs("bank_account_audit_log", {"account_id": account_id})
+    synced_at = account["bexio_last_synced_at"]
+    assert snapshots_before >= 1
+    assert audits_before >= 1
+
+    noted = client.put(
+        f"/api/bank-accounts/{account_id}",
+        json={"notes": "  Escrow until Friday  "},
+    )
+    assert noted.status_code == 200, noted.text
+    assert noted.json()["notes"] == "Escrow until Friday"
+    assert noted.json()["amount"] == 64022.0
+    assert noted.json()["bexio_last_synced_at"] == synced_at
+    assert sync_calls == [account_id]
+    assert _count_docs("cash_balance_snapshots") == snapshots_before
+    assert _count_docs("bank_account_audit_log", {"account_id": account_id}) == audits_before
+
+    # The treasury table echoes the current balance with a note edit.
+    echoed = client.put(
+        f"/api/bank-accounts/{account_id}",
+        json={
+            "label": account["label"],
+            "amount": account["amount"],
+            "entity_id": entity_id,
+            "is_receivables_financing": True,
+            "balance_source": "bexio",
+            "bexio_connection": "evohom",
+            "notes": "Call the bank",
+            "trigger": "manual_adjustment",
+        },
+    )
+    assert echoed.status_code == 200, echoed.text
+    assert echoed.json()["notes"] == "Call the bank"
+    assert echoed.json()["amount"] == 64022.0
+    assert echoed.json()["bexio_last_synced_at"] == synced_at
+    assert sync_calls == [account_id]
+    assert _count_docs("cash_balance_snapshots") == snapshots_before
+    assert _count_docs("bank_account_audit_log", {"account_id": account_id}) == audits_before
+
+    cleared = client.put(f"/api/bank-accounts/{account_id}", json={"notes": "   "})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["notes"] is None
+    assert sync_calls == [account_id]
+    assert _count_docs("cash_balance_snapshots") == snapshots_before
+    assert _count_docs("bank_account_audit_log", {"account_id": account_id}) == audits_before
+
+    blocked = client.put(
+        f"/api/bank-accounts/{account_id}",
+        json={"amount": 1},
+    )
+    assert blocked.status_code == 400
+
+    renamed = client.put(
+        f"/api/bank-accounts/{account_id}",
+        json={"label": "Bexio Acc. Receivables renamed"},
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["label"] == "Bexio Acc. Receivables renamed"
+    assert renamed.json()["amount"] == 64022.0
+    assert sync_calls == [account_id, account_id]
+    assert _count_docs("cash_balance_snapshots") == snapshots_before + 1
+
+    manual = client.post(
+        "/api/bank-accounts",
+        json={
+            "entity_id": entity_id,
+            "label": "Operating",
+            "amount": 1000,
+            "trigger": "manual_adjustment",
+        },
+    )
+    assert manual.status_code == 200, manual.text
+    manual_id = manual.json()["id"]
+    manual_snapshots = _count_docs("cash_balance_snapshots")
+    manual_audits = _count_docs("bank_account_audit_log", {"account_id": manual_id})
+
+    manual_note = client.put(
+        f"/api/bank-accounts/{manual_id}",
+        json={"notes": "Petty cash box"},
+    )
+    assert manual_note.status_code == 200, manual_note.text
+    assert manual_note.json()["notes"] == "Petty cash box"
+    assert manual_note.json()["amount"] == 1000
+    assert sync_calls == [account_id, account_id]
+    assert _count_docs("cash_balance_snapshots") == manual_snapshots
+    assert _count_docs("bank_account_audit_log", {"account_id": manual_id}) == manual_audits
+
+    moved = client.put(
+        f"/api/bank-accounts/{manual_id}",
+        json={"amount": 800, "trigger": "manual_adjustment", "note": "spend"},
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["amount"] == 800
+    assert moved.json()["notes"] == "Petty cash box"
+    assert _count_docs("cash_balance_snapshots") == manual_snapshots + 1
+    assert _count_docs("bank_account_audit_log", {"account_id": manual_id}) == manual_audits + 1
+    history = client.get(f"/api/treasury/cash-position-history?account_id={manual_id}")
+    assert history.status_code == 200, history.text
+    assert any(row["account_id"] == manual_id for row in history.json()["account_audit_log"])
+
+    assert client.delete(f"/api/bank-accounts/{account_id}").status_code == 200
+    assert client.delete(f"/api/bank-accounts/{manual_id}").status_code == 200
+
+
+def test_bank_account_notes_length_cap(client):
+    ent = client.post("/api/entities", json={"name": "Notes Co"})
+    assert ent.status_code == 200, ent.text
+    entity_id = ent.json()["id"]
+    ok_notes = "n" * 500
+    too_long = "n" * 501
+
+    created = client.post(
+        "/api/bank-accounts",
+        json={"entity_id": entity_id, "label": "Main", "amount": 10, "notes": ok_notes},
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["notes"] == ok_notes
+    account_id = created.json()["id"]
+
+    rejected_create = client.post(
+        "/api/bank-accounts",
+        json={"entity_id": entity_id, "label": "Other", "amount": 10, "notes": too_long},
+    )
+    assert rejected_create.status_code == 422, rejected_create.text
+    assert "500" in rejected_create.text
+
+    rejected_update = client.put(
+        f"/api/bank-accounts/{account_id}",
+        json={"notes": too_long},
+    )
+    assert rejected_update.status_code == 422, rejected_update.text
+    assert "500" in rejected_update.text
+    listed = client.get("/api/bank-accounts")
+    saved = next(row for row in listed.json() if row["id"] == account_id)
+    assert saved["notes"] == ok_notes
 
 
 def test_debt_create_rejects_missing_entity(client):
