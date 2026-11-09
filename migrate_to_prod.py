@@ -1,5 +1,7 @@
 """
 Migrate data from Emergent local MongoDB to Production Atlas MongoDB.
+
+Set DST_MONGO_URL to the destination URI before running. Do not commit it.
 """
 import os
 from pymongo import MongoClient
@@ -10,13 +12,16 @@ import json
 SRC_URL = "mongodb://localhost:27017"
 SRC_DB = "test_database"
 
-# Destination: Production Atlas
-DST_URL = "mongodb+srv://tafsir_db_user:NNjSsCiSnS6QMsLi@cluster0.p9ic38l.mongodb.net/?appName=Cluster0"
+# Destination: Production Atlas. Set DST_MONGO_URL; do not hardcode credentials.
+DST_URL = os.environ.get("DST_MONGO_URL", "")
 DST_DB = "cashpilot"
 
 COLLECTIONS = ["entities", "bank_accounts", "cash_flows", "flow_occurrences", "undo_stack", "settings"]
 
 def migrate():
+    if not DST_URL.strip():
+        raise SystemExit("Set DST_MONGO_URL to the destination MongoDB URI")
+
     print("Connecting to source (Emergent local)...")
     src_client = MongoClient(SRC_URL)
     src_db = src_client[SRC_DB]

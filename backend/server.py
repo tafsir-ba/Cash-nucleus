@@ -4820,20 +4820,51 @@ async def logout(response: Response):
     return {"status": "ok"}
 
 # ============== STARTUP ==============
+# Built-in fallback when ADMIN_PASSWORD is unset. Seeding with this value is
+# refused unless the process is explicitly a local/dev/test environment.
+DEFAULT_ADMIN_PASSWORD = "admin123"
+LOCAL_SEED_ENVIRONMENTS = frozenset({"dev", "development", "test", "local"})
+
+
+def current_app_env() -> str:
+    return os.environ.get("ENV", os.environ.get("APP_ENV", "")).strip().lower()
+
+
+def may_seed_admin_password(password: str, app_env: Optional[str] = None) -> bool:
+    """Whether startup may insert a new admin user with this password.
+
+    The built-in default is allowed only when the environment is explicitly
+    dev, development, test, or local. Any other password may still seed a
+    missing user. Login verification and existing users are unaffected.
+    """
+    env = current_app_env() if app_env is None else app_env.strip().lower()
+    if password != DEFAULT_ADMIN_PASSWORD:
+        return True
+    return env in LOCAL_SEED_ENVIRONMENTS
+
+
 @app.on_event("startup")
 async def seed_admin():
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com").strip().lower()
-    admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
+    admin_password = os.environ.get("ADMIN_PASSWORD", DEFAULT_ADMIN_PASSWORD)
     existing = await db.users.find_one({"email": admin_email})
     if existing is None:
-        await db.users.insert_one({
-            "id": str(uuid.uuid4()),
-            "email": admin_email,
-            "password_hash": hash_password(admin_password),
-            "name": "Admin",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        })
-        logging.info(f"Admin user seeded: {admin_email}")
+        if not may_seed_admin_password(admin_password):
+            logging.error(
+                "Refusing to seed admin %s with the default password outside "
+                "dev, development, test, or local. Set ADMIN_PASSWORD, or set "
+                "ENV/APP_ENV to one of those values.",
+                admin_email,
+            )
+        else:
+            await db.users.insert_one({
+                "id": str(uuid.uuid4()),
+                "email": admin_email,
+                "password_hash": hash_password(admin_password),
+                "name": "Admin",
+                "created_at": datetime.now(timezone.utc).isoformat()
+            })
+            logging.info(f"Admin user seeded: {admin_email}")
     else:
         # Safety: do not rotate existing admin credentials on startup.
         # Changing ADMIN_PASSWORD in env should not silently overwrite real users.
