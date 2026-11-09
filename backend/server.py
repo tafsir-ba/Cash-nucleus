@@ -220,6 +220,9 @@ class BankAccount(BaseModel):
     bexio_last_error: Optional[str] = None
     bexio_invoice_count: Optional[int] = None
     last_movement: Optional[float] = None
+    # Persistent free-text note shown next to the account in Treasury.
+    # Distinct from audit/adjustment `note` on create/update payloads.
+    notes: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -230,6 +233,7 @@ class BankAccountCreate(BaseModel):
     is_receivables_financing: bool = False
     balance_source: BalanceSource = "manual"
     bexio_connection: Optional[BexioConnectionId] = None
+    notes: Optional[str] = None
     note: Optional[str] = None
     trigger: Literal["manual_adjustment", "import", "system_recalc"] = "manual_adjustment"
 
@@ -247,6 +251,7 @@ class BankAccountUpdate(BaseModel):
     is_receivables_financing: Optional[bool] = None
     balance_source: Optional[BalanceSource] = None
     bexio_connection: Optional[BexioConnectionId] = None
+    notes: Optional[str] = None
     note: Optional[str] = None
     trigger: Literal["manual_adjustment", "import", "system_recalc"] = "manual_adjustment"
 
@@ -1490,6 +1495,7 @@ async def create_bank_account(account: BankAccountCreate, user: dict = Depends(g
     )
     payload["balance_source"] = balance_source
     payload["bexio_connection"] = bexio_connection
+    payload["notes"] = (payload.get("notes") or "").strip() or None
     if balance_source == "bexio":
         payload["amount"] = float(payload.get("amount") or 0.0)
         trigger = "import"
@@ -1525,6 +1531,7 @@ async def create_bank_account(account: BankAccountCreate, user: dict = Depends(g
 async def update_bank_account(account_id: str, update: BankAccountUpdate, user: dict = Depends(get_current_user)):
     raw_update = update.model_dump(exclude_unset=True)
     # Drop explicit nulls for non-connection fields; keep bexio_connection=None so Auto can clear.
+    # Empty/null audit notes are omitted; account `notes` may be cleared intentionally.
     if "note" in raw_update and raw_update["note"] is None:
         raw_update.pop("note")
     note = raw_update.pop("note", None)
@@ -1536,6 +1543,7 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate, user: 
         "is_receivables_financing",
         "balance_source",
         "bexio_connection",
+        "notes",
     }
     update_data = {k: v for k, v in raw_update.items() if k in mutable_fields}
     if not update_data:
@@ -1549,6 +1557,11 @@ async def update_bank_account(account_id: str, update: BankAccountUpdate, user: 
     new_amount = old_amount
     has_business_change = False
     next_entity_name = existing.get("entity") or ""
+
+    if "notes" in update_data:
+        update_data["notes"] = (update_data["notes"] or "").strip() or None
+        if update_data["notes"] != ((existing.get("notes") or "").strip() or None):
+            has_business_change = True
 
     if "entity_id" in update_data:
         next_entity = await db.entities.find_one({"id": update_data["entity_id"]}, {"_id": 0, "name": 1})
