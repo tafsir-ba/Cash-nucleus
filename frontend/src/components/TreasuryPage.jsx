@@ -229,6 +229,7 @@ export const TreasuryPage = ({ entities, onEntitiesChange, onDataChange }) => {
         updates.bexio_connection !== undefined
           ? updates.bexio_connection
           : account.bexio_connection,
+      notes: updates.notes !== undefined ? updates.notes : account.notes ?? null,
       note: updates.note,
       trigger: updates.trigger || "manual_adjustment",
     };

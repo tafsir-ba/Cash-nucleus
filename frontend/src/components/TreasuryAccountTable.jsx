@@ -12,7 +12,7 @@ const EDITABLE_FIELDS = [
   "label",
   "amount",
   "is_receivables_financing",
-  "note",
+  "notes",
   "balance_source",
   "bexio_connection",
 ];
@@ -48,7 +48,6 @@ export const TreasuryAccountTable = ({
 }) => {
   const [editingCell, setEditingCell] = useState(null);
   const [editValue, setEditValue] = useState("");
-  const [rowNotes, setRowNotes] = useState({});
   const [savingIds, setSavingIds] = useState(new Set());
   const [dirtyIds, setDirtyIds] = useState(new Set());
   const inputRef = useRef(null);
@@ -79,13 +78,13 @@ export const TreasuryAccountTable = ({
     if (field === "entity_id") initial = account.entity_id;
     else if (field === "label") initial = account.label;
     else if (field === "amount") initial = formatAmountInput(account.amount);
-    else if (field === "note") initial = rowNotes[account.id] || "";
+    else if (field === "notes") initial = account.notes || "";
     else if (field === "balance_source") initial = account.balance_source || "manual";
     else if (field === "bexio_connection") initial = account.bexio_connection || "";
     setEditValue(initial);
     setEditingCell({ accountId: account.id, field });
     setDirtyIds((prev) => new Set(prev).add(account.id));
-  }, [rowNotes]);
+  }, []);
 
   const cancelEdit = useCallback((accountId) => {
     setEditingCell(null);
@@ -154,15 +153,13 @@ export const TreasuryAccountTable = ({
         updates.trigger = "import";
         hasChange = true;
       }
-    } else if (field === "note") {
-      setRowNotes((prev) => ({ ...prev, [account.id]: rawValue.trim() }));
-      setEditingCell(null);
-      setDirtyIds((prev) => {
-        const next = new Set(prev);
-        next.delete(account.id);
-        return next;
-      });
-      return true;
+    } else if (field === "notes") {
+      const next = rawValue.trim() || null;
+      const current = (account.notes || "").trim() || null;
+      if (next !== current) {
+        updates.notes = next;
+        hasChange = true;
+      }
     }
 
     if (!hasChange) {
@@ -175,9 +172,6 @@ export const TreasuryAccountTable = ({
       return true;
     }
 
-    const note = rowNotes[account.id];
-    if (note) updates.note = note;
-
     setSavingIds((prev) => new Set(prev).add(account.id));
     try {
       await onSaveAccount(account.id, updates);
@@ -187,13 +181,6 @@ export const TreasuryAccountTable = ({
         next.delete(account.id);
         return next;
       });
-      if (field === "amount" && rowNotes[account.id]) {
-        setRowNotes((prev) => {
-          const next = { ...prev };
-          delete next[account.id];
-          return next;
-        });
-      }
       return true;
     } catch (error) {
       toast.error(error?.message || "Failed to save account");
@@ -205,7 +192,7 @@ export const TreasuryAccountTable = ({
         return next;
       });
     }
-  }, [onSaveAccount, rowNotes, entities]);
+  }, [onSaveAccount, entities]);
 
   const handleKeyDown = (e, account, field) => {
     if (e.key === "Enter") {
@@ -320,6 +307,7 @@ export const TreasuryAccountTable = ({
             onKeyDown={(e) => handleKeyDown(e, account, field)}
             onBlur={() => handleBlur(account, field)}
             className={`${inputClass} ${isAmount ? "font-mono tabular-nums" : ""}`}
+            placeholder={field === "notes" ? "Add note…" : undefined}
             data-testid={`inline-${field}-${account.id}`}
           />
           {preview && (
@@ -333,6 +321,7 @@ export const TreasuryAccountTable = ({
         type="button"
         onClick={() => startEdit(account, field)}
         className={`text-left w-full hover:text-zinc-100 transition-colors ${className}`}
+        title={field === "notes" && account.notes ? account.notes : undefined}
         data-testid={`cell-${field}-${account.id}`}
       >
         {displayValue}
@@ -364,7 +353,7 @@ export const TreasuryAccountTable = ({
             <SortHeader field="last_movement" sortField={sortField} sortDir={sortDir} onSort={onSort}>Movement</SortHeader>
             <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-right py-3 px-3">Share</th>
             <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-center py-3 px-2 w-10" title="Factoring / Receivables Financing">Cat.</th>
-            <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-left py-3 px-3">Note</th>
+            <th className="text-xs font-semibold uppercase tracking-wider text-zinc-500 text-left py-3 px-3 min-w-[140px]">Note</th>
             <th className="py-3 px-2 w-10"></th>
           </tr>
         </thead>
@@ -373,7 +362,8 @@ export const TreasuryAccountTable = ({
             const share = totalBalance > 0 ? (account.amount / totalBalance) * 100 : 0;
             const isDirty = dirtyIds.has(account.id);
             const isSaving = savingIds.has(account.id);
-            const noteDisplay = rowNotes[account.id] ? rowNotes[account.id] : "—";
+            const hasNotes = !!(account.notes || "").trim();
+            const noteDisplay = hasNotes ? account.notes : "—";
             const fromBexio = (account.balance_source || "manual") === "bexio";
 
             return (
@@ -431,9 +421,9 @@ export const TreasuryAccountTable = ({
                 <td className="py-2 px-3">
                   {renderTextCell(
                     account,
-                    "note",
+                    "notes",
                     noteDisplay,
-                    `text-xs ${rowNotes[account.id] ? "text-zinc-400" : "text-zinc-600"}`
+                    `text-xs ${hasNotes ? "text-zinc-400" : "text-zinc-600"}`
                   )}
                 </td>
                 <td className="py-2.5 px-2">

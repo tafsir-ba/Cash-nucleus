@@ -132,6 +132,26 @@ def test_treasury_bank_account_and_debt_crud(client):
     assert updated.status_code == 200, updated.text
     assert updated.json()["amount"] == 95000
 
+    noted = client.put(
+        f"/api/bank-accounts/{account_id}",
+        json={"notes": "  Escrow hold until Friday  "},
+    )
+    assert noted.status_code == 200, noted.text
+    assert noted.json()["notes"] == "Escrow hold until Friday"
+    assert noted.json()["amount"] == 95000
+
+    listed_with_notes = client.get("/api/bank-accounts")
+    assert listed_with_notes.status_code == 200
+    saved = next(a for a in listed_with_notes.json() if a["id"] == account_id)
+    assert saved["notes"] == "Escrow hold until Friday"
+
+    cleared = client.put(
+        f"/api/bank-accounts/{account_id}",
+        json={"notes": ""},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["notes"] is None
+
     history = client.get("/api/treasury/cash-position-history")
     assert history.status_code == 200, history.text
     body = history.json()
